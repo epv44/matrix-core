@@ -1,0 +1,49 @@
+{
+  "name": "quality-engine",
+  "version": "0.1.0",
+  "description": "Standalone language-agnostic Quality Engine with Cline adapter",
+  "type": "module",
+  "bin": {
+    "quality": "./dist/core/cli.js",
+    "quality-engine": "./dist/core/cli.js"
+  },
+  "cline": {
+    "plugins": [
+      {
+        "paths": ["./dist/adapters/cline/index.js"],
+        "capabilities": ["tools", "hooks"]
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "echo no lint",
+    "quality:run": "node dist/core/cli.js run",
+    "quality:doctor": "node dist/core/cli.js doctor"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.14.12",
+    "typescript": "^5.6.2",
+    "vitest": "^1.6.0"
+  },
+  "peerDependencies": {
+    "@cline/sdk": "*"
+  },
+  "peerDependenciesMeta": {
+    "@cline/sdk": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

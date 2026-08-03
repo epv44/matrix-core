@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.quality/
+coverage.json
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+.env
+.DS_Store
