@@ -1,0 +1,8 @@
+dist/
+node_modules/
+coverage/
+.quality/
+.cline/
+package-lock.json
+quality.yaml
+*.md

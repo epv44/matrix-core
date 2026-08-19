@@ -1,0 +1,143 @@
+"""Extract statically resolvable DB-API SQL without importing application code."""
+
+from __future__ import annotations
+
+import ast
+import json
+import sys
+import textwrap
+from dataclasses import dataclass
+from pathlib import Path
+
+SINKS = {"execute", "executemany", "executescript"}
+
+
+@dataclass(frozen=True)
+class StaticString:
+    value: str
+    line: int
+
+
+def assigned_names(nodes: list[ast.stmt]) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(ast.Module(body=nodes, type_ignores=[])):
+        if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
+    return names
+
+
+class Extractor(ast.NodeVisitor):
+    def __init__(self, filename: str) -> None:
+        self.filename = filename
+        self.scopes: list[dict[str, StaticString | None]] = [{}]
+        self.fragments: list[dict[str, object]] = []
+        self.unresolved: list[dict[str, object]] = []
+
+    @property
+    def env(self) -> dict[str, StaticString | None]:
+        return self.scopes[-1]
+
+    def resolve(self, node: ast.AST) -> StaticString | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return StaticString(node.value, node.lineno)
+        if isinstance(node, ast.Name):
+            return self.env.get(node.id)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = self.resolve(node.left)
+            right = self.resolve(node.right)
+            if left is not None and right is not None:
+                return StaticString(left.value + right.value, min(left.line, right.line))
+        return None
+
+    def bind(self, target: ast.AST, value: StaticString | None) -> None:
+        if isinstance(target, ast.Name):
+            self.env[target.id] = value
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        value = self.resolve(node.value)
+        for target in node.targets:
+            self.bind(target, value)
+        self.generic_visit(node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self.bind(node.target, self.resolve(node.value) if node.value else None)
+        if node.value:
+            self.generic_visit(node.value)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        current = self.resolve(node.target)
+        addition = self.resolve(node.value)
+        value = None
+        if isinstance(node.op, ast.Add) and current is not None and addition is not None:
+            value = StaticString(current.value + addition.value, current.line)
+        self.bind(node.target, value)
+        self.generic_visit(node.value)
+
+    def visit_If(self, node: ast.If) -> None:
+        self.visit(node.test)
+        branch_names = assigned_names(node.body + node.orelse)
+        for statement in node.body:
+            self.visit(statement)
+        for statement in node.orelse:
+            self.visit(statement)
+        for name in branch_names:
+            self.env[name] = None
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.scopes.append(dict(self.env))
+        for statement in node.body:
+            self.visit(statement)
+        self.scopes.pop()
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_Call(self, node: ast.Call) -> None:
+        sink = node.func.attr if isinstance(node.func, ast.Attribute) else None
+        if sink in SINKS and node.args:
+            resolved = self.resolve(node.args[0])
+            if resolved is None:
+                self.unresolved.append(
+                    {
+                        "file": self.filename,
+                        "line": node.lineno,
+                        "sink": sink,
+                        "reason": "executed SQL is not statically resolvable",
+                    }
+                )
+            else:
+                normalized = textwrap.dedent(resolved.value)
+                leading_lines = len(normalized) - len(normalized.lstrip("\n"))
+                normalized = normalized.strip("\n")
+                self.fragments.append(
+                    {
+                        "file": self.filename,
+                        "line": resolved.line + leading_lines,
+                        "callLine": node.lineno,
+                        "sink": sink,
+                        "sql": normalized,
+                    }
+                )
+        self.generic_visit(node)
+
+
+def main() -> int:
+    request = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    output: dict[str, list[dict[str, object]]] = {"fragments": [], "unresolved": [], "errors": []}
+    for filename in request.get("files", []):
+        try:
+            source = Path(filename).read_text(encoding="utf-8")
+            extractor = Extractor(filename)
+            extractor.visit(ast.parse(source, filename=filename))
+            output["fragments"].extend(extractor.fragments)
+            output["unresolved"].extend(extractor.unresolved)
+        except (OSError, SyntaxError, UnicodeError) as exc:
+            output["errors"].append({"file": filename, "message": str(exc)})
+    print(json.dumps(output, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

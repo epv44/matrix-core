@@ -1,49 +1,67 @@
 {
-  "name": "quality-engine",
-  "version": "0.1.0",
-  "description": "Standalone language-agnostic Quality Engine with Cline adapter",
+  "name": "@epv44/matrixcore",
+  "version": "0.5.0",
+  "description": "MatrixCore - host-neutral deterministic quality gates and advisory local review",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "bin": {
-    "quality": "./dist/core/cli.js",
-    "quality-engine": "./dist/core/cli.js"
-  },
-  "cline": {
-    "plugins": [
-      {
-        "paths": ["./dist/adapters/cline/index.js"],
-        "capabilities": ["tools", "hooks"]
-      }
-    ]
+    "quality": "dist/core/cli.js",
+    "matrix-core": "dist/core/cli.js",
+    "matrixcore-mcp": "dist/mcp/server.js",
+    "matrixcore-hook": "dist/hooks/runner.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/clean-dist.mjs && tsc && node scripts/copy-assets.mjs",
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint": "echo no lint",
+    "test:agentsmith": "vitest run tests/agentsmith",
+    "test:e2e:ollama": "node scripts/e2e-ollama.mjs",
+    "test:e2e:ollama:require": "node scripts/e2e-ollama.mjs --require",
+    "lint": "eslint src tests",
     "quality:run": "node dist/core/cli.js run",
-    "quality:doctor": "node dist/core/cli.js doctor"
+    "quality:doctor": "node dist/core/cli.js doctor",
+    "format": "prettier --write src tests",
+    "format:check": "prettier --check src tests",
+    "plugin:sync": "node scripts/sync-plugin-version.mjs",
+    "plugin:check": "node scripts/sync-plugin-version.mjs --check",
+    "test:integration:packed": "node scripts/test-packed-integration.mjs",
+    "prepack": "npm run build && npm run plugin:check"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@vscode/tree-sitter-wasm": "0.3.1",
+    "better-sqlite3": "^13.0.3",
     "commander": "^12.1.0",
     "js-yaml": "^4.1.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.66.0",
+    "web-tree-sitter": "0.26.12",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.14.12",
-    "typescript": "^5.6.2",
+    "eslint": "9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.6",
     "vitest": "^1.6.0"
-  },
-  "peerDependencies": {
-    "@cline/sdk": "*"
-  },
-  "peerDependenciesMeta": {
-    "@cline/sdk": {
-      "optional": true
-    }
   },
   "engines": {
     "node": ">=18"
-  }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "ARCHITECTURE.md",
+    "POLICY_BUNDLES.md",
+    "INSTALL_CLINE.md",
+    "INSTALL_PROJECT.md",
+    "USAGE.md",
+    "integrations",
+    "plugins"
+  ]
 }

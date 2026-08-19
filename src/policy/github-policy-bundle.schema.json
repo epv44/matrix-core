@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://matrixcore.dev/schemas/github-policy-bundle-v1.schema.json",
+  "title": "MatrixCore GitHub Policy Bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "minEngineVersion", "checks", "agentSmith", "assets"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "minLength": 1 },
+    "minEngineVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "requiredVersion", "settings"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "requiredVersion": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+          "settings": { "type": "object" }
+        }
+      }
+    },
+    "agentSmith": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "outputSchemaVersion",
+        "provider",
+        "models",
+        "defaultModels",
+        "routing",
+        "graph",
+        "partitioned",
+        "evidence",
+        "verification",
+        "concurrency",
+        "cache",
+        "assetRoot"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "outputSchemaVersion": { "const": 2 },
+        "provider": { "const": "ollama" },
+        "models": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "provider",
+              "model",
+              "contextTokens",
+              "reviewCapability",
+              "requestedOutputTokens",
+              "safetyReserveTokens",
+              "tokenizer",
+              "inference"
+            ],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "provider": { "const": "ollama" },
+              "model": { "type": "string", "minLength": 1 },
+              "contextTokens": { "type": "integer", "minimum": 1024, "maximum": 1048576 },
+              "reviewCapability": { "enum": ["small", "strong"] },
+              "requestedOutputTokens": { "type": "integer", "minimum": 128, "maximum": 131072 },
+              "safetyReserveTokens": { "type": "integer", "minimum": 0, "maximum": 131072 },
+              "tokenizer": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "codeCharsPerToken", "proseCharsPerToken"],
+                "properties": {
+                  "kind": { "const": "conservative-ratio" },
+                  "codeCharsPerToken": { "type": "number", "exclusiveMinimum": 0, "maximum": 8 },
+                  "proseCharsPerToken": { "type": "number", "exclusiveMinimum": 0, "maximum": 8 }
+                }
+              },
+              "inference": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["temperature", "thinking", "timeoutMs"],
+                "properties": {
+                  "temperature": { "type": "number", "minimum": 0, "maximum": 2 },
+                  "thinking": { "type": "boolean" },
+                  "timeoutMs": { "type": "integer", "minimum": 1000, "maximum": 1800000 }
+                }
+              }
+            }
+          }
+        },
+        "defaultModels": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["candidate"],
+          "properties": {
+            "candidate": { "type": "string" },
+            "scout": { "type": "string" },
+            "verifier": { "type": "string" }
+          }
+        },
+        "routing": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inputContextFraction", "enableHolistic", "enablePartitioned", "enableHybrid"],
+          "properties": {
+            "inputContextFraction": { "type": "number", "minimum": 0.3, "maximum": 0.9 },
+            "enableHolistic": { "type": "boolean" },
+            "enablePartitioned": { "type": "boolean" },
+            "enableHybrid": { "type": "boolean" }
+          }
+        },
+        "graph": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["defaultHops", "maxHops", "maxInteractionNeighborsPerSymbol", "enableHighRiskTwoHopExpansion"],
+          "properties": {
+            "defaultHops": { "const": 1 },
+            "maxHops": { "enum": [1, 2] },
+            "maxInteractionNeighborsPerSymbol": { "type": "integer", "minimum": 1, "maximum": 64 },
+            "enableHighRiskTwoHopExpansion": { "type": "boolean" }
+          }
+        },
+        "partitioned": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "maxParallelUnits",
+            "maxRulesPerUnit",
+            "maxUnitsPerChangedSymbol",
+            "preferSemanticBoundaries",
+            "hunkFallback"
+          ],
+          "properties": {
+            "maxParallelUnits": { "type": "integer", "minimum": 1, "maximum": 256 },
+            "maxRulesPerUnit": { "type": "integer", "minimum": 1, "maximum": 64 },
+            "maxUnitsPerChangedSymbol": { "type": "integer", "minimum": 1, "maximum": 64 },
+            "maxCandidateWorkItems": { "type": "integer", "minimum": 1, "maximum": 256, "default": 4 },
+            "maxVerificationCandidates": { "type": "integer", "minimum": 1, "maximum": 256, "default": 4 },
+            "maxCandidateInputTokens": { "type": "integer", "minimum": 128, "maximum": 1000000 },
+            "maxVerificationInputTokens": { "type": "integer", "minimum": 128, "maximum": 1000000 },
+            "preferSemanticBoundaries": { "type": "boolean" },
+            "hunkFallback": { "type": "boolean" }
+          }
+        },
+        "holistic": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": { "maxCandidates": { "type": "integer", "minimum": 1, "maximum": 256, "default": 60 } }
+        },
+        "hybrid": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [],
+          "properties": {
+            "maxHotspots": { "type": "integer", "minimum": 1, "maximum": 256, "default": 30 },
+            "redundantDeepMode": { "type": "boolean", "default": false }
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxRequestsPerCandidate", "maxParallelResolutions", "maxSnippetLines"],
+          "properties": {
+            "maxRequestsPerCandidate": { "type": "integer", "minimum": 0, "maximum": 64 },
+            "maxParallelResolutions": { "type": "integer", "minimum": 1, "maximum": 128 },
+            "maxSnippetLines": { "type": "integer", "minimum": 10, "maximum": 1000 }
+          }
+        },
+        "verification": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "publish"],
+          "properties": { "enabled": { "const": true }, "publish": { "const": "verified-only" } }
+        },
+        "concurrency": { "type": "integer", "minimum": 1 },
+        "maxDurationMs": { "type": "integer", "minimum": 1000, "maximum": 1800000, "default": 180000 },
+        "cache": { "type": "boolean" },
+        "assetRoot": { "type": "string" }
+      }
+    },
+    "assets": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "size", "mediaType"],
+        "properties": {
+          "path": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "size": { "type": "integer", "minimum": 0, "maximum": 2097152 },
+          "mediaType": {
+            "enum": ["application/json", "text/markdown", "text/plain", "application/toml", "application/yaml"]
+          }
+        }
+      }
+    }
+  }
+}

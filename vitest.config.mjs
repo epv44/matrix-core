@@ -1,1 +1,1 @@
-export default { test: { include: ["tests/**/*.test.ts"] } }
+export default { test: { include: ["tests/**/*.test.ts"] } };

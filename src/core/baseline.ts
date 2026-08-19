@@ -39,7 +39,13 @@ export function hashConfig(config: unknown): string {
 
 export function diffBaseline(current: Record<string, number | null>, baseline: BaselineData | null) {
   if (!baseline) return [];
-  const rows: { metric: string; baseline: number; current: number | null; delta: number | null; deltaPct: number | null }[] = [];
+  const rows: {
+    metric: string;
+    baseline: number;
+    current: number | null;
+    delta: number | null;
+    deltaPct: number | null;
+  }[] = [];
   for (const [k, bVal] of Object.entries(baseline.metrics)) {
     const cVal = current[k] ?? null;
     if (cVal == null) continue;

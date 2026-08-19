@@ -3,6 +3,7 @@ dist/
 .quality/
 coverage.json
 coverage.xml
+.coverage
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/

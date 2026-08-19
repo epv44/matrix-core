@@ -1,26 +1,76 @@
-import { describe, it, expect } from "vitest";
-import { resolveConfig } from "../src/core/config-resolver.js";
+import { describe, expect, it } from "vitest";
 import fs from "node:fs";
-import path from "node:path";
 import os from "node:os";
-describe("config-resolver",()=>{
-  it("resolves nearest file wins monorepo",()=>{
-    const tmp=fs.mkdtempSync(path.join(os.tmpdir(),"qe-"));
-    const root=path.join(tmp,"repo");
-    const svc=path.join(root,"svc");
-    fs.mkdirSync(svc,{recursive:true});
-    fs.writeFileSync(path.join(root,"quality.yaml"),"version: 1\nchecks:\n  ruff: {enabled: true, required: true}\npolicies: {}\n");
-    fs.writeFileSync(path.join(svc,"quality.yaml"),"version: 1\nchecks:\n  ruff: {enabled: false, required: false}\npolicies: {}\n");
-    const res=resolveConfig({cwd:svc});
-    expect(res.configPath).toContain("svc");
-    expect(res.config.checks["ruff"].enabled).toBe(false);
-    fs.rmSync(tmp,{recursive:true,force:true});
+import path from "node:path";
+import { resolveConfig } from "../src/core/config-resolver.js";
+
+function temp() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "matrix-config-"));
+}
+
+describe("v2 project manifest", () => {
+  it("accepts a public GitHub policy source without resolving the network", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-config-policy-"));
+    fs.writeFileSync(
+      path.join(root, "quality.yaml"),
+      "version: 2\nproject: remote\npolicy:\n  source: github\n  repository: acme/policy\n  ref: stable\n  manifest: matrixcore/policy.json\n",
+    );
+    expect(resolveConfig({ cwd: root }).config.policySource).toEqual({
+      source: "github",
+      repository: "acme/policy",
+      ref: "stable",
+      manifest: "matrixcore/policy.json",
+    });
   });
-  it("returns default when none found",()=>{
-    const tmp=fs.mkdtempSync(path.join(os.tmpdir(),"qe-"));
-    const res=resolveConfig({cwd:tmp});
-    expect(res.isDefault).toBe(true);
-    expect(res.config.checks["ruff"]).toBeDefined();
-    fs.rmSync(tmp,{recursive:true,force:true});
+  it("resolves the nearest strict v2 manifest", () => {
+    const root = temp();
+    const child = path.join(root, "child");
+    fs.mkdirSync(child);
+    fs.writeFileSync(path.join(root, "quality.yaml"), "version: 2\nproject: root\n");
+    fs.writeFileSync(path.join(child, "quality.yaml"), "version: 2\nproject: child\nreview:\n  agentsmith: true\n");
+    expect(resolveConfig({ cwd: child }).config).toMatchObject({
+      version: 2,
+      project: "child",
+      review: { agentsmith: true },
+      agentsmith: { enabled: true },
+    });
+    fs.rmSync(root, { recursive: true, force: true });
   });
-})
+
+  it("leaves repositories without a manifest unconfigured", () => {
+    const root = temp();
+    expect(resolveConfig({ cwd: root }).isDefault).toBe(true);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("rejects v1 with migration guidance", () => {
+    const root = temp();
+    fs.writeFileSync(path.join(root, "quality.yaml"), "version: 1\nchecks: {}\n");
+    expect(() => resolveConfig({ cwd: root })).toThrow(/v1 is no longer supported.*Migrate/s);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each(["checks", "policies", "packs", "stages", "gates", "agentsmith"])("rejects project-owned %s", (field) => {
+    const root = temp();
+    fs.writeFileSync(path.join(root, "quality.yaml"), `version: 2\nproject: app\n${field}: {}\n`);
+    expect(() => resolveConfig({ cwd: root })).toThrow(/Invalid MatrixCore v2 manifest/);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("accepts only SQL application-resolution metadata", () => {
+    const root = temp();
+    fs.writeFileSync(
+      path.join(root, "quality.yaml"),
+      "version: 2\nproject: app\napplication:\n  sql:\n    - root: finance\n      dialect: sqlite\n      templater: raw\n      sources: [files, python]\n",
+    );
+    expect(resolveConfig({ cwd: root }).config.application).toEqual({
+      sql: [{ root: "finance", dialect: "sqlite", templater: "raw", sources: ["files", "python"] }],
+    });
+    fs.writeFileSync(
+      path.join(root, "quality.yaml"),
+      "version: 2\nproject: app\napplication:\n  sql:\n    - root: finance\n      dialect: sqlite\n      templater: raw\n      sources: [python]\n      rules: [LT01]\n",
+    );
+    expect(() => resolveConfig({ cwd: root })).toThrow(/Invalid MatrixCore v2 manifest/);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+});

@@ -1,0 +1,26 @@
+{
+  "name": "matrix-core",
+  "version": "0.5.0+codex.20260817212719",
+  "description": "Universal deterministic quality gates and advisory AgentSmith review",
+  "author": {
+    "name": "MatrixCore"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Matrix Core",
+    "shortDescription": "Run local quality gates and advisory review.",
+    "longDescription": "MatrixCore gives Codex deterministic gates, local AgentSmith review, host-driven repair tasks, and completion enforcement.",
+    "developerName": "MatrixCore",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Run the MatrixCore gate for my current changes.",
+      "Review this change with AgentSmith.",
+      "Fix selected MatrixCore findings and verify them."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

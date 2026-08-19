@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "matrixcore": {
+      "command": "npx",
+      "args": ["--no-install", "matrixcore-mcp"],
+      "disabled": false
+    }
+  }
+}

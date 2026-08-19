@@ -17,7 +17,12 @@ export function isGitRepo(cwd: string): boolean {
   return r.ok && r.out === "true";
 }
 
-export function getChangedFiles(opts: { cwd: string; base?: string }): string[] {
+/**
+ * Return every changed path, including tracked files that no longer exist in
+ * the worktree. Review scope needs deleted paths; deterministic tools normally
+ * want getChangedFiles(), which retains the historical existing-file contract.
+ */
+export function getChangedPaths(opts: { cwd: string; base?: string }): string[] {
   const cwd = path.resolve(opts.cwd);
   if (!isGitRepo(cwd)) return [];
 
@@ -28,31 +33,56 @@ export function getChangedFiles(opts: { cwd: string; base?: string }): string[] 
   const files = new Set<string>();
 
   const diffBase = runGit(["diff", "--name-only", `${base}...HEAD`], cwd);
-  if (diffBase.ok) diffBase.out.split("\n").filter(Boolean).forEach((f) => files.add(f));
+  if (diffBase.ok)
+    diffBase.out
+      .split("\n")
+      .filter(Boolean)
+      .forEach((f) => files.add(f));
 
   const diffMain = runGit(["diff", "--name-only", `origin/${base}...HEAD`], cwd);
-  if (diffMain.ok) diffMain.out.split("\n").filter(Boolean).forEach((f) => files.add(f));
+  if (diffMain.ok)
+    diffMain.out
+      .split("\n")
+      .filter(Boolean)
+      .forEach((f) => files.add(f));
 
   const diffCached = runGit(["diff", "--name-only", "--cached"], cwd);
-  if (diffCached.ok) diffCached.out.split("\n").filter(Boolean).forEach((f) => files.add(f));
+  if (diffCached.ok)
+    diffCached.out
+      .split("\n")
+      .filter(Boolean)
+      .forEach((f) => files.add(f));
 
   const diffUnstaged = runGit(["diff", "--name-only"], cwd);
-  if (diffUnstaged.ok) diffUnstaged.out.split("\n").filter(Boolean).forEach((f) => files.add(f));
+  if (diffUnstaged.ok)
+    diffUnstaged.out
+      .split("\n")
+      .filter(Boolean)
+      .forEach((f) => files.add(f));
 
   const others = runGit(["ls-files", "--others", "--exclude-standard"], cwd);
-  if (others.ok) others.out.split("\n").filter(Boolean).forEach((f) => files.add(f));
+  if (others.ok)
+    others.out
+      .split("\n")
+      .filter(Boolean)
+      .forEach((f) => files.add(f));
 
-  const absFiles = Array.from(files)
-    .map((f) => (path.isAbsolute(f) ? f : path.join(repoRoot, f)))
-    .filter((p) => {
-      try {
-        return fs.existsSync(p) && fs.statSync(p).isFile();
-      } catch {
-        return false;
-      }
-    });
+  return Array.from(files)
+    .filter((f) => {
+      const relative = f.replaceAll("\\", "/").replace(/^\.\//, "");
+      return relative !== ".quality" && !relative.startsWith(".quality/");
+    })
+    .map((f) => (path.isAbsolute(f) ? f : path.join(repoRoot, f)));
+}
 
-  return absFiles;
+export function getChangedFiles(opts: { cwd: string; base?: string }): string[] {
+  return getChangedPaths(opts).filter((p) => {
+    try {
+      return fs.existsSync(p) && fs.statSync(p).isFile();
+    } catch {
+      return false;
+    }
+  });
 }
 
 export function filterPythonFiles(files: string[]): string[] {

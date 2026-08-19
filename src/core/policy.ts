@@ -9,7 +9,7 @@ export interface PolicyEvaluation {
 export function evaluatePolicy(
   metrics: Record<string, number | null>,
   config: QualityConfig,
-  baseline: BaselineData | null
+  baseline: BaselineData | null,
 ): PolicyEvaluation {
   const failures: string[] = [];
   const warnings: string[] = [];
@@ -32,8 +32,18 @@ export function evaluatePolicy(
     if (p.absolute_min !== undefined && current < p.absolute_min) {
       failures.push(`Policy ${policyName}: ${metricKey}=${current} below absolute_min ${p.absolute_min}`);
     }
-    if (p.max !== undefined && current > p.max) {
-      failures.push(`Policy ${policyName}: ${metricKey}=${current} exceeds max ${p.max}`);
+    if (p.max !== undefined) {
+      const baseVal = baseline?.metrics?.[metricKey];
+      if (baseVal !== undefined) {
+        const allowed = baseVal + p.max;
+        if (current > allowed) {
+          failures.push(
+            `Policy ${policyName}: ${metricKey}=${current} increased ${current - baseVal} over baseline ${baseVal}, allowed max increase ${p.max}`,
+          );
+        }
+      } else if (current > p.max) {
+        failures.push(`Policy ${policyName}: ${metricKey}=${current} exceeds max ${p.max}`);
+      }
     }
 
     if (baseline && baseline.metrics[metricKey] !== undefined) {
@@ -44,7 +54,7 @@ export function evaluatePolicy(
         if (current < minAllowed) {
           const drop = baseVal === 0 ? 0 : ((baseVal - current) / Math.abs(baseVal)) * 100;
           failures.push(
-            `Policy ${policyName}: ${metricKey} degraded ${drop.toFixed(2)}% from baseline ${baseVal} -> ${current}, allowed ${allowedDrop}%`
+            `Policy ${policyName}: ${metricKey} degraded ${drop.toFixed(2)}% from baseline ${baseVal} -> ${current}, allowed ${allowedDrop}%`,
           );
         }
       }
@@ -53,7 +63,7 @@ export function evaluatePolicy(
         if (baseVal >= 0 && current > maxAllowed) {
           const inc = baseVal === 0 ? (current > 0 ? 100 : 0) : ((current - baseVal) / Math.abs(baseVal)) * 100;
           failures.push(
-            `Policy ${policyName}: ${metricKey} increased ${inc.toFixed(2)}% from baseline ${baseVal} -> ${current}, allowed ${p.max_increase_percent}%`
+            `Policy ${policyName}: ${metricKey} increased ${inc.toFixed(2)}% from baseline ${baseVal} -> ${current}, allowed ${p.max_increase_percent}%`,
           );
         }
         if (baseVal < 0 && current > baseVal) {

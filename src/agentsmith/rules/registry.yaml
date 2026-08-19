@@ -1,0 +1,58 @@
+- id: correctness.control-flow
+  languages: [python, typescript, go, rust]
+  categories: [correctness]
+  triggers:
+    - keywords: [if, else, switch, match, return, throw, raise]
+  short: Check changed control flow, error propagation, boundary conditions, and state transitions.
+  explanation: Report only a concrete execution path that produces an incorrect result or state.
+- id: correctness.nullability
+  languages: [python, typescript]
+  categories: [correctness, contract]
+  triggers:
+    - keywords: ["null", undefined, None, optional, nullable]
+  short: Check nullable values against declared and consumed contracts.
+  explanation: Compare producers and consumers; do not infer a violation from a type name alone.
+- id: contract.interface-implementation
+  languages: [python, typescript]
+  categories: [contract]
+  triggers:
+    - edgeKinds: [implements, extends, reads-type]
+  short: Compare changed interfaces, implementations, overrides, and their callers.
+  explanation: Require both sides of the contract in evidence before reporting a mismatch.
+- id: contract.producer-consumer
+  languages: [python, typescript, go, rust]
+  categories: [contract, correctness]
+  triggers:
+    - edgeKinds: [calls, producer-consumer, schema-user, serialization]
+  short: Compare values produced by changed code with assumptions made by consumers.
+  explanation: Focus on return shapes, serialization, units, ordering, and failure behavior.
+- id: security.authorization-boundary
+  languages: [python, typescript, go, rust]
+  categories: [security]
+  severity: critical
+  triggers:
+    - keywords: [auth, authorize, permission, role, token, credential]
+  short: Verify authentication and authorization remain enforced at every changed boundary.
+  explanation: Require an executable bypass path and exact evidence; naming alone is insufficient.
+- id: performance.changed-complexity
+  languages: [python, typescript, go, rust]
+  categories: [performance]
+  triggers:
+    - keywords: [for, while, map, reduce, query, await, lock]
+  short: Check changed hot paths for multiplicative work, repeated I/O, blocking, and unbounded growth.
+  explanation: State the input scale and repeated operation that create the regression.
+- id: contract.configuration
+  languages: [python, typescript, go, rust]
+  categories: [contract, correctness]
+  triggers:
+    - edgeKinds: [config]
+    - keywords: [config, setting, environment, env]
+  short: Compare configuration definitions, defaults, readers, and validation.
+  explanation: Require the definition and affected reader or runtime path.
+- id: correctness.lifecycle-concurrency
+  languages: [python, typescript, go, rust]
+  categories: [correctness]
+  triggers:
+    - keywords: [async, await, thread, lock, mutex, close, dispose, start, stop]
+  short: Check lifecycle ordering, ownership, cancellation, cleanup, and concurrent mutation.
+  explanation: Describe the ordering or interleaving that violates the invariant.

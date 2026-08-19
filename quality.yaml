@@ -1,18 +1,4 @@
-version: 1
-checks:
-  ruff: { enabled: true, required: true }
-  mypy: { enabled: true, required: false }
-  pytest: { enabled: true, required: false }
-  coverage: { enabled: true, required: false }
-policies:
-  coverage:
-    metric: pytest.coverage_percent
-    degradation_allowed: 0
-    absolute_min: 0
-  ruff_violations:
-    metric: ruff.violation_count
-    max: 100
-    max_increase_percent: 20
-  mypy_errors:
-    metric: mypy.error_count
-    max: 10
+version: 2
+project: matrix-core
+review:
+  agentsmith: true
