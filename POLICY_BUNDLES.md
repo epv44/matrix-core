@@ -19,8 +19,8 @@ review:
   mode: auto
   models:
     candidate: qwen35-9b-local
-    scout: qwen35-122b-local
-    verifier: qwen35-9b-local
+    scout: qwen35-122b-scout-local
+    verifier: qwen35-9b-verifier-local
 ```
 
 The repository and ref are project-owned. `ref` may be a branch, tag, or commit. MatrixCore resolves it to an
@@ -66,8 +66,9 @@ Supported typed settings are:
 | `python.deptry` | `ignore` containing `DEPnnn` codes |
 | `typescript.eslint` | `profile: embedded-recommended`, `maxWarnings: 0` |
 
-AgentSmith uses the fixed `agentsmith/` layout for review assets, including the structured
-`rules/registry.yaml`. Every referenced file must appear in the manifest asset inventory. Projects may bind
+AgentSmith uses the fixed `agentsmith/` layout for its four specialist prompts and structured
+`rules/registry.yaml`. Obsolete orchestrator, security-agent, Markdown-rule, and internal-skill assets
+are not part of the policy contract. Every referenced file must appear in the manifest asset inventory. Projects may bind
 candidate, scout, and verifier roles only to model profile IDs declared by the locked policy.
 
 ## Identity and trust

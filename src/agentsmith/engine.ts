@@ -25,20 +25,38 @@ import {
 import {
   VERIFICATION_INSTRUCTIONS,
   VERIFICATION_LABELS,
-  generateHolisticCandidates,
+  StructuredOutputError,
+  generateSpecialistCandidates,
   generateWorkItemCandidate,
   runScout,
   verifyCandidateWithModel,
 } from "./candidate-generation.js";
 import { candidateAnchorIssue, resolveEvidenceRequests } from "./evidence.js";
-import type { EngineExecution, VerificationResult } from "./engine-types.js";
+import type { CandidateBatch, EngineExecution, VerificationResult } from "./engine-types.js";
 import { computeWorkspaceVersion } from "../core/version.js";
+import { AGENTSMITH_STRATEGY_HASH } from "./strategy.js";
+import { loadSpecialists } from "./registry.js";
 
 function profile(config: AgentSmithConfig, id: string | undefined, role: string): ModelProfile {
   if (!id) throw new Error(`Review ${role} model profile is not configured`);
   const found = config.model_profiles.find((candidate) => candidate.id === id);
   if (!found) throw new Error(`Review ${role} model profile is not approved: ${id}`);
   return found;
+}
+
+function captureProviderFailure(error: unknown, failures: NonNullable<EngineExecution["providerFailures"]>) {
+  if (error instanceof StructuredOutputError) failures.push(...error.diagnostics);
+}
+
+function compactDeterministicReport(report?: string): string | undefined {
+  if (!report) return report;
+  try {
+    const parsed = JSON.parse(report) as { status?: unknown };
+    if (parsed.status === "PASS") return "Deterministic gate: PASS";
+  } catch {
+    // Preserve useful non-JSON diagnostics below.
+  }
+  return report.slice(0, 2_000);
 }
 
 async function cachedStage<T>(opts: {
@@ -48,8 +66,11 @@ async function cachedStage<T>(opts: {
   key: unknown;
   run: () => Promise<T>;
 }): Promise<{ value: T; cacheStatus: "hit" | "miss" }> {
-  const digest = crypto.createHash("sha256").update(JSON.stringify(opts.key)).digest("hex");
-  const target = path.join(opts.root, ".quality", "cache", "agentsmith-v2", "stages", opts.stage, `${digest}.json`);
+  const digest = crypto
+    .createHash("sha256")
+    .update(JSON.stringify({ strategyHash: AGENTSMITH_STRATEGY_HASH, key: opts.key }))
+    .digest("hex");
+  const target = path.join(opts.root, ".quality", "cache", "agentsmith-v4", "stages", opts.stage, `${digest}.json`);
   if (opts.enabled && fs.existsSync(target))
     try {
       return { value: JSON.parse(fs.readFileSync(target, "utf8")) as T, cacheStatus: "hit" };
@@ -157,16 +178,31 @@ function candidateKey(candidate: CandidateFinding) {
   return `${candidate.file}:${candidate.primarySymbol ?? candidate.line}:${candidate.category}:${candidate.ruleId ?? candidate.title.toLowerCase().replace(/\W+/g, "-")}`;
 }
 
+function evidenceRequestKey(request: CandidateFinding["evidenceRequests"][number]) {
+  return `${request.kind}:${request.symbol ?? ""}:${request.pathHint ?? ""}:${request.query ?? ""}`;
+}
+
+function uniqueEvidenceRequests(requests: CandidateFinding["evidenceRequests"], limit: number) {
+  return [...new Map(requests.map((request) => [evidenceRequestKey(request), request])).values()].slice(0, limit);
+}
+
 function normalizeCandidates(candidates: CandidateFinding[], maxEvidenceRequests: number): CandidateFinding[] {
   const merged = new Map<string, CandidateFinding>();
   for (const candidate of candidates) {
     const key = candidateKey(candidate);
     const current = merged.get(key);
-    if (!current) merged.set(key, candidate);
+    if (!current)
+      merged.set(key, {
+        ...candidate,
+        sourceWorkItemIds: [...new Set(candidate.sourceWorkItemIds)].sort(),
+        sourceReviewers: [...new Set(candidate.sourceReviewers)].sort(),
+        evidenceRequests: uniqueEvidenceRequests(candidate.evidenceRequests, maxEvidenceRequests),
+      });
     else {
       current.sourceWorkItemIds = [...new Set([...current.sourceWorkItemIds, ...candidate.sourceWorkItemIds])].sort();
-      current.evidenceRequests = [...current.evidenceRequests, ...candidate.evidenceRequests].slice(
-        0,
+      current.sourceReviewers = [...new Set([...current.sourceReviewers, ...candidate.sourceReviewers])].sort();
+      current.evidenceRequests = uniqueEvidenceRequests(
+        [...current.evidenceRequests, ...candidate.evidenceRequests],
         maxEvidenceRequests,
       );
       current.candidateConfidence = Math.max(current.candidateConfidence, candidate.candidateConfidence);
@@ -189,6 +225,7 @@ function deduplicateFindings(findings: ReviewFinding[]): ReviewFinding[] {
     if (!current) merged.set(key, finding);
     else {
       current.sourceWorkItemIds = [...new Set([...current.sourceWorkItemIds, ...finding.sourceWorkItemIds])].sort();
+      current.sourceReviewers = [...new Set([...current.sourceReviewers, ...finding.sourceReviewers])].sort();
       current.evidence = [
         ...new Map([...current.evidence, ...finding.evidence].map((item) => [item.id, item])).values(),
       ];
@@ -279,13 +316,14 @@ export async function executeReviewEngine(opts: {
 
   const graph = await repositoryGraph(opts.root).getContext(opts.scope, Number.MAX_SAFE_INTEGER, opts.config.graph);
   const rules = loadStructuredRules(opts.assetRoot);
+  const deterministicReport = compactDeterministicReport(opts.deterministicReport);
   const full = buildProjection({
     scope: opts.scope,
     graph,
     profile: candidateProfile,
     rules,
     kind: "full",
-    deterministicReport: opts.deterministicReport,
+    deterministicReport,
   });
   const compact = buildProjection({
     scope: opts.scope,
@@ -293,7 +331,7 @@ export async function executeReviewEngine(opts: {
     profile: scoutProfile ?? candidateProfile,
     rules,
     kind: "compact",
-    deterministicReport: opts.deterministicReport,
+    deterministicReport,
   });
   const route = routeReview({
     requestedMode: opts.config.mode,
@@ -303,6 +341,8 @@ export async function executeReviewEngine(opts: {
     full,
     compact,
   });
+  const reviewPath =
+    route.mode === "holistic" && candidateProfile.reviewCapability === "strong" ? "specialist" : "generic";
   const executionBudget = createExecutionBudget(opts.config.maxDurationMs, opts.signal);
   const effectiveParallelism = Math.min(opts.config.concurrency, opts.config.partitioned.maxParallelUnits);
   const workItemOptions = {
@@ -316,13 +356,14 @@ export async function executeReviewEngine(opts: {
   };
   const workItems = route.mode === "holistic" ? [] : buildWorkItems(workItemOptions);
   const errors: string[] = [];
+  const providerFailures: NonNullable<EngineExecution["providerFailures"]> = [];
   let inputTokens = 0;
   let outputTokens = 0;
   let hotspots = undefined;
   let scoutTrace: EngineExecution["scout"];
   if (route.mode === "hybrid" && scoutProfile)
     try {
-      const { value: scout } = await cachedStage({
+      const { value: scout, cacheStatus } = await cachedStage({
         root: opts.root,
         enabled: opts.config.cache,
         stage: "scout",
@@ -338,10 +379,11 @@ export async function executeReviewEngine(opts: {
           ),
       });
       hotspots = scout.hotspots.slice(0, opts.config.hybrid.maxHotspots);
-      scoutTrace = scout;
+      scoutTrace = { ...scout, cacheStatus };
       inputTokens += scout.inputTokens;
       outputTokens += scout.outputTokens;
     } catch (error) {
+      captureProviderFailure(error, providerFailures);
       if (!executionBudget.timedOut()) errors.push(`scout: ${error instanceof Error ? error.message : String(error)}`);
     }
   const plannedWorkItems = route.mode === "hybrid" ? buildWorkItems({ ...workItemOptions, hotspots }) : workItems;
@@ -363,32 +405,59 @@ export async function executeReviewEngine(opts: {
   const selectedWorkItems = selection.selected;
   const omittedWorkItems = selection.omitted;
   const tokenOmittedWorkItems = selection.tokenOmitted;
-  const candidateBatches = [];
-  if (route.mode === "holistic")
-    try {
-      const { value, cacheStatus } = await cachedStage({
-        root: opts.root,
-        enabled: opts.config.cache,
-        stage: "candidates",
-        key: { snapshot: opts.scope.id, projection: full.id, profile: candidateProfile },
-        run: () =>
-          executionBudget.call((signal) =>
-            generateHolisticCandidates({
-              projection: full,
-              profile: candidateProfile,
-              provider: opts.provider,
-              allowedFiles: opts.scope.changedFiles,
-              signal,
-            }),
-          ),
-      });
-      value.candidates = value.candidates.slice(0, opts.config.holistic.maxCandidates);
-      candidateBatches.push({ ...value, cacheStatus });
-    } catch (error) {
-      if (!executionBudget.timedOut())
-        errors.push(`holistic: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  else {
+  const candidateBatches: CandidateBatch[] = [];
+  if (reviewPath === "specialist") {
+    const specialists = loadSpecialists(opts.assetRoot);
+    const maxCandidatesPerSpecialist = Math.max(1, Math.floor(opts.config.holistic.maxCandidates / specialists.length));
+    const batches = await mapLimit(specialists, effectiveParallelism, async (specialist): Promise<CandidateBatch> => {
+      const sourceId = `specialist:${specialist.name}`;
+      if (!executionBudget.canStart())
+        return {
+          sourceId,
+          specialist: specialist.name,
+          candidates: [],
+          inputTokens: 0,
+          outputTokens: 0,
+          error: "review deadline exceeded",
+        };
+      try {
+        const { value, cacheStatus } = await cachedStage({
+          root: opts.root,
+          enabled: opts.config.cache,
+          stage: "specialist-candidates",
+          key: { snapshot: opts.scope.id, projection: full.id, profile: candidateProfile, specialist },
+          run: () =>
+            executionBudget.call((signal) =>
+              generateSpecialistCandidates({
+                specialist,
+                projection: full,
+                profile: candidateProfile,
+                provider: opts.provider,
+                allowedFiles: opts.scope.changedFiles,
+                maxCandidates: maxCandidatesPerSpecialist,
+                signal,
+              }),
+            ),
+        });
+        return { ...value, cacheStatus };
+      } catch (error) {
+        captureProviderFailure(error, providerFailures);
+        const message = `${specialist.name}: ${error instanceof Error ? error.message : String(error)}`;
+        const diagnostic = error instanceof StructuredOutputError ? error.diagnostic : null;
+        if (!executionBudget.timedOut()) errors.push(message);
+        return {
+          sourceId,
+          specialist: specialist.name,
+          candidates: [],
+          inputTokens: diagnostic?.usage.inputTokens ?? 0,
+          outputTokens: diagnostic?.usage.outputTokens ?? 0,
+          error: executionBudget.timedOut() ? "review deadline exceeded" : message,
+        };
+      }
+    });
+    candidateBatches.push(...batches);
+  } else {
+    if (route.mode === "holistic") throw new Error("Holistic review requires the specialist execution path");
     const batches = await mapLimit(selectedWorkItems, effectiveParallelism, async (item) => {
       if (!executionBudget.canStart())
         return {
@@ -411,19 +480,22 @@ export async function executeReviewEngine(opts: {
                 profile: candidateProfile,
                 provider: opts.provider,
                 allowedFiles: opts.scope.changedFiles,
+                maxCandidates: opts.config.partitioned.maxCandidatesPerWorkItem ?? 2,
                 signal,
               }),
             ),
         });
         return { ...value, cacheStatus };
       } catch (error) {
+        captureProviderFailure(error, providerFailures);
         const message = `${item.id}: ${error instanceof Error ? error.message : String(error)}`;
+        const diagnostic = error instanceof StructuredOutputError ? error.diagnostic : null;
         if (!executionBudget.timedOut()) errors.push(message);
         return {
           sourceId: item.id,
           candidates: [],
-          inputTokens: 0,
-          outputTokens: 0,
+          inputTokens: diagnostic?.usage.inputTokens ?? 0,
+          outputTokens: diagnostic?.usage.outputTokens ?? 0,
           error: executionBudget.timedOut() ? "review deadline exceeded" : message,
         };
       }
@@ -450,7 +522,11 @@ export async function executeReviewEngine(opts: {
   );
   const verificationInputBudget =
     opts.config.partitioned.maxVerificationInputTokens ??
-    Math.floor(projectionBudget(verifierProfile, opts.config.routing).inputBudgetTokens * 2);
+    Math.floor(
+      projectionBudget(verifierProfile, opts.config.routing).inputBudgetTokens *
+        (opts.config.partitioned.maxVerificationCandidates ?? 4),
+    );
+  const verifierCallBudget = projectionBudget(verifierProfile, opts.config.routing).inputBudgetTokens;
   const preflights = await mapLimit(
     rankedCandidates,
     Math.min(effectiveParallelism, opts.config.evidence.maxParallelResolutions),
@@ -474,15 +550,37 @@ export async function executeReviewEngine(opts: {
         )
         .map((code) => code.content)
         .join("\n\n");
-      const evidenceText = [anchor, ...resolved.records]
-        .map((item) => `[${item.id}] ${item.file}:${item.startLine}-${item.endLine}\n${item.snippet}`)
-        .join("\n\n");
-      const estimatedTokens =
+      const fixedTokens =
         estimateTokens(VERIFICATION_INSTRUCTIONS, verifierProfile, false) +
         estimateTokens(VERIFICATION_LABELS, verifierProfile, false) +
-        estimateTokens(JSON.stringify(candidate), verifierProfile, false) +
-        estimateTokens(originating || anchor.snippet, verifierProfile, true) +
+        estimateTokens(JSON.stringify(candidate), verifierProfile, false);
+      const maxOriginChars = Math.max(
+        200,
+        Math.floor((verifierCallBudget - fixedTokens) * 0.4 * verifierProfile.tokenizer.codeCharsPerToken),
+      );
+      const boundedOriginating = (originating || anchor.snippet).slice(0, maxOriginChars);
+      const packedRecords: EvidenceRecord[] = [];
+      const packingGaps: string[] = [];
+      const renderEvidence = (records: EvidenceRecord[]) =>
+        [anchor, ...records]
+          .map((item) => `[${item.id}] ${item.file}:${item.startLine}-${item.endLine}\n${item.snippet}`)
+          .join("\n\n");
+      for (const record of resolved.records) {
+        const proposed = [...packedRecords, record];
+        const proposedText = renderEvidence(proposed);
+        const proposedTokens =
+          fixedTokens +
+          estimateTokens(boundedOriginating, verifierProfile, true) +
+          estimateTokens(proposedText, verifierProfile, true);
+        if (proposedTokens <= verifierCallBudget) packedRecords.push(record);
+        else packingGaps.push(`${record.requestKind}: resolved evidence omitted by verifier token budget`);
+      }
+      const evidenceText = renderEvidence(packedRecords);
+      const estimatedTokens =
+        fixedTokens +
+        estimateTokens(boundedOriginating, verifierProfile, true) +
         estimateTokens(evidenceText, verifierProfile, true);
+      const gaps = [...resolved.gaps, ...packingGaps];
       if (candidate.evidenceRequests.length && !resolved.records.length)
         return {
           candidate,
@@ -490,7 +588,17 @@ export async function executeReviewEngine(opts: {
           reasoning: resolved.gaps.join("; "),
           anchor,
           records: resolved.records,
-          gaps: resolved.gaps,
+          gaps,
+          estimatedTokens: 0,
+        };
+      if (candidate.evidenceRequests.length && !packedRecords.length)
+        return {
+          candidate,
+          kind: "insufficient",
+          reasoning: gaps.join("; ") || "resolved evidence did not fit the verifier context",
+          anchor,
+          records: packedRecords,
+          gaps,
           estimatedTokens: 0,
         };
       return {
@@ -498,9 +606,9 @@ export async function executeReviewEngine(opts: {
         kind: "ready",
         reasoning: "",
         anchor,
-        records: resolved.records,
-        gaps: resolved.gaps,
-        originating,
+        records: packedRecords,
+        gaps,
+        originating: boundedOriginating,
         evidenceText,
         estimatedTokens,
       };
@@ -536,7 +644,7 @@ export async function executeReviewEngine(opts: {
       });
       continue;
     }
-    if (candidatesForVerification.length >= (opts.config.partitioned.maxVerificationCandidates ?? 4)) break;
+    if (candidatesForVerification.length >= (opts.config.partitioned.maxVerificationCandidates ?? 4)) continue;
     if (verificationEstimatedTokens + preflight.estimatedTokens > verificationInputBudget) {
       tokenOmittedCandidates.push(candidate);
       continue;
@@ -576,6 +684,7 @@ export async function executeReviewEngine(opts: {
       outputTokens += judged.outputTokens;
       return judged.result;
     } catch (error) {
+      captureProviderFailure(error, providerFailures);
       if (!executionBudget.timedOut())
         errors.push(`verify ${candidate.id}: ${error instanceof Error ? error.message : String(error)}`);
       if (executionBudget.timedOut()) return undefined;
@@ -618,6 +727,7 @@ export async function executeReviewEngine(opts: {
         evidence: selectedEvidence.length ? selectedEvidence : [anchor],
         ruleId: candidate.ruleId,
         sourceWorkItemIds: candidate.sourceWorkItemIds,
+        sourceReviewers: candidate.sourceReviewers,
       });
     }
   }
@@ -630,6 +740,10 @@ export async function executeReviewEngine(opts: {
     errors.push("Workspace changed during review");
 
   const completedSources = new Set(candidateBatches.filter((batch) => !batch.error).map((batch) => batch.sourceId));
+  const holisticCompleted =
+    reviewPath === "specialist"
+      ? candidateBatches.length === 4 && candidateBatches.every((batch) => batch.specialist && !batch.error)
+      : completedSources.has("holistic");
   const timedOutWorkItems = candidateBatches
     .filter((batch) => batch.error === "review deadline exceeded")
     .map((batch) => batch.sourceId);
@@ -639,17 +753,17 @@ export async function executeReviewEngine(opts: {
     : [];
   const reviewedItems = selectedWorkItems.filter((item) => completedSources.has(item.id));
   const reviewedFiles = new Set(
-    route.mode === "holistic" && completedSources.has("holistic")
+    route.mode === "holistic" && holisticCompleted
       ? full.code.filter((code) => code.changed).map((code) => code.file)
       : reviewedItems.flatMap((item) => item.code.filter((code) => code.changed).map((code) => code.file)),
   );
   const reviewedSymbols = new Set(
     reviewedItems.flatMap((item) => item.primarySymbols.map((symbol) => `${symbol.file}:${symbol.qualifiedName}`)),
   );
-  if (route.mode === "holistic" && completedSources.has("holistic"))
+  if (route.mode === "holistic" && holisticCompleted)
     for (const symbol of graph.changedSymbols) reviewedSymbols.add(`${symbol.file}:${symbol.qualifiedName}`);
   const reviewedEdgeKeys = new Set(
-    (route.mode === "holistic" && completedSources.has("holistic")
+    (route.mode === "holistic" && holisticCompleted
       ? graph.edges
       : reviewedItems.flatMap((item) => item.graphEdges)
     ).map((edge) => `${edge.kind}:${edge.source}:${edge.target ?? edge.targetText}`),
@@ -663,7 +777,7 @@ export async function executeReviewEngine(opts: {
   );
   const localItems = selectedWorkItems.filter((item) => item.kind === "local");
   const interactionItems = selectedWorkItems.filter((item) => item.kind === "interaction");
-  const omissions = [
+  const rawOmissions = [
     ...emptyCoverage(opts.scope).omissions,
     ...full.omissions.map((item) => ({ kind: item.kind, id: item.id, reason: item.reason })),
     ...omittedWorkItems.map((item) => ({
@@ -682,6 +796,7 @@ export async function executeReviewEngine(opts: {
       ? [{ kind: "context", id: "holistic", reason: "timeout" }]
       : []),
   ];
+  const omissions = [...new Map(rawOmissions.map((item) => [`${item.kind}:${item.id}:${item.reason}`, item])).values()];
   const coverage: ReviewCoverage = {
     selection: omittedWorkItems.length || omittedCandidates.length ? "bounded" : "full",
     ...emptyCoverage(opts.scope),
@@ -699,7 +814,7 @@ export async function executeReviewEngine(opts: {
     evidenceResolved: Object.values(evidence).reduce((sum, records) => sum + Math.max(0, records.length - 1), 0),
     evidenceGaps,
     globalScan:
-      route.mode === "holistic" && completedSources.has("holistic")
+      route.mode === "holistic" && holisticCompleted
         ? "full"
         : route.mode === "hybrid" && hotspots
           ? "compact"
@@ -712,7 +827,7 @@ export async function executeReviewEngine(opts: {
     verificationTokenBudget: verificationInputBudget,
     verificationTokensEstimated: verificationEstimatedTokens,
     selectedWorkItems: selectedWorkItems.length,
-    omittedWorkItems: omittedWorkItems.length + tokenOmittedWorkItems.length,
+    omittedWorkItems: omittedWorkItems.length,
     timeoutOmissions: omissions.filter((item) => item.reason === "timeout").length,
     tokenBudgetOmissions: omissions.filter((item) => item.reason === "token-budget").length,
     deadlineMs: opts.config.maxDurationMs,
@@ -723,22 +838,120 @@ export async function executeReviewEngine(opts: {
     omissions,
   };
   const verified = deduplicateFindings(findings);
-  const materialOmission = coverage.omissions.some(
-    (item) => !["binary", "generated", "lower-ranked", "token-budget"].includes(item.reason),
-  );
-  const incomplete =
-    errors.length > 0 ||
-    evidenceGaps > 0 ||
-    materialOmission ||
-    (route.mode !== "holistic" && selectedWorkItems.some((item) => !completedSources.has(item.id)));
+  const providerDiagnostics = [
+    ...(scoutTrace?.diagnostics ?? []),
+    ...candidateBatches.flatMap((batch) => batch.diagnostics ?? []),
+    ...verification.flatMap((item) => item.diagnostics ?? []),
+  ];
+  const cacheStatuses = [
+    scoutTrace?.cacheStatus,
+    ...candidateBatches.map((batch) => batch.cacheStatus),
+    ...verification.map((item) => item.cacheStatus),
+  ].filter((value): value is "hit" | "miss" => Boolean(value));
+  coverage.cacheHits = cacheStatuses.filter((value) => value === "hit").length;
+  coverage.cacheMisses = cacheStatuses.filter((value) => value === "miss").length;
+  coverage.structuredRepairs = providerDiagnostics.length;
+  const providerMs = (completion: { totalDurationNs?: number | null } | undefined) =>
+    completion?.totalDurationNs ? Math.round(completion.totalDurationNs / 1_000_000) : 0;
+  coverage.candidateProviderMs = candidateBatches.reduce((sum, batch) => sum + providerMs(batch.completion), 0);
+  coverage.verificationProviderMs = verification.reduce((sum, item) => sum + providerMs(item.completion), 0);
+  coverage.scoutProviderMs = providerMs(scoutTrace?.completion);
   const stale = errors.includes("Workspace changed during review");
+  const incompleteReasons: NonNullable<ReviewResult["incompleteReasons"]> = [];
+  if (stale)
+    incompleteReasons.push({
+      kind: "stale-workspace",
+      detail: "Workspace changed during review.",
+    });
+  if (executionBudget.timedOut())
+    incompleteReasons.push({
+      kind: "timeout",
+      detail: `Review exceeded its ${opts.config.maxDurationMs}ms deadline.`,
+    });
+  for (const error of errors.filter((value) => value !== "Workspace changed during review"))
+    incompleteReasons.push({ kind: "provider-failure", detail: error });
+  for (const item of selectedWorkItems.filter((item) => !completedSources.has(item.id)))
+    incompleteReasons.push({
+      kind: "unfinished-work-item",
+      id: item.id,
+      detail: "Selected candidate-generation work item did not complete.",
+    });
+  for (const candidate of omittedCandidates.filter(
+    (item) => tokenOmittedCandidates.includes(item) || item.severity === "critical" || item.severity === "high",
+  ))
+    incompleteReasons.push({
+      kind: "unadjudicated-candidate",
+      id: candidate.id,
+      detail: tokenOmittedCandidates.includes(candidate)
+        ? "Shortlisted candidate did not fit the aggregate verification token budget."
+        : `${candidate.severity} candidate fell outside the verification shortlist.`,
+    });
+  for (const outcome of verification) {
+    if (outcome.verdict === "insufficient_evidence")
+      incompleteReasons.push({
+        kind: "insufficient-evidence",
+        id: outcome.candidateId,
+        detail: outcome.reasoningSummary ?? "Candidate could not be resolved with available evidence.",
+      });
+    if (outcome.verdict === "likely")
+      incompleteReasons.push({
+        kind: "likely-unpublished",
+        id: outcome.candidateId,
+        detail: outcome.reasoningSummary ?? "Likely candidate was not proven and cannot be published.",
+      });
+  }
+  for (const omission of coverage.omissions.filter(
+    (item) => !["binary", "generated", "lower-ranked", "token-budget"].includes(item.reason),
+  ))
+    incompleteReasons.push({
+      kind: "material-omission",
+      id: omission.id,
+      detail: `${omission.kind} omitted because ${omission.reason}.`,
+    });
+  const uniqueIncompleteReasons = [
+    ...new Map(
+      incompleteReasons.map((reason) => [`${reason.kind}:${reason.id ?? ""}:${reason.detail}`, reason]),
+    ).values(),
+  ];
+  const incomplete = uniqueIncompleteReasons.length > 0;
+  const shortlistIds = new Set([
+    ...candidatesForVerification.map((candidate) => candidate.id),
+    ...preflightOutcomes.map((outcome) => outcome.candidateId),
+  ]);
+  const specialistResults =
+    reviewPath === "specialist"
+      ? candidateBatches
+          .filter((batch): batch is CandidateBatch & { specialist: NonNullable<CandidateBatch["specialist"]> } =>
+            Boolean(batch.specialist),
+          )
+          .map((batch) => ({
+            reviewer: batch.specialist,
+            status: batch.error ? ("error" as const) : ("completed" as const),
+            summary: batch.summary ?? (batch.error ? "Specialist review did not complete." : "No summary returned."),
+            candidates: batch.candidates.map((candidate) => {
+              const outcome = verificationById.get(candidate.id);
+              return {
+                id: candidate.id,
+                title: candidate.title,
+                file: candidate.file,
+                line: candidate.line,
+                severity: candidate.severity,
+                disposition: outcome?.verdict ?? ("unadjudicated" as const),
+                ...(outcome?.reasoningSummary ? { reasoning: outcome.reasoningSummary } : {}),
+              };
+            }),
+            ...(batch.error ? { error: batch.error } : {}),
+          }))
+      : undefined;
+  const completedSpecialists = specialistResults?.filter((item) => item.status === "completed").length ?? 0;
   const result: ReviewResult = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     version: opts.version,
     snapshotId: opts.scope.id,
     status: stale ? "stale" : incomplete ? "partial" : "completed",
     outcome: incomplete ? "incomplete" : verified.length ? "findings" : "clear",
     mode: route.mode,
+    reviewPath,
     findings: verified,
     coverage,
     summary: stale
@@ -748,24 +961,35 @@ export async function executeReviewEngine(opts: {
           ? "Review timed out before completing the selected scope; partial result, not approval."
           : errors.length > 0
             ? "Review incomplete due to provider failures; partial result, not approval."
-            : "Review incomplete; inspect coverage and errors before relying on the result."
-        : verified.length
-          ? `${verified.length} verified finding${verified.length === 1 ? "" : "s"}${coverage.selection === "bounded" ? " in the selected risk-ranked review scope" : ""}.`
-          : coverage.selection === "bounded"
-            ? "No verified findings in the selected risk-ranked review scope."
-            : "No verified findings.",
+            : `Review incomplete: ${uniqueIncompleteReasons
+                .slice(0, 3)
+                .map((reason) => reason.detail)
+                .join(" ")}`
+        : reviewPath === "specialist"
+          ? `${completedSpecialists}/4 specialist reviews completed. ${verified.length ? `${verified.length} verified finding${verified.length === 1 ? "" : "s"}.` : "No verified findings."}`
+          : verified.length
+            ? `${verified.length} verified finding${verified.length === 1 ? "" : "s"}${coverage.selection === "bounded" ? " in the selected risk-ranked review scope" : ""}.`
+            : coverage.selection === "bounded"
+              ? "No verified findings in the selected risk-ranked review scope."
+              : "No verified findings.",
     timestamp: new Date().toISOString(),
     reviewer: "AgentSmith",
     candidates: {
       generated: candidates.length,
+      shortlisted: shortlistIds.size,
+      adjudicated: verification.length,
+      omitted: omittedCandidates.length,
       verified: verification.filter((item) => item.verdict === "verified").length,
       likely: verification.filter((item) => item.verdict === "likely").length,
       rejected: verification.filter((item) => item.verdict === "rejected").length,
       insufficientEvidence: verification.filter((item) => item.verdict === "insufficient_evidence").length,
     },
+    incompleteReasons: uniqueIncompleteReasons,
+    ...(specialistResults ? { specialists: specialistResults } : {}),
     errors,
     scopeId: opts.scope.id,
     profileHash: opts.profileHash,
+    strategyHash: AGENTSMITH_STRATEGY_HASH,
     graphSnapshotHash: graph.snapshot.snapshotHash,
     runtime: { models: opts.config.models, inputTokens, outputTokens, concurrency: opts.config.concurrency },
   };
@@ -780,6 +1004,7 @@ export async function executeReviewEngine(opts: {
     result,
     execution: {
       mode: route.mode,
+      reviewPath,
       route,
       modelProfiles: { candidate: candidateProfile, scout: scoutProfile, verifier: verifierProfile },
       projection: full,
@@ -790,6 +1015,8 @@ export async function executeReviewEngine(opts: {
       candidates,
       evidence,
       verification,
+      ...(providerFailures.length ? { providerFailures } : {}),
+      ...(providerDiagnostics.length ? { providerDiagnostics } : {}),
       coverage,
       errors,
       inputTokens,

@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import type { Capability, Observation, PluginResult, RunCtx } from "../../core/types.js";
 import type { QualityPlugin } from "../interface.js";
+import { verboseEnabled } from "../../core/verbose.js";
 
 function withoutDeptryConfig(value: string) {
   const lines = value.split(/\r?\n/);
@@ -68,7 +69,15 @@ export const deptryPlugin: QualityPlugin = {
       if (runtime.length > 0) args.push("--requirements-files", runtime.join(","));
       if (development.length > 0) args.push("--requirements-files-dev", development.join(","));
       args.push("--json-output", report);
+      if (verboseEnabled()) {
+        console.debug(`[matrix-core] deptry argv: ${binary} ${args.join(" ")}`);
+      }
       const run = spawnSync(binary, args, { cwd: ctx.root, encoding: "utf8", timeout: 60000 });
+      if (verboseEnabled()) {
+        console.debug(
+          `[matrix-core] deptry exit=${run.status} stdout=${(run.stdout || "").slice(0, 500)} stderr=${(run.stderr || "").slice(0, 500)}`,
+        );
+      }
       let parsed: any[] = [];
       if (fs.existsSync(report)) {
         try {

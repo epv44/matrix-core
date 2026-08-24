@@ -25,11 +25,12 @@ export const reviewerRegistry: ReviewerRegistry = {
 
 export function noReviewResult(version: string, status: ReviewStatus = "error"): ReviewResult {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     version,
     status,
     outcome: "incomplete",
     mode: "partitioned",
+    reviewPath: "generic",
     findings: [],
     coverage: {
       changedFiles: 0,

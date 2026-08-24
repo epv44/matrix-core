@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type { Capability, Observation, PluginResult, RunCtx } from "../../core/types.js";
 import type { QualityPlugin } from "../interface.js";
+import { verboseEnabled } from "../../core/verbose.js";
 
 interface ExtractedFragment {
   file: string;
@@ -67,11 +68,19 @@ function extract(python: string, files: string[], temporary: string): Extraction
   if (files.length === 0) return { fragments: [], unresolved: [], errors: [] };
   const request = path.join(temporary, "extract.json");
   fs.writeFileSync(request, JSON.stringify({ files }));
+  if (verboseEnabled()) {
+    console.debug(`[matrix-core] sqlfluff-extract argv: ${python} ${extractorAsset()} ${request}`);
+  }
   const run = spawnSync(python, [extractorAsset(), request], {
     encoding: "utf8",
     timeout: 30000,
     maxBuffer: 20 * 1024 * 1024,
   });
+  if (verboseEnabled()) {
+    console.debug(
+      `[matrix-core] sqlfluff-extract exit=${run.status} stdout=${(run.stdout || "").slice(0, 500)} stderr=${(run.stderr || "").slice(0, 500)}`,
+    );
+  }
   if (run.error || run.status !== 0)
     throw new Error(`embedded SQL extraction failed: ${run.error?.message ?? run.stderr ?? "unknown error"}`);
   try {
@@ -167,12 +176,20 @@ export const sqlfluffPlugin: QualityPlugin = {
           facet.templater,
           ...targets,
         ];
+        if (verboseEnabled()) {
+          console.debug(`[matrix-core] sqlfluff argv: ${binary} ${args.join(" ")}`);
+        }
         const run = spawnSync(binary, args, {
           cwd: ctx.root,
           encoding: "utf8",
           timeout: 120000,
           maxBuffer: 30 * 1024 * 1024,
         });
+        if (verboseEnabled()) {
+          console.debug(
+            `[matrix-core] sqlfluff exit=${run.status} stdout=${(run.stdout || "").slice(0, 500)} stderr=${(run.stderr || "").slice(0, 500)}`,
+          );
+        }
         if (run.error || run.status === null)
           return {
             plugin: "sql.sqlfluff",

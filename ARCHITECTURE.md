@@ -11,14 +11,14 @@ Repository / change graph
         |
 Projection planner (token budget + evidence)
         |
-Mode router
-   +----+------------------+
-   |       |              |
-holistic partitioned    hybrid
-   |       |              |
-strong  local +       strong scout
-model   interaction    + targeted inspectors
-   +-------+--------------+
+Capability + mode router
+   +-------------------+------------------+
+   |                                      |
+strong candidate + full fit          all other routes
+   |                                      |
+four specialist reviews        generic local/interaction work
+   |                                      |
+   +-------------------+------------------+
            |
 Candidate normalization
            |
@@ -30,9 +30,11 @@ Unified ReviewResult + coverage + optional local trace
 ## Routing
 
 The router treats context as a packing constraint. It reserves output and safety space and
-uses at most 70% of the selected model context for input. A strong model receives a holistic
-projection when the complete projection fits. Otherwise MatrixCore uses a compact strong-model
-scout when configured, or bounded partitioned work.
+uses at most 70% of the selected model context for input. A strong candidate model receives four
+independent architecture, performance, correctness, and semantic reviews when the complete projection
+fits. Otherwise MatrixCore uses the generic engine: a compact strong-model scout when configured,
+followed by bounded local and interaction work, or bounded partitioned work directly. Specialist
+prompts are never used by the small-model path.
 
 Partitioned review always creates two kinds of work:
 
@@ -48,12 +50,12 @@ the same evidence and verification pipeline.
 The embedded policy bounds partitioned review to the four highest-priority candidate work items and
 verifies at most four generated candidates (configurable higher, such as 8 + 8, for faster
 providers). Parallelism defaults to one in-flight model call and the total review deadline defaults
-to three minutes; every limit is configurable. The complete worktree remains in the frozen manifest,
+to thirty minutes; every limit is configurable. The complete worktree remains in the frozen manifest,
 while lower-ranked and token-budget-omitted work is reported as bounded coverage rather than silently
-treated as reviewed. A bounded or timed-out review may authorize completion only when every selected
-unit completes without provider or evidence errors. Timeouts abort in-flight provider calls, preserve
-completed candidates, evidence, and verified findings, and mark unfinished work as explicit timeout
-omissions; a timed-out review is always partial and never approval.
+treated as reviewed. AgentSmith does not control deterministic completion authorization. Timeouts
+abort in-flight provider calls, preserve completed candidates, evidence, and verified findings, and
+mark unfinished work as explicit timeout omissions; a timed-out review is always partial and must
+never be interpreted as semantic approval.
 
 ## Approved local model profiles
 
@@ -62,7 +64,9 @@ The embedded policy currently provides:
 | Profile | Model | Capability | Context |
 | --- | --- | --- | ---: |
 | `qwen35-9b-local` | `qwen3.5:9b-q4_K_M` | small | 8,192 |
+| `qwen35-9b-verifier-local` | `qwen3.5:9b-q4_K_M` | small | 8,192 |
 | `qwen35-122b-local` | `qwen3.5:122b-a10b` | strong | 131,072 |
+| `qwen35-122b-scout-local` | `qwen3.5:122b-a10b` | strong | 131,072 |
 
 Projects bind review roles to these policy-approved IDs:
 
@@ -72,12 +76,14 @@ review:
   mode: auto
   models:
     candidate: qwen35-9b-local
-    scout: qwen35-122b-local
-    verifier: qwen35-9b-local
+    scout: qwen35-122b-scout-local
+    verifier: qwen35-9b-verifier-local
 ```
 
 The binding above enables hybrid routing for changes that do not fit the small candidate model.
 Use `qwen35-122b-local` as the candidate for holistic-first review when the full projection fits.
+That route runs the four version-pinned specialist prompts; an oversized projection falls back to the
+generic bounded engine rather than publishing partial specialist narratives.
 Model names are not inferred as strong, and projects cannot select arbitrary IDs from the embedded
 policy. Install models explicitly with Ollama; MatrixCore never downloads them implicitly:
 

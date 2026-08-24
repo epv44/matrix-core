@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { ENGINE_VERSION } from "./meta.js";
+import { AGENTSMITH_STRATEGY_HASH } from "../agentsmith/strategy.js";
 import type { AgentSmithProfile, GitHubPolicySource, PolicyCheck, ResolvedPolicy, WorkspaceLanguage } from "./types.js";
 
 export const POLICY_LOCK_FILE = "matrixcore-policy.lock.json";
@@ -60,7 +61,7 @@ const modelProfileSchema = z
 const agentSmithSchema = z
   .object({
     id: z.string().min(1),
-    outputSchemaVersion: z.literal(2),
+    outputSchemaVersion: z.union([z.literal(2), z.literal(3), z.literal(4)]),
     provider: z.literal("ollama"),
     models: z.array(modelProfileSchema).min(1),
     defaultModels: z
@@ -93,6 +94,7 @@ const agentSmithSchema = z
         maxUnitsPerChangedSymbol: z.number().int().min(1).max(64),
         maxCandidateWorkItems: z.number().int().min(1).max(256).default(4),
         maxVerificationCandidates: z.number().int().min(1).max(256).default(4),
+        maxCandidatesPerWorkItem: z.number().int().min(1).max(8).default(2),
         maxCandidateInputTokens: z.number().int().min(128).max(1_000_000).optional(),
         maxVerificationInputTokens: z.number().int().min(128).max(1_000_000).optional(),
         preferSemanticBoundaries: z.boolean(),
@@ -115,11 +117,13 @@ const agentSmithSchema = z
         maxRequestsPerCandidate: z.number().int().min(0).max(64),
         maxParallelResolutions: z.number().int().min(1).max(128),
         maxSnippetLines: z.number().int().min(10).max(1000),
+        maxRecordsPerRequest: z.number().int().min(1).max(32).default(3),
+        maxRecordsPerCandidate: z.number().int().min(1).max(128).default(8),
       })
       .strict(),
     verification: z.object({ enabled: z.literal(true), publish: z.literal("verified-only") }).strict(),
     concurrency: z.number().int().min(1).max(16),
-    maxDurationMs: z.number().int().min(1000).max(1_800_000).default(180_000),
+    maxDurationMs: z.number().int().min(1000).max(1_800_000).default(1_800_000),
     cache: z.boolean(),
     assetRoot: z.string().default("agentsmith"),
   })
@@ -380,11 +384,6 @@ const REQUIRED_AGENT_ASSETS = [
   "agents/sub-agents/perf-reviewer.md",
   "agents/sub-agents/bug-hunter.md",
   "agents/sub-agents/semantic-reviewer.md",
-  "rules/languages/python.md",
-  "rules/languages/typescript.md",
-  "rules/languages/go.md",
-  "rules/languages/rust.md",
-  "rules/security/review.md",
   "rules/registry.yaml",
 ] as const;
 
@@ -514,13 +513,15 @@ function parseCached(root: string, source: GitHubPolicySource, lock: GitHubPolic
   const agentSmith: AgentSmithProfile = {
     ...manifest.agentSmith,
     assetRoot: agentRoot,
-    hash: sha(`${canonical(manifest.agentSmith)}\n${agentContentHashes.join("\n")}`),
+    hash: sha(
+      `${canonical(manifest.agentSmith)}\n${agentContentHashes.join("\n")}\nstrategy:${AGENTSMITH_STRATEGY_HASH}`,
+    ),
   };
   return {
     schemaVersion: 1,
     provider: "github",
     profileId: manifest.id,
-    policyHash: calculated,
+    policyHash: sha(`${calculated}\nstrategy:${AGENTSMITH_STRATEGY_HASH}`),
     checks,
     agentSmith,
     provenance: {

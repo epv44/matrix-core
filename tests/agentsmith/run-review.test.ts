@@ -25,11 +25,12 @@ const coverage = {
 describe("runReview v2", () => {
   it("rebinds a v2 cache entry to current identity", () => {
     const cached: ReviewResult = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       version: "old",
       status: "completed",
       outcome: "clear",
       mode: "partitioned",
+      reviewPath: "generic",
       findings: [],
       coverage,
       summary: "No verified findings.",
@@ -37,7 +38,7 @@ describe("runReview v2", () => {
       reviewer: "AgentSmith",
     };
     expect(materializeCachedReview(cached, { version: "current", timestamp: "now", scopeId: "scope" })).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       version: "current",
       timestamp: "now",
       scopeId: "scope",
@@ -53,7 +54,7 @@ describe("runReview v2", () => {
       },
     };
     const result = await runReview({ cwd: process.cwd(), version: "v2" }, { provider: unavailable });
-    expect(result).toMatchObject({ schemaVersion: 2, status: "error", outcome: "incomplete", findings: [] });
+    expect(result).toMatchObject({ schemaVersion: 3, status: "error", outcome: "incomplete", findings: [] });
     expect(result.errors?.[0]).toMatch(/provider/i);
   });
 });

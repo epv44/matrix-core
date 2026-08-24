@@ -7,14 +7,17 @@ import { computeWorkspaceVersion } from "./version.js";
 import type { ReviewProvider } from "../agentsmith/provider.js";
 import { getQualityStatus } from "./status.js";
 import { formatAgentSmithReview, REVIEW_MARKDOWN_ARTIFACT } from "../agentsmith/report.js";
+import { turnStore } from "./turn-store.js";
+import { coordinateQualityCompletion } from "./completion-coordinator.js";
 export { runReview } from "../agentsmith/scripts/run-review.js";
 function unavailableReview(version: string, message: string): ReviewResult {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     version,
     status: "error",
     outcome: "incomplete",
     mode: "partitioned",
+    reviewPath: "generic",
     findings: [],
     coverage: {
       changedFiles: 0,
@@ -87,10 +90,11 @@ export async function runQualityReview(
   };
 }
 
-export async function runQualityCompletion(
+async function runQualityCompletionOnce(
   opts: RunGateOptions & { configFlag?: string; signal?: AbortSignal; provider?: ReviewProvider },
 ): Promise<QualityCompletionResult> {
   const resolved = resolveConfig({ configFlag: opts.configFlag, cwd: opts.cwd });
+  const host = opts.adapter === "mcp" ? "mcp" : "cli";
   if (resolved.config.agentsmith?.enabled) {
     const result = await runQualityReview(opts);
     const current = getQualityStatus(resolved.configRoot);
@@ -101,7 +105,15 @@ export async function runQualityCompletion(
           ? "timeout"
           : result.review.errors?.length
             ? "provider_error"
-            : "completed";
+            : result.review.status === "partial"
+              ? "partial"
+              : "completed";
+    turnStore.recordGateResult(
+      resolved.configRoot,
+      result.gate,
+      current.completionAllowed ? "PASS" : result.gate.status === "FAIL" ? "REJECT" : "ERROR",
+      host,
+    );
     return {
       ...result,
       reviewEnabled: true,
@@ -121,6 +133,7 @@ export async function runQualityCompletion(
   }
   const gate = await runGate(opts);
   const current = getQualityStatus(resolved.configRoot);
+  turnStore.recordGateResult(resolved.configRoot, gate, current.completionAllowed ? "PASS" : "REJECT", host);
   return {
     version: gate.version,
     gate,
@@ -141,4 +154,11 @@ export async function runQualityCompletion(
       profileHash: null,
     },
   };
+}
+
+export async function runQualityCompletion(
+  opts: RunGateOptions & { configFlag?: string; signal?: AbortSignal; provider?: ReviewProvider },
+): Promise<QualityCompletionResult> {
+  const resolved = resolveConfig({ configFlag: opts.configFlag, cwd: opts.cwd });
+  return coordinateQualityCompletion(resolved.configRoot, opts.signal, () => runQualityCompletionOnce(opts));
 }

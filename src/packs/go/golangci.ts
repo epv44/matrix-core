@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import type { QualityPlugin } from "../interface.js";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
+import { verboseEnabled } from "../../core/verbose.js";
 
 export const golangciPlugin: QualityPlugin = {
   name: "go.golangci",
@@ -31,11 +32,20 @@ export const golangciPlugin: QualityPlugin = {
         };
     }
     try {
-      const res = spawnSync("golangci-lint", ["run", "--out-format", "json", "./..."], {
+      const args = ["run", "--out-format", "json", "./..."];
+      if (verboseEnabled()) {
+        console.debug(`[matrix-core] golangci-lint argv: golangci-lint ${args.join(" ")}`);
+      }
+      const res = spawnSync("golangci-lint", args, {
         cwd: ctx.root,
         encoding: "utf8",
         timeout: 120000,
       });
+      if (verboseEnabled()) {
+        console.debug(
+          `[matrix-core] golangci-lint exit=${res.status} stdout=${(res.stdout || "").slice(0, 500)} stderr=${(res.stderr || "").slice(0, 500)}`,
+        );
+      }
       let errorCount = 0;
       const obs: Observation[] = [];
       try {

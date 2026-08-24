@@ -13,6 +13,7 @@ import { executeReviewEngine } from "../engine.js";
 import { writeAgentSmithTrace } from "../trace.js";
 import { formatAgentSmithReview, REVIEW_MARKDOWN_ARTIFACT } from "../report.js";
 import { hashDiff } from "./hash-diff.js";
+import { AGENTSMITH_STRATEGY_HASH } from "../strategy.js";
 
 export interface RunReviewOptions {
   cwd: string;
@@ -90,18 +91,19 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
   const cacheKey = hashDiff({
     diff: scope.diff,
     config: JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       scopeId: scope.id,
       profileHash: policy.agentSmith.hash,
+      strategyHash: AGENTSMITH_STRATEGY_HASH,
       models: config.models,
       mode: config.mode,
     }),
   });
-  const cacheFile = path.join(resolved.configRoot, ".quality", "cache", "agentsmith-v2", `${cacheKey}.yaml`);
+  const cacheFile = path.join(resolved.configRoot, ".quality", "cache", "agentsmith-v4", `${cacheKey}.yaml`);
   try {
     if (config.cache && fs.existsSync(cacheFile)) {
       const cached = yaml.load(fs.readFileSync(cacheFile, "utf8")) as ReviewResult;
-      if (cached?.schemaVersion === 2) {
+      if (cached?.schemaVersion === 3) {
         const result = materializeCachedReview(cached, { version: opts.version, timestamp, scopeId: scope.id });
         writeResult(resolved.configRoot, result);
         return result;
@@ -130,6 +132,7 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
       packageVersion: ENGINE_VERSION,
       version: result.version,
       profileHash: result.profileHash,
+      strategyHash: result.strategyHash,
       graphSnapshotHash: result.graphSnapshotHash,
       scope,
       deterministicReport: opts.report ?? "",
@@ -155,12 +158,13 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const result: ReviewResult = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       version: opts.version,
       snapshotId: scope.id,
       status: "error",
       outcome: "incomplete",
       mode: config.mode === "auto" ? "partitioned" : config.mode,
+      reviewPath: "generic",
       findings: [],
       coverage: emptyCoverage(scope),
       summary: "Review could not be completed.",
@@ -170,6 +174,7 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
       errors: [message],
       scopeId: scope.id,
       profileHash: policy.agentSmith.hash,
+      strategyHash: AGENTSMITH_STRATEGY_HASH,
       graphSnapshotHash: null,
       runtime: { models: config.models, inputTokens: 0, outputTokens: 0, concurrency: config.concurrency },
     };
@@ -177,6 +182,7 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
       packageVersion: ENGINE_VERSION,
       version: result.version,
       profileHash: result.profileHash,
+      strategyHash: result.strategyHash,
       graphSnapshotHash: null,
       scope,
       deterministicReport: opts.report ?? "",

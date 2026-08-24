@@ -1,0 +1,36 @@
+schemaVersion: 2
+id: matrixcore-large-diff-clear
+sourceTraceId: 2026-08-22T04-14-53-168Z-7df84d4b-5967-4bd8-9f6e-5ceb338229d6
+expectedOutcome: clear
+expectedFindings: []
+originalCandidates:
+  - candidateId: ebd5515cbeb365a1
+    label: rejected
+    rationale: appendEvent is explicitly best-effort audit logging and is not authoritative turn state.
+  - candidateId: 03ef820dbf7b12a8
+    label: rejected
+    rationale: readGateResult failures do not silently permit completion; status fails closed through the surrounding path.
+  - candidateId: b5af4c260b656ab4
+    label: rejected
+    rationale: unavailable background-task metadata is represented conservatively and does not violate a caller contract.
+narrative:
+  summary: Large MatrixCore release diff used to regress duplicate planning, bounded surface diversity, and false-positive promotion.
+  trueCodeFlow: Candidate completion is coordinated through persisted deterministic evidence; background-task metadata is optional adapter input.
+  references:
+    - .quality/traces/agentsmith/2026-08-22T04-14-53-168Z-7df84d4b-5967-4bd8-9f6e-5ceb338229d6/trace.json
+expectedInspectionTargets:
+  files:
+    - src/hooks/runner.ts
+    - src/hooks/adapters/claude.ts
+    - src/core/status.ts
+  symbols:
+    - src/hooks/runner.ts#bgTasks
+    - src/hooks/adapters/claude.ts#getBackgroundTasks
+    - src/core/status.ts#getQualityStatus
+  edges:
+    - src/hooks/runner.ts:bgTasks->src/hooks/adapters/claude.ts:getBackgroundTasks:calls
+tags:
+  - large-diff
+  - duplicate-planning
+  - evidence-contract
+  - clear

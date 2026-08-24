@@ -1,20 +1,19 @@
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 
 import { resolveConfig } from "./config-resolver.js";
 import { aggregateMetrics } from "./policy.js";
 import { formatReport } from "./report.js";
 import { getChangedFiles } from "./changed.js";
+import { appendVerboseLog, verboseEnabled } from "./verbose.js";
 import type { EngineResult, PluginResult, ResolvedPolicy, RunCtx } from "./types.js";
 import { getPluginByName } from "../packs/registry.js";
 import { resolveWorkspaceSet } from "./workspace.js";
 import { resolvePolicyForConfig } from "./resolved-policy.js";
 import { materializeTypeScriptConfig } from "./typescript-config.js";
+import { describeToolProbe, probeToolVersion } from "./process-env.js";
 
 export function toolVersion(binary: string): string | null {
-  const result = spawnSync(binary, ["--version"], { encoding: "utf8", timeout: 5000 });
-  if (result.error || result.status !== 0) return null;
-  return `${result.stdout || ""}${result.stderr || ""}`.match(/\d+(?:\.\d+){1,2}/)?.[0] ?? null;
+  return probeToolVersion(binary).version;
 }
 
 export function versionAccepted(version: string, range: string) {
@@ -47,7 +46,8 @@ async function runPolicyEngine(
       )
         continue;
       const binary = workspace.toolEnvironment.binaries[check.tool];
-      const version = binary ? toolVersion(binary) : null;
+      const probe = binary ? probeToolVersion(binary) : null;
+      const version = probe?.version ?? null;
       capabilities.push({
         name: `${workspace.id}:${check.tool}`,
         found: !!version,
@@ -62,7 +62,10 @@ async function runPolicyEngine(
           status: "FAIL",
           observations: [
             {
-              message: `${check.tool} is missing from designated ${workspace.id} environment; global fallbacks are prohibited`,
+              message:
+                binary && probe
+                  ? `${describeToolProbe(check.tool, probe)}; designated environment=${workspace.id}; global fallbacks are prohibited`
+                  : `${check.tool} is missing from designated ${workspace.id} environment; global fallbacks are prohibited`,
               severity: "error",
             },
           ],
@@ -114,13 +117,33 @@ async function runPolicyEngine(
           workspace.effectiveConfigHash = generatedConfig.hash;
           ctx.policyCheck = { ...check, args: ["--project", generatedConfig.path] };
         }
+        if (verboseEnabled()) {
+          const targets = ctx.changedFiles?.length ? ctx.changedFiles.length : "all";
+          appendVerboseLog(resolved.configRoot, `run ${check.id} (ws=${workspace.id}, targets=${targets})`);
+        }
+        const start = Date.now();
         const result = await plugin.run(ctx, capMap);
+        if (verboseEnabled()) {
+          appendVerboseLog(
+            resolved.configRoot,
+            `done ${check.id} -> ${result.status} in ${Date.now() - start}ms (score=${result.score ?? "n/a"})`,
+          );
+          if (result.observations?.length) {
+            appendVerboseLog(resolved.configRoot, `  obs: ${result.observations.length} items`);
+          }
+        }
         results.push({
           ...normalizeObservationPaths(result, resolved.configRoot, executionRoot),
           plugin: check.id,
           pack: workspace.language,
         });
       } catch (error) {
+        if (verboseEnabled()) {
+          appendVerboseLog(
+            resolved.configRoot,
+            `error ${check.id}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
         results.push({
           plugin: check.id,
           pack: workspace.language,
@@ -135,7 +158,8 @@ async function runPolicyEngine(
     for (const facet of workspace.sqlFacets) {
       for (const check of policy.checks.filter((candidate) => candidate.language === "sql")) {
         const binary = facet.toolEnvironment.binaries[check.tool];
-        const version = binary ? toolVersion(binary) : null;
+        const probe = binary ? probeToolVersion(binary) : null;
+        const version = probe?.version ?? null;
         capabilities.push({
           name: `${facet.id}:${check.tool}`,
           found: !!version,
@@ -150,7 +174,10 @@ async function runPolicyEngine(
             status: "FAIL",
             observations: [
               {
-                message: `${check.tool} is missing from designated ${facet.id} environment; global fallbacks are prohibited`,
+                message:
+                  binary && probe
+                    ? `${describeToolProbe(check.tool, probe)}; designated environment=${facet.id}; global fallbacks are prohibited`
+                    : `${check.tool} is missing from designated ${facet.id} environment; global fallbacks are prohibited`,
                 severity: "error",
               },
             ],
@@ -192,13 +219,33 @@ async function runPolicyEngine(
           [check.tool, { name: check.tool, found: true, version, path: binary, required: true }],
         ]);
         try {
+          if (verboseEnabled()) {
+            const targets = ctx.changedFiles?.length ? ctx.changedFiles.length : "all";
+            appendVerboseLog(resolved.configRoot, `run ${check.id} (ws=${facet.id}, targets=${targets})`);
+          }
+          const start = Date.now();
           const result = await plugin.run(ctx, capMap);
+          if (verboseEnabled()) {
+            appendVerboseLog(
+              resolved.configRoot,
+              `done ${check.id} -> ${result.status} in ${Date.now() - start}ms (score=${result.score ?? "n/a"})`,
+            );
+            if (result.observations?.length) {
+              appendVerboseLog(resolved.configRoot, `  obs: ${result.observations.length} items`);
+            }
+          }
           results.push({
             ...normalizeObservationPaths(result, resolved.configRoot, workspace.executionRoot),
             plugin: check.id,
             pack: "sql",
           });
         } catch (error) {
+          if (verboseEnabled()) {
+            appendVerboseLog(
+              resolved.configRoot,
+              `error ${check.id}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
           results.push({
             plugin: check.id,
             pack: "sql",

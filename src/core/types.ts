@@ -143,8 +143,10 @@ export interface PolicyCheck {
 
 export type ReviewMode = "holistic" | "partitioned" | "hybrid";
 export type ReviewCapability = "small" | "strong";
+export type ReviewPath = "generic" | "specialist";
 export type ReviewCategory = "correctness" | "security" | "performance" | "contract";
 export type ReviewSeverity = "critical" | "high" | "medium" | "low";
+export type SpecialistReviewerId = "architecture-reviewer" | "perf-reviewer" | "bug-hunter" | "semantic-reviewer";
 
 export interface TokenEstimatorProfile {
   kind: "conservative-ratio";
@@ -193,6 +195,8 @@ export interface PartitionedReviewPolicy {
   maxCandidateWorkItems?: number;
   /** Maximum model candidates sent through verification. */
   maxVerificationCandidates?: number;
+  /** Maximum candidates accepted from one partitioned model call. */
+  maxCandidatesPerWorkItem?: number;
   /** Total estimated candidate-generation input budget override. */
   maxCandidateInputTokens?: number;
   /** Total estimated verification input budget override. */
@@ -214,6 +218,8 @@ export interface EvidencePolicy {
   maxRequestsPerCandidate: number;
   maxParallelResolutions: number;
   maxSnippetLines: number;
+  maxRecordsPerRequest?: number;
+  maxRecordsPerCandidate?: number;
 }
 
 export interface VerificationPolicy {
@@ -400,6 +406,7 @@ export interface EvidenceRecord {
 export interface CandidateFinding {
   id: string;
   sourceWorkItemIds: string[];
+  sourceReviewers: SpecialistReviewerId[];
   file: string;
   line: number;
   endLine?: number;
@@ -428,6 +435,25 @@ export interface ReviewFinding {
   evidence: EvidenceRecord[];
   ruleId?: string;
   sourceWorkItemIds: string[];
+  sourceReviewers: SpecialistReviewerId[];
+}
+
+export interface SpecialistCandidateOutcome {
+  id: string;
+  title: string;
+  file: string;
+  line: number;
+  severity: ReviewSeverity;
+  disposition: "verified" | "likely" | "rejected" | "insufficient_evidence" | "unadjudicated";
+  reasoning?: string;
+}
+
+export interface SpecialistReview {
+  reviewer: SpecialistReviewerId;
+  status: "completed" | "error";
+  summary: string;
+  candidates: SpecialistCandidateOutcome[];
+  error?: string;
 }
 
 export interface ReviewCoverage {
@@ -471,28 +497,60 @@ export interface ReviewCoverage {
   callsStarted?: number;
   callsCompleted?: number;
   callsCancelled?: number;
+  cacheHits?: number;
+  cacheMisses?: number;
+  structuredRepairs?: number;
+  candidateProviderMs?: number;
+  verificationProviderMs?: number;
+  scoutProviderMs?: number;
 }
 
 export type ReviewStatus = "completed" | "partial" | "error" | "stale";
-export type AdvisoryReviewStatus = "completed" | "provider_error" | "timeout" | "disabled";
+export type AdvisoryReviewStatus = "completed" | "partial" | "provider_error" | "timeout" | "disabled";
+export interface ReviewIncompleteReason {
+  kind:
+    | "stale-workspace"
+    | "provider-failure"
+    | "timeout"
+    | "unfinished-work-item"
+    | "unadjudicated-candidate"
+    | "insufficient-evidence"
+    | "likely-unpublished"
+    | "material-omission";
+  id?: string;
+  detail: string;
+}
 
 export interface ReviewResult {
-  schemaVersion: 2;
+  schemaVersion: 3;
   version: string;
   snapshotId?: string;
   status: ReviewStatus;
   outcome: "clear" | "findings" | "incomplete";
   mode: ReviewMode;
+  reviewPath: ReviewPath;
   findings: ReviewFinding[];
   coverage: ReviewCoverage;
   summary: string;
   timestamp: string;
   reviewer: string;
-  candidates?: { generated: number; verified: number; likely: number; rejected: number; insufficientEvidence: number };
+  candidates?: {
+    generated: number;
+    shortlisted?: number;
+    adjudicated?: number;
+    omitted?: number;
+    verified: number;
+    likely: number;
+    rejected: number;
+    insufficientEvidence: number;
+  };
+  incompleteReasons?: ReviewIncompleteReason[];
+  specialists?: SpecialistReview[];
   errors?: string[];
   cacheHit?: boolean;
   scopeId?: string;
   profileHash?: string;
+  strategyHash?: string;
   graphSnapshotHash?: string | null;
   traceId?: string;
   traceWarnings?: string[];
@@ -567,6 +625,8 @@ export interface QualityStatus {
   reviewMarkdown?: string | null;
   reviewArtifact?: string | null;
   reviewRequired?: boolean;
+  reviewEnabled?: boolean;
+  reviewAdvisory?: boolean;
   completionAllowed: boolean;
   reason?: string;
   workspaces?: LanguageWorkspace[];

@@ -19,21 +19,22 @@ export { buildProjection, buildWorkItems, projectionBudget, routeReview } from "
 export { loadStructuredRules, selectRules } from "./rules.js";
 export { candidateAnchorIssue, resolveEvidenceRequests } from "./evidence.js";
 export { isAgentSmithTraceEnabled, listAgentSmithTraces, readAgentSmithTrace, traceStatus } from "./trace.js";
-export { curateTrace, listEvalCases, readEvalCase, runEvalCases, scoreFindings } from "./eval.js";
-export { formatAgentSmithReview, REVIEW_MARKDOWN_ARTIFACT } from "./report.js";
+export { collectEvalMetrics, collectTraceMetrics } from "./eval-metrics.js";
 export {
-  loadAgent,
-  loadAgents,
-  loadOrchestrator,
-  loadRule,
-  loadRules,
-  loadSecurityAgents,
-  loadSkill,
-  loadSkills,
-  loadSubAgents,
-} from "./registry.js";
+  compareEvalReports,
+  curateTrace,
+  listEvalCases,
+  readEvalCase,
+  runEvalCases,
+  scoreFindings,
+  scoreInspectionTargets,
+  summarizeEvalReport,
+} from "./eval.js";
+export { PlannerReviewProvider, RecordedReviewProvider } from "./eval-provider.js";
+export { formatAgentSmithReview, REVIEW_MARKDOWN_ARTIFACT } from "./report.js";
+export { loadSpecialists } from "./registry.js";
 export { AGENT_SMITH } from "../core/reviewer.js";
-export type { AgentDef, AgentKind, RuleDef, SkillDef } from "./types.js";
+export type { AgentDef, AgentKind } from "./types.js";
 export type { HashDiffOptions } from "./scripts/hash-diff.js";
 export type { RunReviewDeps, RunReviewOptions } from "./scripts/run-review.js";
 export type * from "./engine-types.js";

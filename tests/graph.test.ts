@@ -34,6 +34,13 @@ describe("repository graph", () => {
     expect(changed.snapshot.state).toBe("READY");
     expect(changed.rendered).toContain("calculate");
     expect(changed.rendered).toContain("Repository graph context");
+    const changedKeys = changed.changedSymbols.map((symbol) => `${symbol.file}:${symbol.qualifiedName}`);
+    const edgeKeys = changed.edges.map((edge) => `${edge.kind}:${edge.source}:${edge.target ?? edge.targetText}`);
+    expect(new Set(changedKeys).size).toBe(changedKeys.length);
+    expect(new Set(edgeKeys).size).toBe(edgeKeys.length);
+    expect(changed.changedSymbols.find((symbol) => symbol.qualifiedName === "calculate")?.provider).toBe(
+      "typescript-compiler",
+    );
     fs.rmSync(root, { recursive: true, force: true });
   });
 });

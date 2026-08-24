@@ -5,7 +5,7 @@
 ```bash
 cd my-py-service
 npm init -y
-npm install --save-dev --save-exact @epv44/matrixcore@0.5.0
+npm install --save-dev --save-exact @epv44/matrixcore@0.5.1
 cat > quality.yaml <<'Y'
 version: 2
 project: my-py-service
@@ -63,10 +63,10 @@ Run PASS with workspace and policy hashes
 
 ## 7. Published package
 
-The current public release is `0.5.0`:
+The current release is `0.5.1`:
 
 ```bash
-npm install --save-dev --save-exact @epv44/matrixcore@0.5.0
+npm install --save-dev --save-exact @epv44/matrixcore@0.5.1
 ```
 
 ## 8. Versioned gate + universal completion enforcement
@@ -81,14 +81,15 @@ quality_run(mode=completion) [tool, configured completion workflow]
   |
   +-- deterministic checks
   +-- GateResult{version, mode=full, fast=false, status, checks} -> .quality/completion-gate.json
+  +-- active coordination -> .quality/completion-run.json + completion.lock
   +-- gate.log + host logger
   |
 host attempts completion
   |
-native Stop/TaskComplete hook [fast: recompute version + read JSON only]
+native Stop/TaskComplete hook [recompute repository/policy identity + read persisted evidence]
   |
   full/non-fast gate exists? version == current? status == PASS?
-    |-- no/FAILED/EXPIRED/RUNNING/stale -> { skip, reason }
+    |-- no/FAILED/EXPIRED/stale -> { skip, reason }
     +-- all ok -> completion allowed
 ```
 
@@ -97,21 +98,21 @@ native Stop/TaskComplete hook [fast: recompute version + read JSON only]
   it never runs the engine.
 - Changed/fast feedback is stored independently in `.quality/changed-gate.json` and can never
   authorize completion or overwrite the last full result.
-- The gate is **immutable and versioned**: `GateResult.status` is `RUNNING` (written before the
-  engine starts, so a crash can never leave a stale PASS) then `PASS` or `FAIL`. Completion is
-  blocked when the gate is missing, `RUNNING`, `FAILED`, `EXPIRED`, or when the workspace version
-  no longer matches the gated version.
+- Terminal gate evidence is **immutable and versioned**. `completion-gate.json` contains the last
+  terminal `PASS` or `FAIL`; active state and the cross-process lease are separate. Concurrent MCP
+  and CLI callers join one completion run instead of replacing terminal evidence or running twice.
+  Completion is blocked when terminal evidence is missing, failed, expired, or stale.
 - Every gate outcome is written to `<workspaceRoot>/.quality/gate.log`. Watch live with
   `tail -f .quality/gate.log`. Example lines:
 
   ```
-  2026-08-04T21:33:29.535Z [INFO] quality_run(mode=full) PASS in 2616ms (version f3f37c8d5ae5)
+  2026-08-04T21:33:29.535Z [INFO] quality_run(mode=completion) PASS in 2616ms (version f3f37c8d5ae5)
   2026-08-04T21:33:36.058Z [WARN] completion blocked - workspace changed since gate
   ```
 
-Host hooks block until a current deterministic PASS exists and, when the project opts into
-AgentSmith, a current advisory review attempt exists. Findings and provider failures remain
-non-blocking and user-selected for any later fix turn.
+Host hooks block until a current deterministic PASS exists. AgentSmith remains advisory: completed,
+partial, timed-out, and provider-error results stay visible in the completion evidence but do not
+change deterministic authorization. Findings remain user-selected for any later fix turn.
 
 ## 9. Local review traces
 

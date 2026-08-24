@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import type { QualityPlugin } from "../interface.js";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
+import { verboseEnabled } from "../../core/verbose.js";
 
 export const gotestPlugin: QualityPlugin = {
   name: "go.test",
@@ -31,7 +32,16 @@ export const gotestPlugin: QualityPlugin = {
         };
     }
     try {
-      const res = spawnSync("go", ["test", "-json", "./..."], { cwd: ctx.root, encoding: "utf8", timeout: 120000 });
+      const args = ["test", "-json", "./..."];
+      if (verboseEnabled()) {
+        console.debug(`[matrix-core] go test argv: go ${args.join(" ")}`);
+      }
+      const res = spawnSync("go", args, { cwd: ctx.root, encoding: "utf8", timeout: 120000 });
+      if (verboseEnabled()) {
+        console.debug(
+          `[matrix-core] go test exit=${res.status} stdout=${(res.stdout || "").slice(0, 500)} stderr=${(res.stderr || "").slice(0, 500)}`,
+        );
+      }
       let passed = 0,
         failed = 0;
       const obs: Observation[] = [];

@@ -6,24 +6,51 @@ import type { GraphContext } from "../core/graph/types.js";
 import type { ReviewScope } from "./scope.js";
 import { changedRanges } from "./projection.js";
 
-const REVIEWER_DOMAINS = {
-  "architecture-reviewer": "architecture",
-  "perf-reviewer": "performance",
-  "bug-hunter": "correctness",
-  "semantic-reviewer": "semantics",
-} as const;
-
-/** Retained only for reading pre-v2 assets and traces. */
-export function reviewerDomain(reviewer: string): string {
-  const domain = REVIEWER_DOMAINS[reviewer as keyof typeof REVIEWER_DOMAINS];
-  if (!domain) throw new Error(`Unknown AgentSmith reviewer: ${reviewer}`);
-  return domain;
-}
-
 function safePath(root: string, value: string) {
   const relative = path.normalize(value).replaceAll("\\", "/").replace(/^\.\//, "");
   const absolute = path.resolve(root, relative);
   return absolute === root || absolute.startsWith(root + path.sep) ? { relative, absolute } : undefined;
+}
+
+function normalizedRepositoryPath(value: string): string {
+  return path.normalize(value).replaceAll("\\", "/").replace(/^\.\//, "");
+}
+
+export function evidenceLocatorParts(request: EvidenceRequest): {
+  pathHint?: string;
+  symbolCandidates: string[];
+  textQueries: string[];
+} {
+  const locator = (request.symbol ?? request.query ?? "").trim().replace(/^`|`$/g, "");
+  const embeddedPath = locator.match(
+    /(?:^|\s)((?:\.\.\/|\.\/)?(?:[\w@.-]+\/)+[\w@.-]+\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|rb|php|cs|sql|ya?ml|json|toml))(?:[:#]([^\s]+))?/i,
+  );
+  const pathHint = request.pathHint ?? embeddedPath?.[1];
+  const withoutPath = embeddedPath
+    ? [
+        locator.slice(0, embeddedPath.index),
+        embeddedPath[2] ?? "",
+        locator.slice((embeddedPath.index ?? 0) + embeddedPath[0].length),
+      ]
+        .join(" ")
+        .trim()
+    : locator;
+  const beforeDescription = withoutPath
+    .replace(/\s+(?:return|parameter|property|field|function|method)\s+type\b.*$/i, "")
+    .trim();
+  const beforeCall = beforeDescription.replace(/\(.*$/, "").trim();
+  const identifiers = beforeCall.match(/[A-Za-z_$][\w$]*/g) ?? [];
+  const symbolCandidates = [locator, beforeDescription, beforeCall, identifiers.at(-1) ?? ""]
+    .map((value) => value.trim())
+    .filter((value) => Boolean(value) && !value.startsWith("{") && !value.includes(" "));
+  const textQueries = [locator, beforeDescription, beforeCall, identifiers.at(-1) ?? ""]
+    .map((value) => value.trim())
+    .filter((value) => value.length >= 3 && value.length <= 200);
+  return {
+    pathHint: pathHint ? normalizedRepositoryPath(pathHint) : undefined,
+    symbolCandidates: [...new Set(symbolCandidates)],
+    textQueries: [...new Set(textQueries)],
+  };
 }
 
 function record(
@@ -37,7 +64,7 @@ function record(
   const snippet = lines.join("\n");
   const id = crypto
     .createHash("sha256")
-    .update(JSON.stringify({ request, file, startLine, snippet, symbol, relation }))
+    .update(JSON.stringify({ file, startLine, snippet, symbol }))
     .digest("hex")
     .slice(0, 16);
   return {
@@ -88,20 +115,47 @@ export function resolveEvidenceRequests(opts: {
   const records: EvidenceRecord[] = [];
   const gaps: string[] = [];
   const symbols = opts.graph.nodes.map((node) => node.symbol);
-  for (const request of opts.candidate.evidenceRequests.slice(0, opts.policy.maxRequestsPerCandidate)) {
+  const maxPerRequest = opts.policy.maxRecordsPerRequest ?? 3;
+  const maxPerCandidate = opts.policy.maxRecordsPerCandidate ?? 8;
+  const requests = [
+    ...new Map(
+      opts.candidate.evidenceRequests.map((request) => [
+        `${request.kind}:${request.symbol ?? ""}:${request.pathHint ?? ""}:${request.query ?? ""}`,
+        request,
+      ]),
+    ).values(),
+  ].slice(0, opts.policy.maxRequestsPerCandidate);
+  for (const request of requests) {
+    if (records.length >= maxPerCandidate) break;
     let matched = false;
+    let requestRecords = 0;
+    const locator = evidenceLocatorParts(request);
     const selectedSymbols = symbols.filter((symbol) => {
-      if (request.pathHint && symbol.file !== request.pathHint && !symbol.file.includes(request.pathHint)) return false;
-      if (request.symbol && symbol.name !== request.symbol && symbol.qualifiedName !== request.symbol) return false;
+      const symbolFile = normalizedRepositoryPath(symbol.file);
+      if (locator.pathHint && symbolFile !== locator.pathHint && !symbolFile.endsWith(`/${locator.pathHint}`))
+        return false;
+      if (
+        request.symbol &&
+        !locator.symbolCandidates.some(
+          (candidate) =>
+            symbol.name === candidate ||
+            symbol.qualifiedName === candidate ||
+            symbol.qualifiedName.endsWith(`.${candidate}`),
+        )
+      )
+        return false;
       if (["callers", "callees", "usage"].includes(request.kind)) {
         const key = `${symbol.file}:${symbol.qualifiedName}`;
         return opts.graph.edges.some(
-          (edge) => edge.source === key || edge.target === key || edge.targetText === request.symbol,
+          (edge) =>
+            edge.source === key ||
+            edge.target === key ||
+            locator.symbolCandidates.some((candidate) => edge.targetText === candidate),
         );
       }
-      return Boolean(request.symbol || request.pathHint);
+      return Boolean(request.symbol || locator.pathHint);
     });
-    for (const symbol of selectedSymbols.slice(0, 8)) {
+    for (const symbol of selectedSymbols.slice(0, maxPerRequest)) {
       const lines = readLines(opts.scope, symbol.file);
       if (!lines.length) continue;
       const start = Math.max(1, symbol.startLine);
@@ -110,13 +164,21 @@ export function resolveEvidenceRequests(opts: {
         record(request, symbol.file, start, lines.slice(start - 1, end), symbol.qualifiedName, request.kind),
       );
       matched = true;
+      requestRecords += 1;
+      if (records.length >= maxPerCandidate || requestRecords >= maxPerRequest) break;
     }
-    if (!matched && request.pathHint) {
-      const resolved = safePath(opts.scope.root, request.pathHint);
+    const fallbackPath = locator.pathHint ?? opts.candidate.file;
+    if (!matched && fallbackPath && records.length < maxPerCandidate) {
+      const resolved = safePath(opts.scope.root, fallbackPath);
       const lines = resolved ? readLines(opts.scope, resolved.relative) : [];
       if (resolved && lines.length) {
-        const query = request.query ?? request.symbol;
-        const index = query ? lines.findIndex((line) => line.includes(query)) : 0;
+        const query = locator.textQueries.find((candidate) => lines.some((line) => line.includes(candidate)));
+        const candidateFile = normalizedRepositoryPath(opts.candidate.file);
+        const index = query
+          ? lines.findIndex((line) => line.includes(query))
+          : resolved.relative === candidateFile
+            ? Math.max(0, Math.min(lines.length - 1, opts.candidate.line - 1))
+            : -1;
         if (index >= 0) {
           const startIndex = Math.max(0, index - 12);
           records.push(
@@ -125,20 +187,22 @@ export function resolveEvidenceRequests(opts: {
               resolved.relative,
               startIndex + 1,
               lines.slice(startIndex, startIndex + opts.policy.maxSnippetLines),
-              request.symbol,
+              locator.symbolCandidates.at(-1) ?? request.symbol,
               request.kind,
             ),
           );
           matched = true;
+          requestRecords += 1;
         }
       }
     }
     if (
       !matched &&
-      request.kind === "search" &&
+      ["search", "config", "test", "schema"].includes(request.kind) &&
       request.query &&
       request.query.length >= 3 &&
-      request.query.length <= 200
+      request.query.length <= 200 &&
+      records.length < maxPerCandidate
     ) {
       for (const file of [...new Set([...opts.scope.changedFiles, ...symbols.map((symbol) => symbol.file)])].sort()) {
         const lines = readLines(opts.scope, file);
@@ -156,57 +220,11 @@ export function resolveEvidenceRequests(opts: {
           ),
         );
         matched = true;
-        if (records.length >= 8) break;
+        requestRecords += 1;
+        if (records.length >= maxPerCandidate || requestRecords >= maxPerRequest) break;
       }
     }
     if (!matched) gaps.push(`${request.kind}: ${request.reason}`);
   }
   return { records: [...new Map(records.map((item) => [item.id, item])).values()], gaps };
-}
-
-/** Pre-v2 compatibility helper for old trace readers; v2 verification does not use it. */
-export function classifyFindingEvidence<T extends Record<string, any>>(
-  finding: T,
-  scope?: ReviewScope,
-  expectedDomain?: string,
-): T {
-  const issues: string[] = [];
-  const file =
-    typeof finding.file === "string"
-      ? path.normalize(finding.file).replaceAll("\\", "/").replace(/^\.\//, "")
-      : undefined;
-  const content = file && scope?.changedFiles.includes(file) ? scope.fileContents[file] : undefined;
-  if (!file) issues.push("missing file");
-  else if (!scope) issues.push("review scope unavailable");
-  else if (content === undefined) issues.push("file is outside the changed review scope");
-  if (!finding.line) issues.push("missing line");
-  else if (content !== undefined) {
-    const lines = content.split("\n");
-    if (finding.line > lines.length) issues.push(`line ${finding.line} is outside the file`);
-    else if (!String(finding.evidence ?? "").trim()) issues.push("missing evidence excerpt");
-    else {
-      const normalized = (value: string) => value.replace(/\s+/g, " ").trim();
-      const nearby = normalized(
-        lines.slice(Math.max(0, finding.line - 4), Math.min(lines.length, finding.line + 3)).join("\n"),
-      );
-      if (!nearby.includes(normalized(String(finding.evidence))))
-        issues.push("evidence excerpt does not match the claimed location");
-    }
-  }
-  if (!String(finding.impact ?? "").trim()) issues.push("missing impact");
-  if (!String(finding.recommendation ?? "").trim()) issues.push("missing recommendation");
-  if (expectedDomain && finding.domain !== expectedDomain)
-    issues.push(
-      finding.domain
-        ? `reviewer domain ${finding.domain} does not match expected ${expectedDomain}`
-        : `missing reviewer domain (expected ${expectedDomain})`,
-    );
-  return { ...finding, file, evidenceStatus: issues.length ? "unverified" : "located", validationIssues: issues };
-}
-export function classifyFindingEvidenceList<T extends Record<string, any>>(
-  findings: T[],
-  scope?: ReviewScope,
-  expectedDomain?: string,
-): T[] {
-  return findings.map((finding) => classifyFindingEvidence(finding, scope, expectedDomain));
 }

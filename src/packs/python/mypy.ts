@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import type { QualityPlugin } from "../interface.js";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
+import { verboseEnabled } from "../../core/verbose.js";
 
 function getCfg(ctx: RunCtx, keys: string[]) {
   for (const k of keys) {
@@ -12,11 +13,22 @@ function getCfg(ctx: RunCtx, keys: string[]) {
 
 function tryMypy(root: string, files: string[] | undefined, extra: string[], binary = "mypy") {
   const args = [...extra, ...(files && files.length > 0 ? files : ["."])];
+  if (verboseEnabled()) {
+    console.debug(`[matrix-core] mypy argv: ${binary} ${args.join(" ")}`);
+  }
   try {
     const res = spawnSync(binary, args, { cwd: root, encoding: "utf8", timeout: 60000 });
+    if (verboseEnabled()) {
+      console.debug(
+        `[matrix-core] mypy exit=${res.status} stdout=${(res.stdout || "").slice(0, 500)} stderr=${(res.stderr || "").slice(0, 500)}`,
+      );
+    }
     if (res.error) return { stdout: "", stderr: (res.error as any).message, status: null };
     return { stdout: res.stdout || "", stderr: res.stderr || "", status: res.status };
   } catch (e: any) {
+    if (verboseEnabled()) {
+      console.debug(`[matrix-core] mypy exception: ${e.message}`);
+    }
     return { stdout: "", stderr: e.message, status: null };
   }
 }

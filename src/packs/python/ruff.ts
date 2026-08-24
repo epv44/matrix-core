@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import type { QualityPlugin } from "../interface.js";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
+import { verboseEnabled } from "../../core/verbose.js";
 
 function getCfg(ctx: RunCtx, keys: string[]) {
   for (const k of keys) {
@@ -17,7 +18,15 @@ function runRuff(
   binary = "ruff",
 ): { violations: any[]; error?: string } {
   const args = ["check", "--output-format", "json", ...(extra as string[]), ...(targets || ["."])];
+  if (verboseEnabled()) {
+    console.debug(`[matrix-core] ruff argv: ${binary} ${args.join(" ")}`);
+  }
   const res = spawnSync(binary, args, { cwd: root, encoding: "utf8", timeout: 30000 });
+  if (verboseEnabled()) {
+    console.debug(
+      `[matrix-core] ruff exit=${res.status} stdout=${(res.stdout || "").slice(0, 500)} stderr=${(res.stderr || "").slice(0, 500)}`,
+    );
+  }
   if (res.status === null && !res.stdout)
     return { violations: [], error: `ruff execution failed: ${res.stderr?.slice(0, 2000)}` };
   let violations: any[] = [];

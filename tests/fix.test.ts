@@ -17,11 +17,12 @@ describe("prepareFix", () => {
       fs.writeFileSync(
         path.join(root, ".quality", "review-result.yaml"),
         yaml.dump({
-          schemaVersion: 2,
+          schemaVersion: 3,
           version,
           status: "completed",
           outcome: "findings",
           mode: "partitioned",
+          reviewPath: "generic",
           findings: [
             {
               id: "bug-1",
@@ -34,6 +35,7 @@ describe("prepareFix", () => {
               confidence: "verified",
               evidence: [],
               sourceWorkItemIds: ["local"],
+              sourceReviewers: [],
             },
           ],
           coverage: {
@@ -78,11 +80,12 @@ describe("prepareFix", () => {
       fs.writeFileSync(
         path.join(root, ".quality", "review-result.yaml"),
         yaml.dump({
-          schemaVersion: 2,
+          schemaVersion: 3,
           version,
           status: "completed",
           outcome: "clear",
           mode: "partitioned",
+          reviewPath: "generic",
           findings: [],
           coverage: {
             changedFiles: 0,

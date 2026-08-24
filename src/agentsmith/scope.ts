@@ -23,7 +23,8 @@ export interface ReviewScope {
   metadata: { fileCount: number; additions: number; deletions: number; capturedAt: string };
 }
 
-const GENERATED_PATH = /(^|\/)(dist|build|coverage|vendor|node_modules|\.next|target)\//;
+const GENERATED_PATH =
+  /(^|\/)(dist|build|coverage|vendor|node_modules|\.next|target)\/|(^|\/)evals\/agentsmith\/[^/]+\/input\.json$/;
 const GENERATED_MARKER = /(generated (file|code)|do not edit|@generated)/i;
 function detectedLanguage(file: string): string | undefined {
   if (/\.(ts|tsx|js|jsx)$/.test(file)) return "typescript";

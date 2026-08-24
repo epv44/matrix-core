@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
 import { runDoctor, doctorToJson, doctorToReport } from "./doctor.js";
@@ -16,7 +17,15 @@ import { runGate } from "./gate.js";
 import { resolveWorkspaceSet } from "./workspace.js";
 import { repositoryGraph } from "./graph/index.js";
 import { listAgentSmithTraces, readAgentSmithTrace, traceStatus } from "../agentsmith/trace.js";
-import { curateTrace, listEvalCases, runEvalCases, type EvalMode } from "../agentsmith/eval.js";
+import { collectTraceMetrics } from "../agentsmith/eval-metrics.js";
+import {
+  compareEvalReports,
+  curateTrace,
+  listEvalCases,
+  runEvalCases,
+  type EvalMode,
+  type EvalReplayMode,
+} from "../agentsmith/eval.js";
 const program = new Command();
 program.name("quality").description("Standalone Quality Engine").version(ENGINE_VERSION);
 const workspaceCommand = program.command("workspace").description("Inspect resolved language workspaces");
@@ -286,7 +295,7 @@ program
     );
   });
 
-const traceCommand = program.command("trace").description("Inspect explicitly enabled local AgentSmith traces");
+const traceCommand = program.command("trace").description("Inspect retained local AgentSmith traces");
 traceCommand
   .command("status")
   .option("--root <path>", "Project root", process.cwd())
@@ -315,6 +324,14 @@ traceCommand
     const root = resolveConfig({ cwd: opts.root }).configRoot;
     console.log(JSON.stringify(readAgentSmithTrace(root, traceId), null, 2));
   });
+traceCommand
+  .command("metrics <trace-id>")
+  .description("Compute coverage, adjudication, evidence, reliability, efficiency, and honesty metrics")
+  .option("--root <path>", "Project root", process.cwd())
+  .action((traceId, opts) => {
+    const root = resolveConfig({ cwd: opts.root }).configRoot;
+    console.log(JSON.stringify(collectTraceMetrics(readAgentSmithTrace(root, traceId)), null, 2));
+  });
 
 const evalCommand = program.command("eval").description("Curate and replay local AgentSmith evaluation cases");
 evalCommand
@@ -341,6 +358,7 @@ evalCommand
     "all",
   )
   .option("--repeat <count>", "Runs per case and mode", "1")
+  .option("--replay <kind>", "live, recorded, or planner", "live")
   .option("--json", "JSON output", false)
   .action(async (opts) => {
     const available: EvalMode[] = [
@@ -353,9 +371,11 @@ evalCommand
     if (![...available, "all"].includes(opts.mode)) throw new Error(`Invalid eval mode: ${opts.mode}`);
     const repeat = Number.parseInt(opts.repeat, 10);
     if (!Number.isInteger(repeat) || repeat < 1) throw new Error(`Invalid repeat count: ${opts.repeat}`);
+    const replayModes: EvalReplayMode[] = ["live", "recorded", "planner"];
+    if (!replayModes.includes(opts.replay)) throw new Error(`Invalid replay kind: ${opts.replay}`);
     const modes: EvalMode[] = opts.mode === "all" ? available : [opts.mode as EvalMode];
     const root = resolveConfig({ cwd: opts.root }).configRoot;
-    const result = await runEvalCases({ root, slugs: opts.case, modes, repeat });
+    const result = await runEvalCases({ root, slugs: opts.case, modes, repeat, replay: opts.replay });
     console.log(opts.json ? JSON.stringify(result, null, 2) : result.markdown);
     process.exitCode = result.cases.some((item) =>
       item.results.some(
@@ -367,6 +387,14 @@ evalCommand
     )
       ? 1
       : 0;
+  });
+evalCommand
+  .command("compare <baseline> <current>")
+  .description("Compare two AgentSmith eval result.json files")
+  .action((baseline, current) => {
+    const before = JSON.parse(fs.readFileSync(path.resolve(baseline), "utf8"));
+    const after = JSON.parse(fs.readFileSync(path.resolve(current), "utf8"));
+    console.log(JSON.stringify(compareEvalReports(before, after), null, 2));
   });
 
 await program.parseAsync(process.argv);

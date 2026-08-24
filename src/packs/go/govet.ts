@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import type { QualityPlugin } from "../interface.js";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
+import { verboseEnabled } from "../../core/verbose.js";
 
 export const govetPlugin: QualityPlugin = {
   name: "go.vet",
@@ -31,7 +32,16 @@ export const govetPlugin: QualityPlugin = {
         };
     }
     try {
-      const res = spawnSync("go", ["vet", "./..."], { cwd: ctx.root, encoding: "utf8", timeout: 60000 });
+      const args = ["vet", "./..."];
+      if (verboseEnabled()) {
+        console.debug(`[matrix-core] go vet argv: go ${args.join(" ")}`);
+      }
+      const res = spawnSync("go", args, { cwd: ctx.root, encoding: "utf8", timeout: 60000 });
+      if (verboseEnabled()) {
+        console.debug(
+          `[matrix-core] go vet exit=${res.status} stdout=${(res.stdout || "").slice(0, 500)} stderr=${(res.stderr || "").slice(0, 500)}`,
+        );
+      }
       const out = (res.stdout || "") + (res.stderr || "");
       const lines = out.split("\n").filter(Boolean);
       const obs: Observation[] = lines.map((l) => ({ message: l, severity: "error" as const, ruleId: "go vet" }));

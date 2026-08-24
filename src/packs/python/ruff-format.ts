@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import type { QualityPlugin } from "../interface.js";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
+import { verboseEnabled } from "../../core/verbose.js";
 function getCfg(ctx: RunCtx, keys: string[]) {
   for (const k of keys) {
     const cfg = ctx.config?.checks?.[k];
@@ -16,7 +17,15 @@ function runFormatCheck(
   binary = "ruff",
 ): { files: string[]; error?: string } {
   const args = ["format", "--check", "--output-format", "json", ...(extra as string[]), ...(targets || ["."])];
+  if (verboseEnabled()) {
+    console.debug(`[matrix-core] ruff-format argv: ${binary} ${args.join(" ")}`);
+  }
   const res = spawnSync(binary, args, { cwd: root, encoding: "utf8", timeout: 30000 });
+  if (verboseEnabled()) {
+    console.debug(
+      `[matrix-core] ruff-format exit=${res.status} stdout=${(res.stdout || "").slice(0, 500)} stderr=${(res.stderr || "").slice(0, 500)}`,
+    );
+  }
   if (res.status === null && !res.stdout && !res.stderr)
     return { files: [], error: `ruff format check failed: ${(res.stderr || "").slice(0, 2000)}` };
   const files: string[] = [];

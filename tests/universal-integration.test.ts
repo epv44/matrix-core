@@ -68,11 +68,12 @@ function writeReview(dir: string, status: "completed" | "partial" | "error" | "s
   fs.writeFileSync(
     path.join(dir, ".quality", "review-result.yaml"),
     yaml.dump({
-      schemaVersion: 2,
+      schemaVersion: 3,
       version: computeWorkspaceVersion(dir),
       status,
       outcome: status === "completed" ? "clear" : "incomplete",
       mode: "partitioned",
+      reviewPath: "generic",
       reviewer: "AgentSmith",
       timestamp: new Date().toISOString(),
       findings: [],
@@ -220,7 +221,7 @@ describe("universal MatrixCore integration", () => {
     }
   });
 
-  it.runIf(hasGit)("requires a current review attempt only when the project enables AgentSmith", () => {
+  it.runIf(hasGit)("keeps enabled AgentSmith advisory for completion authorization", () => {
     const dir = tempProject();
     try {
       fs.writeFileSync(
@@ -228,49 +229,60 @@ describe("universal MatrixCore integration", () => {
         "version: 2\nproject: universal-test\nreview:\n  agentsmith: true\n",
       );
       writeGateResult(dir, passingGate(dir));
-      expect(evaluateCompletion(dir)).toMatchObject({ completionAllowed: false, reviewRequired: true });
-      expect(evaluateCompletion(dir).reason).toContain("missing or stale");
+      expect(evaluateCompletion(dir)).toMatchObject({
+        completionAllowed: true,
+        reviewRequired: true,
+        reviewEnabled: true,
+        reviewAdvisory: true,
+      });
 
       writeReview(dir, "completed");
       expect(evaluateCompletion(dir)).toMatchObject({ completionAllowed: true, reviewRequired: true });
       writeReview(dir, "error");
-      expect(evaluateCompletion(dir)).toMatchObject({ completionAllowed: false, reviewRequired: true });
-      expect(evaluateCompletion(dir).reason).toContain("did not complete successfully");
+      expect(evaluateCompletion(dir)).toMatchObject({ completionAllowed: true, reviewRequired: true });
       writeReview(dir, "stale");
-      expect(evaluateCompletion(dir).completionAllowed).toBe(false);
+      expect(evaluateCompletion(dir).completionAllowed).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("normalizes native hook roots and response envelopes", () => {
+  it("normalizes native hook roots and response envelopes", async () => {
     const dir = tempProject();
     try {
       expect(resolveHookRoot("cline", { workspaceRoots: [dir] })).toBe(fs.realpathSync(dir));
       expect(resolveHookRoot("codex", { cwd: dir })).toBe(fs.realpathSync(dir));
       expect(resolveHookRoot("claude", { cwd: dir })).toBe(fs.realpathSync(dir));
-      expect(renderHookDecision("cline", { workspaceRoots: [dir] })).toMatchObject({ cancel: true });
-      expect(renderHookDecision("codex", { cwd: dir })).toMatchObject({ decision: "block" });
-      expect(renderHookDecision("claude", { cwd: dir })).toMatchObject({ decision: "block" });
+      // Use separate dirs per host to avoid shared retry-count state
+      const dir2 = tempProject();
+      const dir3 = tempProject();
+      try {
+        expect(await renderHookDecision("cline", { workspaceRoots: [dir] })).toMatchObject({ cancel: true });
+        expect(await renderHookDecision("codex", { cwd: dir2 })).toMatchObject({ decision: "block" });
+        expect(await renderHookDecision("claude", { cwd: dir3 })).toMatchObject({ decision: "block" });
+      } finally {
+        fs.rmSync(dir2, { recursive: true, force: true });
+        fs.rmSync(dir3, { recursive: true, force: true });
+      }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it("does not enforce the completion gate for native Plan-mode enum representations", () => {
-    expect(renderHookDecision("codex", { permission_mode: "plan" })).toEqual({});
-    expect(renderHookDecision("codex", { permission_mode: "Plan" })).toEqual({});
-    expect(renderHookDecision("codex", { permission_mode: " PLAN " })).toEqual({});
-    expect(renderHookDecision("claude", { permission_mode: "Plan" })).toEqual({});
-    expect(renderHookDecision("cline", { permission_mode: "Plan" })).toEqual({
+  it("does not enforce the completion gate for native Plan-mode enum representations", async () => {
+    expect(await renderHookDecision("codex", { permission_mode: "plan" })).toEqual({});
+    expect(await renderHookDecision("codex", { permission_mode: "Plan" })).toEqual({});
+    expect(await renderHookDecision("codex", { permission_mode: " PLAN " })).toEqual({});
+    expect(await renderHookDecision("claude", { permission_mode: "Plan" })).toEqual({});
+    expect(await renderHookDecision("cline", { permission_mode: "Plan" })).toEqual({
       cancel: false,
       contextModification: "",
       errorMessage: "",
     });
-    expect(renderHookDecision("codex", { permission_mode: "default" })).toMatchObject({ decision: "block" });
+    expect(await renderHookDecision("codex", { permission_mode: "default" })).toMatchObject({ decision: "block" });
   });
 
-  it("uses the matching Codex transcript turn to detect conversational Plan mode", () => {
+  it("uses the matching Codex transcript turn to detect conversational Plan mode", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-hook-transcript-"));
     const transcript = path.join(dir, "rollout.jsonl");
     try {
@@ -287,7 +299,7 @@ describe("universal MatrixCore integration", () => {
       fs.writeFileSync(transcript, `${records.map((record) => JSON.stringify(record)).join("\n")}\n{not-json\n`);
 
       expect(
-        renderHookDecision("codex", {
+        await renderHookDecision("codex", {
           permission_mode: "default",
           transcript_path: transcript,
           turn_id: "current-turn",
@@ -298,7 +310,7 @@ describe("universal MatrixCore integration", () => {
     }
   });
 
-  it("does not let an older Codex Plan turn bypass the current Default turn", () => {
+  it("does not let an older Codex Plan turn bypass the current Default turn", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-hook-transcript-"));
     const transcript = path.join(dir, "rollout.jsonl");
     try {
@@ -315,7 +327,7 @@ describe("universal MatrixCore integration", () => {
       fs.writeFileSync(transcript, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
 
       expect(
-        renderHookDecision("codex", {
+        await renderHookDecision("codex", {
           permission_mode: "default",
           transcript_path: transcript,
           turn_id: "current-turn",
@@ -326,18 +338,18 @@ describe("universal MatrixCore integration", () => {
     }
   });
 
-  it("keeps transcript fallback Codex-only and fails closed for unusable transcript evidence", () => {
+  it("keeps transcript fallback Codex-only and fails closed for unusable transcript evidence", async () => {
     const payload = {
       permission_mode: "default",
       collaboration_mode_kind: "plan",
       transcript_path: "/does/not/exist",
       turn_id: "turn",
     };
-    expect(renderHookDecision("codex", payload)).toEqual({});
-    expect(renderHookDecision("claude", payload)).toMatchObject({ decision: "block" });
-    expect(renderHookDecision("cline", payload)).toMatchObject({ cancel: true });
+    expect(await renderHookDecision("codex", payload)).toEqual({});
+    expect(await renderHookDecision("claude", payload)).toMatchObject({ decision: "block" });
+    expect(await renderHookDecision("cline", payload)).toMatchObject({ cancel: true });
     expect(
-      renderHookDecision("codex", {
+      await renderHookDecision("codex", {
         permission_mode: "default",
         transcript_path: "/does/not/exist",
         turn_id: "turn",
@@ -345,9 +357,9 @@ describe("universal MatrixCore integration", () => {
     ).toMatchObject({ decision: "block" });
   });
 
-  it("fails closed when a configured hook payload cannot resolve its workspace", () => {
-    expect(renderHookDecision("codex", {})).toMatchObject({ decision: "block" });
-    expect(renderHookDecision("cline", {})).toMatchObject({ cancel: true });
+  it("fails closed when a configured hook payload cannot resolve its workspace", async () => {
+    expect(await renderHookDecision("codex", {})).toMatchObject({ decision: "block" });
+    expect(await renderHookDecision("cline", {})).toMatchObject({ cancel: true });
   });
 
   it("constructs the MCP server and exposes status through the shared tool service", async () => {
@@ -373,7 +385,8 @@ describe("universal MatrixCore integration", () => {
         gate.workspaces?.map((workspace) => workspace.resolutionHash),
       );
       fs.writeFileSync(path.join(dir, "file.txt"), "changed\n");
-      expect(renderHookDecision("codex", { cwd: dir })).toMatchObject({
+      const result = await renderHookDecision("codex", { cwd: dir });
+      expect(result).toMatchObject({
         decision: "block",
         reason: expect.stringContaining(`policy=${status.policy?.policyHash}`),
       });
@@ -390,11 +403,12 @@ describe("universal MatrixCore integration", () => {
       fs.writeFileSync(
         path.join(dir, ".quality", "review-result.yaml"),
         yaml.dump({
-          schemaVersion: 2,
+          schemaVersion: 3,
           version,
           status: "completed",
           outcome: "findings",
           mode: "partitioned",
+          reviewPath: "generic",
           reviewer: "AgentSmith",
           timestamp: new Date().toISOString(),
           coverage: {
@@ -428,6 +442,7 @@ describe("universal MatrixCore integration", () => {
               confidence: "verified",
               evidence: [],
               sourceWorkItemIds: ["local"],
+              sourceReviewers: [],
             },
           ],
         }),

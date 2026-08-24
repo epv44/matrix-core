@@ -23,19 +23,17 @@ class FakeProvider implements ReviewProvider {
     const line = file === "defect.txt" ? 1 : 4;
     return {
       raw: JSON.stringify({
-        summary: "defect",
-        candidates: [
+        c: [
           {
-            sourceWorkItemIds: [],
-            file,
-            line,
-            severity: "high",
-            category: "correctness",
-            title: "Fixture defect",
-            description: "The changed value causes a concrete failure.",
-            suggestion: "Guard the value.",
-            candidateConfidence: 0.9,
-            evidenceRequests: [],
+            f: file,
+            l: line,
+            s: "high",
+            k: "correctness",
+            t: "Fixture defect",
+            d: "The changed value causes a concrete failure.",
+            g: "Guard the value.",
+            q: 0.9,
+            e: [],
           },
         ],
       }),
@@ -64,7 +62,12 @@ describe("combined review e2e with fake provider", () => {
       const provider = new FakeProvider();
       const first = await runQualityReview({ cwd: root, mode: "full", base: "main", provider });
       expect(first.gate.status).toBe("PASS");
-      expect(first.review).toMatchObject({ schemaVersion: 2, mode: "partitioned", outcome: "findings" });
+      expect(first.review).toMatchObject({
+        schemaVersion: 3,
+        reviewPath: "generic",
+        mode: "partitioned",
+        outcome: "findings",
+      });
       expect(first.review.findings[0].confidence).toBe("verified");
       expect(first.passed).toBe(true);
       expect(provider.calls).toBe(2);

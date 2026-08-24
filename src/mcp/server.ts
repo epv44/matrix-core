@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { ENGINE_VERSION } from "../core/meta.js";
 import { executeQualityTool, type QualityToolName } from "./tools.js";
+import { cleanupMcpRuntimeRecords } from "../core/runtime.js";
+import type { Readable, Writable } from "node:stream";
 
 export function result(value: unknown) {
   const structuredContent = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
@@ -79,9 +81,45 @@ export function createMatrixCoreMcpServer() {
   return server;
 }
 
-async function main() {
+export async function startMatrixCoreMcpServer(options?: {
+  stdin?: Readable;
+  stdout?: Writable;
+  installSignalHandlers?: boolean;
+}) {
   const server = createMatrixCoreMcpServer();
-  await server.connect(new StdioServerTransport());
+  const stdin = options?.stdin ?? process.stdin;
+  const stdout = options?.stdout ?? process.stdout;
+  const transport = new StdioServerTransport(stdin, stdout);
+  let closing: Promise<void> | null = null;
+  const close = () => {
+    if (closing) return closing;
+    closing = (async () => {
+      stdin.off("end", onInputClosed);
+      stdin.off("close", onInputClosed);
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      try {
+        await server.close();
+      } finally {
+        cleanupMcpRuntimeRecords();
+      }
+    })();
+    return closing;
+  };
+  const onInputClosed = () => void close();
+  const onSignal = () => void close();
+  stdin.once("end", onInputClosed);
+  stdin.once("close", onInputClosed);
+  if (options?.installSignalHandlers !== false) {
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+  }
+  await server.connect(transport);
+  return { server, transport, close };
+}
+
+async function main() {
+  await startMatrixCoreMcpServer();
 }
 
 function isMainModule(): boolean {

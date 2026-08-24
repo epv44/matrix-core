@@ -14,7 +14,18 @@ describe("OllamaProvider v2", () => {
       vi.fn(async (_url: string, init: RequestInit) => {
         requestBody = JSON.parse(String(init.body));
         return new Response(
-          JSON.stringify({ response: '{"summary":"ok","candidates":[]}', prompt_eval_count: 12, eval_count: 3 }),
+          JSON.stringify({
+            model: "qwen3.5:9b-q4_K_M",
+            response: '{"c":[]}',
+            done: true,
+            done_reason: "stop",
+            prompt_eval_count: 12,
+            eval_count: 3,
+            total_duration: 100,
+            load_duration: 20,
+            prompt_eval_duration: 30,
+            eval_duration: 50,
+          }),
         );
       }),
     );
@@ -23,16 +34,34 @@ describe("OllamaProvider v2", () => {
       prompt: "review",
       outputKind: "candidates",
       allowedFiles: ["src/a.ts", "docs/deleted.md", "src/a.ts"],
+      maxCandidates: 2,
     });
-    const item = requestBody.format.properties.candidates.items;
-    expect(item.required).toEqual(expect.arrayContaining(["file", "line", "category", "evidenceRequests"]));
-    expect(item.properties.file).toEqual({ type: "string", enum: ["src/a.ts", "docs/deleted.md"] });
+    const candidates = requestBody.format.properties.c;
+    const item = candidates.items;
+    expect(requestBody.format.required).toEqual(["c"]);
+    expect(candidates.maxItems).toBe(2);
+    expect(item.required).toEqual(expect.arrayContaining(["f", "l", "k", "e"]));
+    expect(item.properties.f).toEqual({ type: "string", enum: ["src/a.ts", "docs/deleted.md"] });
+    expect(item.properties.d.maxLength).toBe(280);
+    expect(item.properties.e.maxItems).toBe(2);
+    expect(item.properties.e.items.required).toEqual(["k", "v", "r"]);
+    expect(item.properties.e.items.properties.v.minLength).toBe(1);
     expect(requestBody.model).toBe(profile.model);
     expect(requestBody.options).toMatchObject({
       num_ctx: profile.contextTokens,
       num_predict: profile.requestedOutputTokens,
     });
+    expect(requestBody.keep_alive).toBe("35m");
     expect(response.usage).toEqual({ inputTokens: 12, outputTokens: 3 });
+    expect(response.completion).toEqual({
+      model: "qwen3.5:9b-q4_K_M",
+      done: true,
+      doneReason: "stop",
+      totalDurationNs: 100,
+      loadDurationNs: 20,
+      promptEvalDurationNs: 30,
+      evalDurationNs: 50,
+    });
   });
 
   it("uses the focused verification schema", async () => {

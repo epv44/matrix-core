@@ -3,7 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { curateTrace, readEvalCase, runEvalCases, scoreFindings } from "../../src/agentsmith/eval.js";
+import {
+  compareEvalReports,
+  curateTrace,
+  readEvalCase,
+  runEvalCases,
+  scoreFindings,
+  scoreInspectionTargets,
+} from "../../src/agentsmith/eval.js";
 import { captureReviewScope } from "../../src/agentsmith/scope.js";
 import { writeAgentSmithTrace } from "../../src/agentsmith/trace.js";
 import type { ReviewProvider } from "../../src/agentsmith/provider.js";
@@ -45,12 +52,13 @@ function fixture() {
   fs.writeFileSync(path.join(root, "a.ts"), "export function value() { return 2; }\n");
   const scope = captureReviewScope({ root, base: "HEAD" });
   const result: ReviewResult = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     version: scope.version,
     snapshotId: scope.id,
     status: "completed",
     outcome: "clear",
     mode: "partitioned",
+    reviewPath: "generic",
     findings: [],
     coverage: emptyCoverage,
     summary: "No verified findings.",
@@ -104,6 +112,7 @@ describe("AgentSmith v2 eval cases", () => {
         confidence: "verified" as const,
         evidence: [],
         sourceWorkItemIds: ["interaction"],
+        sourceReviewers: [],
       },
     ];
     const expected: any[] = [
@@ -129,7 +138,7 @@ describe("AgentSmith v2 eval cases", () => {
     const provider: ReviewProvider = {
       health: async () => ({ ok: true, models: ["qwen3.5:9b-q4_K_M"] }),
       invoke: async (input) => ({
-        raw: input.outputKind === "scout" ? '{"hotspots":[]}' : '{"summary":"none","candidates":[]}',
+        raw: input.outputKind === "scout" ? '{"hotspots":[]}' : '{"c":[]}',
         usage: { inputTokens: 10, outputTokens: 2 },
       }),
     };
@@ -146,8 +155,60 @@ describe("AgentSmith v2 eval cases", () => {
         result.cases[0].results.every((item) => item.outcome === "clear"),
         JSON.stringify(result.cases[0].results, null, 2),
       ).toBe(true);
+      expect(result.summary).toHaveLength(2);
+      expect(result.cases[0].results[0].benchmark.coverage.changedFiles.rate).toBe(1);
+      expect(result.cases[0].results[0].diagnostics).toMatchObject({
+        candidates: [],
+        verification: [],
+        providerFailures: [],
+      });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("scores explicit inspection targets and report deltas", () => {
+    const inspection = scoreInspectionTargets(
+      {
+        workItems: [
+          {
+            code: [{ file: "src/a.ts" }],
+            primarySymbols: [{ file: "src/a.ts", name: "run", qualifiedName: "Service.run" }],
+            relatedSymbols: [],
+            graphEdges: [{ source: "Service.run", target: "Store.save", targetText: "Store.save", kind: "calls" }],
+          },
+        ],
+      } as any,
+      {
+        files: ["src/a.ts", "src/missing.ts"],
+        symbols: ["src/a.ts#Service.run"],
+        edges: ["Service.run->Store.save:calls"],
+      },
+    );
+    expect(inspection.files).toMatchObject({ expected: 2, matched: 1, rate: 0.5, missing: ["src/missing.ts"] });
+    expect(inspection.symbols.rate).toBe(1);
+    expect(inspection.edges.rate).toBe(1);
+
+    const baseline = {
+      cases: [
+        {
+          id: "case",
+          results: [
+            { mode: "partitioned-local", qualityEvaluable: true, metrics: { f1: 0.5 }, durationMs: 20, errors: [] },
+          ],
+        },
+      ],
+    };
+    const current = {
+      cases: [
+        {
+          id: "case",
+          results: [
+            { mode: "partitioned-local", qualityEvaluable: true, metrics: { f1: 0.75 }, durationMs: 15, errors: [] },
+          ],
+        },
+      ],
+    };
+    expect(compareEvalReports(baseline, current)[0].delta).toMatchObject({ f1: 0.25, durationMs: -5 });
   });
 });

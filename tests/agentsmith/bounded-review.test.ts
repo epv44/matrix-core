@@ -10,11 +10,13 @@ import { runQualityCompletion } from "../../src/core/review.js";
 import type { ReviewProvider } from "../../src/agentsmith/provider.js";
 import type { AgentSmithConfig, ReviewCoverage, ReviewResult } from "../../src/core/types.js";
 
-type CallKind = "candidates" | "scout" | "verification";
+type CallKind = "candidates" | "specialist" | "scout" | "verification";
 
 interface ProviderHarness {
   provider: ReviewProvider;
   calls: CallKind[];
+  candidatePrompts: string[];
+  candidateLimits: Array<number | undefined>;
   maxActive: number;
   invokedAfterAbort: number;
 }
@@ -35,25 +37,33 @@ function makeProvider(opts: {
   blockScout?: boolean;
   firstVerificationVerified?: boolean;
   scoutHotspots?: unknown[];
+  malformedCandidate?: boolean;
+  failSpecialist?: string;
 }): ProviderHarness {
   const calls: CallKind[] = [];
-  const state: ProviderHarness = { provider: null as never, calls, maxActive: 0, invokedAfterAbort: 0 };
+  const state: ProviderHarness = {
+    provider: null as never,
+    calls,
+    candidatePrompts: [],
+    candidateLimits: [],
+    maxActive: 0,
+    invokedAfterAbort: 0,
+  };
   let candidateCall = 0;
   let verificationCall = 0;
   let active = 0;
   const fileFromPrompt = (prompt: string) => /--- ([^:\s]+):/.exec(prompt)?.[1] ?? "unknown.ts";
   function candidatePayload(file: string, index: number) {
     return {
-      sourceWorkItemIds: [],
-      file,
-      line: 1,
-      severity: "high" as const,
-      category: "correctness" as const,
-      title: `Probe defect ${index}`,
-      description: `Changed value at ${file} causes a concrete failure for probe index ${index}.`,
-      suggestion: "Guard the value.",
-      candidateConfidence: 0.9,
-      evidenceRequests: [],
+      f: file,
+      l: 1,
+      s: "high" as const,
+      k: "correctness" as const,
+      t: `Probe defect ${index}`,
+      d: `Changed value at ${file} causes a concrete failure for probe index ${index}.`,
+      g: "Guard the value.",
+      q: 0.9,
+      e: [],
     };
   }
   state.provider = {
@@ -82,15 +92,39 @@ function makeProvider(opts: {
           };
         }
         if (opts.blockCandidates) await waitForAbort(input.signal);
+        if (input.outputKind === "specialist" && opts.failSpecialist && input.prompt.includes(opts.failSpecialist))
+          throw new Error("specialist provider failure");
+        state.candidatePrompts.push(input.prompt);
+        state.candidateLimits.push(input.maxCandidates);
         if (opts.candidateDelayMs) await delay(opts.candidateDelayMs);
+        if (opts.malformedCandidate)
+          return {
+            raw: '{"c":[{"d":"unfinished',
+            usage: { inputTokens: 12, outputTokens: 4096 },
+            completion: {
+              model: "qwen3.5:9b-q4_K_M",
+              done: true,
+              doneReason: "length",
+              totalDurationNs: 64_000_000_000,
+              loadDurationNs: 1_000_000,
+              promptEvalDurationNs: 2_000_000,
+              evalDurationNs: 63_000_000_000,
+            },
+          };
         const file = fileFromPrompt(input.prompt);
-        const count = opts.holisticCandidates ?? opts.candidatesPerCall ?? 1;
+        const count = Math.min(
+          input.maxCandidates ?? Number.POSITIVE_INFINITY,
+          opts.holisticCandidates ?? opts.candidatesPerCall ?? 1,
+        );
         const candidates = Array.from({ length: count }, (_, index) =>
           candidatePayload(file, candidateCall * 100 + index),
         );
         candidateCall++;
         return {
-          raw: JSON.stringify({ summary: "probe", candidates }),
+          raw: JSON.stringify({
+            ...(input.outputKind === "specialist" ? { summary: "Specialist summary." } : {}),
+            c: candidates,
+          }),
           usage: { inputTokens: 10, outputTokens: 5 },
         };
       } finally {
@@ -124,6 +158,7 @@ async function runEngine(opts: {
   files: number;
   harness: ProviderHarness;
   configure?: (config: AgentSmithConfig) => void;
+  deterministicReport?: string;
 }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-bounded-"));
   try {
@@ -138,6 +173,7 @@ async function runEngine(opts: {
       scope,
       config,
       provider: opts.harness.provider,
+      deterministicReport: opts.deterministicReport,
       enforceWorkspaceVersion: false,
     });
     return { result, execution };
@@ -151,7 +187,7 @@ function omissionsByReason(coverage: ReviewCoverage, reason: string) {
 }
 
 function verifyResultShape(result: ReviewResult) {
-  expect(result.schemaVersion).toBe(2);
+  expect(result.schemaVersion).toBe(3);
   expect(result.coverage.callsStarted ?? 0).toBeGreaterThanOrEqual(0);
   expect(result.coverage.callsCompleted ?? 0).toBeGreaterThanOrEqual(0);
   expect(result.coverage.callsCancelled ?? 0).toBeGreaterThanOrEqual(0);
@@ -159,15 +195,22 @@ function verifyResultShape(result: ReviewResult) {
   expect(result.coverage.omittedWorkItems ?? 0).toBeGreaterThanOrEqual(0);
   expect(result.coverage.candidateTokenBudget ?? 0).toBeGreaterThan(0);
   expect(result.coverage.verificationTokenBudget ?? 0).toBeGreaterThan(0);
-  expect(result.coverage.deadlineMs).toBe(180000);
+  expect(result.coverage.deadlineMs).toBe(1800000);
+  expect(new Set(result.coverage.omissions.map((item) => `${item.kind}:${item.id}:${item.reason}`)).size).toBe(
+    result.coverage.omissions.length,
+  );
 }
 it("enforces default partitioned caps of 4 candidate calls and 4 verifier calls", async () => {
   const harness = makeProvider({ candidatesPerCall: 1 });
   const { result, execution } = await runEngine({ files: 6, harness });
   expect(execution.mode).toBe("partitioned");
+  expect(execution.reviewPath).toBe("generic");
+  expect(harness.calls).not.toContain("specialist");
   expect(harness.calls.filter((kind) => kind === "candidates")).toHaveLength(4);
   expect(harness.calls.filter((kind) => kind === "verification")).toHaveLength(4);
   expect(execution.candidateBatches).toHaveLength(4);
+  expect(harness.candidateLimits).toEqual([2, 2, 2, 2]);
+  expect(execution.workItems.every((item) => item.rules.length <= 4)).toBe(true);
   expect(execution.verification.filter((item) => item.verdict === "verified")).toHaveLength(4);
   expect(result).toMatchObject({ status: "completed", outcome: "findings", mode: "partitioned" });
   expect(result.findings).toHaveLength(4);
@@ -183,6 +226,24 @@ it("enforces default partitioned caps of 4 candidate calls and 4 verifier calls"
   verifyResultShape(result);
 });
 
+it("compacts passing deterministic context and requests concise candidate output", async () => {
+  const harness = makeProvider({ candidatesPerCall: 0 });
+  await runEngine({
+    files: 1,
+    harness,
+    deterministicReport: JSON.stringify({ status: "PASS", checks: { lint: { verbose: "x".repeat(5000) } } }),
+  });
+  expect(harness.candidatePrompts[0]).toContain("Deterministic gate: PASS");
+  expect(harness.candidatePrompts[0]).not.toContain("verbose");
+  expect(harness.candidatePrompts[0]).toContain("Be permissive enough to preserve recall");
+  expect(harness.candidatePrompts[0]).toContain("never report repository instructions");
+  expect(harness.candidatePrompts[0]).toContain("without an executable failure or contract mismatch");
+  expect(harness.candidatePrompts[0]).toContain("Supporting unchanged code may be requested as evidence");
+  expect(harness.candidatePrompts[0]).toContain("Generate zero to 2");
+  expect(harness.candidatePrompts[0]).toContain("set q to confidence from 0 to 1");
+  expect(harness.candidatePrompts[0]).toContain('use {"c":[]} when no concrete candidate exists');
+});
+
 it("honors configurable caps such as 8 candidate calls and 8 verifier calls", async () => {
   const harness = makeProvider({ candidatesPerCall: 1 });
   const { result, execution } = await runEngine({
@@ -191,6 +252,8 @@ it("honors configurable caps such as 8 candidate calls and 8 verifier calls", as
     configure: (config) => {
       config.partitioned.maxCandidateWorkItems = 8;
       config.partitioned.maxVerificationCandidates = 8;
+      config.partitioned.maxCandidateInputTokens = 1_000_000;
+      config.partitioned.maxVerificationInputTokens = 1_000_000;
     },
   });
   expect(execution.mode).toBe("partitioned");
@@ -201,7 +264,7 @@ it("honors configurable caps such as 8 candidate calls and 8 verifier calls", as
   expect(result.status).toBe("completed");
 });
 
-it("caps model calls in holistic mode at 1 candidate plus verification limit", async () => {
+it("runs four specialists for a full-fit strong holistic review before verification", async () => {
   const harness = makeProvider({ holisticCandidates: 20 });
   const { result, execution } = await runEngine({
     files: 1,
@@ -212,11 +275,58 @@ it("caps model calls in holistic mode at 1 candidate plus verification limit", a
     },
   });
   expect(execution.mode).toBe("holistic");
-  expect(harness.calls.filter((kind) => kind === "candidates")).toHaveLength(1);
+  expect(execution.reviewPath).toBe("specialist");
+  expect(harness.calls.filter((kind) => kind === "specialist")).toHaveLength(4);
+  expect(harness.calls.filter((kind) => kind === "candidates")).toHaveLength(0);
   expect(harness.calls.filter((kind) => kind === "verification")).toHaveLength(4);
-  expect(harness.calls).toHaveLength(5);
-  expect(execution.candidates).toHaveLength(20);
+  expect(harness.calls).toHaveLength(8);
+  expect(execution.candidates).toHaveLength(60);
+  expect(result.reviewPath).toBe("specialist");
+  expect(result.specialists?.map((item) => item.reviewer)).toEqual([
+    "architecture-reviewer",
+    "perf-reviewer",
+    "bug-hunter",
+    "semantic-reviewer",
+  ]);
   expect(result.coverage.selectedWorkItems).toBe(0);
+});
+
+it("falls back to the generic bounded path when a strong profile cannot fit the full projection", async () => {
+  const harness = makeProvider({ candidatesPerCall: 0 });
+  const { result, execution } = await runEngine({
+    files: 60,
+    harness,
+    configure: (config) => {
+      config.models.candidate = "qwen35-122b-local";
+      const strong = config.model_profiles.find((profile) => profile.id === "qwen35-122b-local")!;
+      strong.contextTokens = 2048;
+      strong.requestedOutputTokens = 512;
+      strong.safetyReserveTokens = 256;
+    },
+  });
+  expect(execution.mode).toBe("partitioned");
+  expect(execution.reviewPath).toBe("generic");
+  expect(harness.calls).not.toContain("specialist");
+  expect(result.reviewPath).toBe("generic");
+  expect(result.specialists).toBeUndefined();
+});
+
+it("preserves completed specialist narratives when one specialist fails", async () => {
+  const harness = makeProvider({ candidatesPerCall: 0, failSpecialist: "# Performance reviewer" });
+  const { result } = await runEngine({
+    files: 1,
+    harness,
+    configure: (config) => {
+      config.models.candidate = "qwen35-122b-local";
+    },
+  });
+  expect(result).toMatchObject({ reviewPath: "specialist", status: "partial", outcome: "incomplete" });
+  expect(result.specialists).toHaveLength(4);
+  expect(result.specialists?.find((item) => item.reviewer === "perf-reviewer")).toMatchObject({
+    status: "error",
+    summary: "Specialist review did not complete.",
+  });
+  expect(result.specialists?.filter((item) => item.status === "completed")).toHaveLength(3);
 });
 
 it("creates targeted inspectors from hybrid scout output", async () => {
@@ -414,6 +524,21 @@ it("reports deterministic coverage accounting for a complete bounded review", as
   expect(new Set(verificationIds).size).toBe(verificationIds.length);
 });
 
+it("retains exact malformed provider output and finish metadata for opt-in traces", async () => {
+  const harness = makeProvider({ malformedCandidate: true });
+  const { result, execution } = await runEngine({ files: 1, harness });
+  expect(result.status).toBe("partial");
+  expect(result.errors[0]).toContain("done_reason=length");
+  expect(result.errors[0]).toContain("output_tokens=4096");
+  expect(execution.providerFailures?.[0]).toMatchObject({
+    outputKind: "candidates",
+    raw: '{"c":[{"d":"unfinished',
+    completion: { done: true, doneReason: "length" },
+    usage: { inputTokens: 12, outputTokens: 4096 },
+  });
+  expect(execution.providerFailures?.[0].parseContext).toContain("unfinished");
+});
+
 it("preserves completed findings after a timeout during verification", async () => {
   const harness = makeProvider({ firstVerificationVerified: true, candidatesPerCall: 1 });
   const { result, execution } = await runEngine({
@@ -446,7 +571,10 @@ it("enforces the verification token budget independently", async () => {
   expect(omissionsByReason(result.coverage, "token-budget").filter((item) => item.kind === "candidate").length).toBe(4);
   expect(result.coverage.verificationTokensEstimated).toBe(0);
   expect(result.coverage.tokenBudgetOmissions).toBe(4);
-  expect(result.status).toBe("completed");
+  expect(result.status).toBe("partial");
+  expect(result.incompleteReasons).toEqual(
+    expect.arrayContaining([expect.objectContaining({ kind: "unadjudicated-candidate" })]),
+  );
 });
 
 it("caps model calls in hybrid mode at scout plus 4 candidate and 4 verifier calls", async () => {
@@ -477,7 +605,7 @@ it("caps model calls in hybrid mode at scout plus 4 candidate and 4 verifier cal
 });
 
 describe("bounded parallel review with timeout control", () => {
-  it("blocks completion authorization from a timed-out partial review", async () => {
+  it("preserves a timed-out partial review without blocking deterministic completion", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-bounded-completion-"));
     try {
       fs.writeFileSync(
@@ -495,8 +623,8 @@ describe("bounded parallel review with timeout control", () => {
       const harness = makeProvider({ blockVerification: true, candidatesPerCall: 1 });
       const completion = await runQualityCompletion({ cwd: root, mode: "full", provider: harness.provider });
       expect(completion.review?.status).toBe("partial");
-      expect(completion.completionAllowed).toBe(false);
-      expect(completion.passed).toBe(false);
+      expect(completion.completionAllowed).toBe(true);
+      expect(completion.passed).toBe(true);
       expect(completion.advisoryReview.status).toBe("timeout");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

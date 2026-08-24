@@ -13,7 +13,8 @@ import {
 import type { GitHubPolicySource } from "../src/core/types.js";
 import { getQualityStatus } from "../src/core/status.js";
 import { runDoctor } from "../src/core/doctor.js";
-import { loadRules, loadSubAgents } from "../src/agentsmith/registry.js";
+import { loadSpecialists } from "../src/agentsmith/registry.js";
+import { loadStructuredRules } from "../src/agentsmith/rules.js";
 import { runGate } from "../src/core/gate.js";
 
 const commit = "a".repeat(40);
@@ -28,11 +29,6 @@ const agentFiles = [
   "agents/sub-agents/perf-reviewer.md",
   "agents/sub-agents/bug-hunter.md",
   "agents/sub-agents/semantic-reviewer.md",
-  "rules/languages/python.md",
-  "rules/languages/typescript.md",
-  "rules/languages/go.md",
-  "rules/languages/rust.md",
-  "rules/security/review.md",
   "rules/registry.yaml",
 ];
 
@@ -60,7 +56,7 @@ function fixture(overrides: Partial<GitHubPolicyManifest> = {}) {
     ],
     agentSmith: {
       id: "fixture.agentsmith.v1",
-      outputSchemaVersion: 2,
+      outputSchemaVersion: 4,
       provider: "ollama",
       models: [
         {
@@ -139,12 +135,13 @@ describe("GitHub policy bundles", () => {
     const synced = await syncGitHubPolicy({ root, source, fetchImpl: remote.fetchImpl });
     expect(synced.lock.resolvedCommit).toBe(commit);
     expect(synced.policy).toMatchObject({ provider: "github", profileId: "fixture.default.v1" });
-    expect(loadSubAgents(synced.policy.agentSmith.assetRoot)).toHaveLength(4);
-    expect(loadRules({ language: "typescript", root: synced.policy.agentSmith.assetRoot })).toHaveLength(1);
+    expect(loadSpecialists(synced.policy.agentSmith.assetRoot)).toHaveLength(4);
+    expect(loadStructuredRules(synced.policy.agentSmith.assetRoot).length).toBeGreaterThan(0);
     expect(fs.existsSync(path.join(root, POLICY_LOCK_FILE))).toBe(true);
     const callsAfterSync = remote.calls.length;
     const offline = resolveCachedGitHubPolicy(root, source);
-    expect(offline.policyHash).toBe(synced.lock.policyHash);
+    expect(offline.policyHash).toBe(synced.policy.policyHash);
+    expect(offline.policyHash).not.toBe(synced.lock.policyHash);
     expect(remote.calls).toHaveLength(callsAfterSync);
     expect(githubPolicyStatus(root, source)).toMatchObject({ cached: true, valid: true, networkUsed: false });
     const secondRoot = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-github-policy-second-"));
@@ -169,7 +166,7 @@ describe("GitHub policy bundles", () => {
     const synced = await syncGitHubPolicy({ root, source, fetchImpl: fakeGitHub(manifest, bodies).fetchImpl });
     const gate = await runGate({ cwd: root, mode: "full" });
     expect(gate).toMatchObject({ status: "PASS", policy: { provider: "github" } });
-    expect(gate.policy.policyHash).toBe(synced.lock.policyHash);
+    expect(gate.policy.policyHash).toBe(synced.policy.policyHash);
   }, 30000);
 
   it("restores the exact locked commit without resolving the movable ref", async () => {
@@ -199,7 +196,7 @@ describe("GitHub policy bundles", () => {
       fetchImpl: fakeGitHub(manifest, bodies).fetchImpl,
     });
     expect(restored.cacheHit).toBe(false);
-    expect(resolveCachedGitHubPolicy(root, source).policyHash).toBe(synced.lock.policyHash);
+    expect(resolveCachedGitHubPolicy(root, source).policyHash).toBe(restored.policy.policyHash);
   });
 
   it("rejects unsupported checks before updating the lock", async () => {

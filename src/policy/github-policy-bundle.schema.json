@@ -43,7 +43,7 @@
       ],
       "properties": {
         "id": { "type": "string" },
-        "outputSchemaVersion": { "const": 2 },
+        "outputSchemaVersion": { "enum": [2, 3, 4] },
         "provider": { "const": "ollama" },
         "models": {
           "type": "array",
@@ -141,6 +141,7 @@
             "maxUnitsPerChangedSymbol": { "type": "integer", "minimum": 1, "maximum": 64 },
             "maxCandidateWorkItems": { "type": "integer", "minimum": 1, "maximum": 256, "default": 4 },
             "maxVerificationCandidates": { "type": "integer", "minimum": 1, "maximum": 256, "default": 4 },
+            "maxCandidatesPerWorkItem": { "type": "integer", "minimum": 1, "maximum": 8, "default": 2 },
             "maxCandidateInputTokens": { "type": "integer", "minimum": 128, "maximum": 1000000 },
             "maxVerificationInputTokens": { "type": "integer", "minimum": 128, "maximum": 1000000 },
             "preferSemanticBoundaries": { "type": "boolean" },
@@ -169,7 +170,9 @@
           "properties": {
             "maxRequestsPerCandidate": { "type": "integer", "minimum": 0, "maximum": 64 },
             "maxParallelResolutions": { "type": "integer", "minimum": 1, "maximum": 128 },
-            "maxSnippetLines": { "type": "integer", "minimum": 10, "maximum": 1000 }
+            "maxSnippetLines": { "type": "integer", "minimum": 10, "maximum": 1000 },
+            "maxRecordsPerRequest": { "type": "integer", "minimum": 1, "maximum": 32, "default": 3 },
+            "maxRecordsPerCandidate": { "type": "integer", "minimum": 1, "maximum": 128, "default": 8 }
           }
         },
         "verification": {
@@ -179,7 +182,7 @@
           "properties": { "enabled": { "const": true }, "publish": { "const": "verified-only" } }
         },
         "concurrency": { "type": "integer", "minimum": 1 },
-        "maxDurationMs": { "type": "integer", "minimum": 1000, "maximum": 1800000, "default": 180000 },
+        "maxDurationMs": { "type": "integer", "minimum": 1000, "maximum": 1800000, "default": 1800000 },
         "cache": { "type": "boolean" },
         "assetRoot": { "type": "string" }
       }

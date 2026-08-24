@@ -5,9 +5,12 @@ import type {
   ReviewCategory,
   ReviewCoverage,
   ReviewMode,
+  ReviewPath,
   ReviewSeverity,
+  SpecialistReviewerId,
 } from "../core/types.js";
 import type { GraphContextEdge, GraphSymbol } from "../core/graph/types.js";
+import type { ProviderCompletionMetadata, ProviderUsage, ReviewOutputKind } from "./provider.js";
 
 export type OmissionReason =
   | "binary"
@@ -134,12 +137,16 @@ export interface ScoutFinding {
 
 export interface CandidateBatch {
   sourceId: string;
+  specialist?: SpecialistReviewerId;
+  summary?: string;
   candidates: CandidateFinding[];
   inputTokens: number;
   outputTokens: number;
   prompt?: string;
   raw?: string;
+  completion?: ProviderCompletionMetadata;
   cacheStatus?: "hit" | "miss";
+  diagnostics?: ProviderFailureDiagnostic[];
   error?: string;
 }
 
@@ -151,7 +158,24 @@ export interface VerificationResult {
   supportingEvidenceIds: string[];
   prompt?: string;
   raw?: string;
+  completion?: ProviderCompletionMetadata;
   cacheStatus?: "hit" | "miss";
+  diagnostics?: ProviderFailureDiagnostic[];
+}
+
+export interface ProviderFailureDiagnostic {
+  sourceId: string;
+  outputKind: ReviewOutputKind;
+  prompt: string;
+  raw: string;
+  usage: ProviderUsage;
+  completion: ProviderCompletionMetadata;
+  parseError: string;
+  failureKind: "json-syntax" | "schema-validation";
+  validationIssues: Array<{ path: string; message: string }>;
+  attempt: number;
+  parsePosition: number | null;
+  parseContext: string;
 }
 
 export interface RouteDecision {
@@ -165,16 +189,28 @@ export interface RouteDecision {
 
 export interface EngineExecution {
   mode: ReviewMode;
+  reviewPath: ReviewPath;
   route: RouteDecision;
   modelProfiles: { candidate: ModelProfile; scout?: ModelProfile; verifier: ModelProfile };
   projection: ReviewProjection;
   compactProjection?: ReviewProjection;
-  scout?: { prompt: string; raw: string; hotspots: ScoutFinding[]; inputTokens: number; outputTokens: number };
+  scout?: {
+    prompt: string;
+    raw: string;
+    hotspots: ScoutFinding[];
+    inputTokens: number;
+    outputTokens: number;
+    completion?: ProviderCompletionMetadata;
+    diagnostics?: ProviderFailureDiagnostic[];
+    cacheStatus?: "hit" | "miss";
+  };
   workItems: ReviewWorkItem[];
   candidateBatches: CandidateBatch[];
   candidates: CandidateFinding[];
   evidence: Record<string, EvidenceRecord[]>;
   verification: VerificationResult[];
+  providerFailures?: ProviderFailureDiagnostic[];
+  providerDiagnostics?: ProviderFailureDiagnostic[];
   coverage: ReviewCoverage;
   errors: string[];
   inputTokens: number;

@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import type { Capability, Observation, PluginResult, RunCtx } from "../../core/types.js";
 import type { QualityPlugin } from "../interface.js";
+import { verboseEnabled } from "../../core/verbose.js";
 
 function observations(output: string, root: string): Observation[] {
   return output
@@ -38,7 +39,15 @@ export const xenonPlugin: QualityPlugin = {
         reason: "required workspace tool missing",
       };
     const args = [...(ctx.policyCheck?.args ?? []), ctx.workspace?.sourceRoot ?? ctx.root];
+    if (verboseEnabled()) {
+      console.debug(`[matrix-core] xenon argv: ${binary} ${args.join(" ")}`);
+    }
     const run = spawnSync(binary, args, { cwd: ctx.root, encoding: "utf8", timeout: 30000 });
+    if (verboseEnabled()) {
+      console.debug(
+        `[matrix-core] xenon exit=${run.status} stdout=${(run.stdout || "").slice(0, 500)} stderr=${(run.stderr || "").slice(0, 500)}`,
+      );
+    }
     if (run.error || run.status === null)
       return {
         plugin: "python.xenon",

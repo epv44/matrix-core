@@ -6,9 +6,9 @@ completion hooks. The engine owns validation, review, artifacts, and policy.
 ```
 matrix-core
 ├── core/
-│   ├── runner, gate (RUNNING->PASS/FAIL/EXPIRED), version, gate-store, reviewer (AgentSmith), cli
+│   ├── runner, gate (terminal PASS/FAIL plus separate active-run state), version, gate-store, reviewer, cli
 ├── agentsmith/
-│   ├── agents/ (orchestrator + sub-agents + security), rules/, scripts/ pipeline, skills/
+│   ├── four strong-model specialist prompts, structured rules, generic small-model engine, verifier
 ├── packs/
 │   ├── python/ centrally configured ruff, ruff-format, mypy, xenon, deptry
 │   ├── sql/ centrally configured sqlfluff plus embedded-Python extraction
@@ -29,6 +29,8 @@ matrix-core
 fast/full semantics, base branch, and changed-file scope. Changed feedback is stored in
 `.quality/changed-gate.json`; full evidence is stored in `.quality/completion-gate.json`.
 Native completion hooks never run the engine and accept only a current, non-fast full PASS.
+Starting another completion run does not overwrite terminal evidence with `RUNNING`; completion
+calls are serialized per repository and active-run state is stored separately.
 
 ## Build
 ```bash
@@ -41,7 +43,7 @@ node dist/core/cli.js run
 Public project installation uses the published package:
 
 ```bash
-npm install --save-dev --save-exact @epv44/matrixcore@0.5.0
+npm install --save-dev --save-exact @epv44/matrixcore@0.5.1
 npx --no-install matrix-core doctor
 ```
 
@@ -68,7 +70,7 @@ candidates, and a total review deadline of `180000ms`. Faster providers can rais
 review:
   agentsmith: true
   parallelism: 4
-  maxDurationMs: 600000
+  maxDurationMs: 1800000
 ```
 
 Timeout and token-budget results are explicit partial reviews, never approval. See
@@ -112,15 +114,17 @@ quality config show
 
 ## Local AgentSmith traces and evals
 
-AgentSmith tracing is a local diagnostic feature, not telemetry. It is disabled by default in every
-installation and MatrixCore contains no trace uploader or analytics endpoint. Enable capture for a
-single command or for the environment that starts the MCP server:
+AgentSmith tracing is a local diagnostic feature, not telemetry. It captures locally by default,
+retaining the newest 20 traces within a 250 MiB budget. MatrixCore contains no trace uploader or
+analytics endpoint. Disable capture explicitly with `MATRIXCORE_TRACE=off`; use
+`MATRIXCORE_TRACE=agentsmith` to label a run as explicitly captured:
 
 ```bash
 MATRIXCORE_TRACE=agentsmith quality completion
 quality trace status
 quality trace list
 quality trace show <trace-id>
+quality trace metrics <trace-id>
 ```
 
 Enabled traces are private local files under `.quality/traces/agentsmith/`. They contain the frozen
@@ -134,14 +138,23 @@ then compare candidate-generation strategies against the same frozen snapshot:
 
 ```bash
 quality eval curate --trace <trace-id> --case <slug>
-quality eval run --case <slug> --mode all
+quality eval run --case <slug> --mode all --replay planner
+quality eval run --case <slug> --mode all --replay recorded
+quality eval run --case <slug> --mode all --replay live
+quality eval compare <baseline-result.json> <current-result.json>
 ```
 
 Curated cases are written to `evals/agentsmith/<slug>/`. Inspect `input.json` and `case.yaml` for
 proprietary code, credentials, prompts, and personal data before committing them. Eval reports remain
 ignored under `.quality/evals/runs/`. No trace is ever curated, committed, or transmitted automatically.
-Curated `originalCandidates` can be labeled accepted or rejected. Rejected candidates must never become
-verified findings; likely, rejected, and insufficient-evidence outcomes remain trace/eval data only.
+Curated `originalCandidates` can be labeled accepted or rejected, and
+`expectedInspectionTargets` can name files, symbols, and graph edges that a sound planner must inspect.
+Planner replay measures deterministic selection and coverage without an LLM. Recorded replay requires
+exact prompt/model matches and detects strategy drift; live replay measures the complete current stack.
+Reports include finding quality only when it is evaluable, plus file/changed-line coverage, target
+recall, candidate adjudication, evidence relevance, reliability, latency, token use, and explicit
+honesty checks. Rejected candidates must never become verified findings; likely, rejected, and
+insufficient-evidence outcomes remain trace/eval data only.
 
 ## Deterministic profiles
 
@@ -163,7 +176,7 @@ policy; missing or incompatible tools fail closed.
 Install MatrixCore in the project so its CLI, MCP server, and hook executable are available to local package resolution:
 
 ```bash
-npm install --save-dev --save-exact @epv44/matrixcore@0.5.0
+npm install --save-dev --save-exact @epv44/matrixcore@0.5.1
 ```
 
 All hosts receive `quality_run`, `quality_status`, and `quality_fix` from the same local
@@ -182,7 +195,7 @@ model. Ollama reviews code but never authors fixes.
 
 ### Select a review model
 
-The embedded policy approves two local profiles. Projects select role bindings by profile ID;
+The embedded policy approves role-specific local profiles. Projects select role bindings by profile ID;
 arbitrary model names are rejected:
 
 ```yaml
@@ -191,12 +204,13 @@ review:
   mode: auto
   models:
     candidate: qwen35-9b-local
-    scout: qwen35-122b-local
-    verifier: qwen35-9b-local
+    scout: qwen35-122b-scout-local
+    verifier: qwen35-9b-verifier-local
 ```
 
 This is the recommended hybrid configuration. Use `qwen35-122b-local` as `candidate` for
-holistic-first review when the complete projection fits. Install selected models explicitly:
+four-specialist review when the complete projection fits. Small candidates and oversized strong-model
+projections use the generic bounded engine. Install selected models explicitly:
 
 ```bash
 ollama pull qwen3.5:9b-q4_K_M

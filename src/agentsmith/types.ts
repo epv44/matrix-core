@@ -1,25 +1,11 @@
-export type AgentKind = "orchestrator" | "sub-agent" | "security";
+import type { SpecialistReviewerId } from "../core/types.js";
+
+export type AgentKind = "sub-agent";
 
 export interface AgentDef {
   kind: AgentKind;
-  name: string;
+  name: SpecialistReviewerId;
   description: string;
   prompt: string;
-  path: string;
-}
-
-export interface RuleDef {
-  name: string;
-  description: string;
-  content: string;
-  path: string;
-  domain: "language" | "security";
-  language?: string;
-}
-
-export interface SkillDef {
-  name: string;
-  description: string;
-  instructions: string;
   path: string;
 }

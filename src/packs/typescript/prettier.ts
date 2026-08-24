@@ -2,6 +2,8 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import type { QualityPlugin } from "../interface.js";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
+import { verboseEnabled } from "../../core/verbose.js";
+import { childProcessEnv } from "../../core/process-env.js";
 
 const SUPPORTED_EXT = [".ts", ".tsx", ".js", ".jsx", ".json", ".css", ".md", ".html", ".vue", ".yml", ".yaml"];
 
@@ -19,8 +21,16 @@ function tryPrettier(
     ["npx", ["--no-install", "prettier", ...args]],
   ];
   for (const [bin, a] of candidates) {
+    if (verboseEnabled()) {
+      console.debug(`[matrix-core] prettier argv: ${bin} ${a.join(" ")}`);
+    }
     try {
-      const res = spawnSync(bin, a, { cwd: root, encoding: "utf8", timeout: 60000 });
+      const res = spawnSync(bin, a, { cwd: root, encoding: "utf8", timeout: 60000, env: childProcessEnv() });
+      if (verboseEnabled()) {
+        console.debug(
+          `[matrix-core] prettier exit=${res.status} stdout=${(res.stdout || "").slice(0, 500)} stderr=${(res.stderr || "").slice(0, 500)}`,
+        );
+      }
       if (res.error) continue;
       if (res.status !== null) {
         const out = (res.stdout || "") + "\n" + (res.stderr || "");

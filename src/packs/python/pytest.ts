@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { QualityPlugin } from "../interface.js";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
+import { verboseEnabled } from "../../core/verbose.js";
 
 function getCfg(ctx: RunCtx) {
   return ctx.config?.checks?.pytest ?? ctx.config?.checks?.["python.pytest"];
@@ -50,20 +51,50 @@ function runCov(root: string, b: string[], m: string, p: string[], extra: string
   } catch {}
   if (m === "pytest-cov") {
     const args = [...b.slice(1), ...extra, "--cov", "--cov-report=json:" + j, "--cov-report=", "-q"];
+    if (verboseEnabled()) {
+      console.debug(`[matrix-core] pytest-cov argv: ${b[0]} ${args.join(" ")}`);
+    }
     const r = spawnSync(b[0], args, { cwd: root, encoding: "utf8", timeout: 120000 });
+    if (verboseEnabled()) {
+      console.debug(
+        `[matrix-core] pytest-cov exit=${r.status} stdout=${(r.stdout || "").slice(0, 500)} stderr=${(r.stderr || "").slice(0, 500)}`,
+      );
+    }
     return { out: (r.stdout || "") + (r.stderr || ""), st: r.status, cp: fs.existsSync(j) ? j : null };
   }
   if (m === "coverage") {
-    const rt = spawnSync(p[0], [...p.slice(1), "run", "-m", "pytest", ...extra, "-q"], {
+    const args1 = [...p.slice(1), "run", "-m", "pytest", ...extra, "-q"];
+    if (verboseEnabled()) {
+      console.debug(`[matrix-core] coverage run argv: ${p[0]} ${args1.join(" ")}`);
+    }
+    const rt = spawnSync(p[0], args1, {
       cwd: root,
       encoding: "utf8",
       timeout: 120000,
     });
+    if (verboseEnabled()) {
+      console.debug(
+        `[matrix-core] coverage run exit=${rt.status} stdout=${(rt.stdout || "").slice(0, 500)} stderr=${(rt.stderr || "").slice(0, 500)}`,
+      );
+    }
     if (rt.status === null) return { out: rt.stderr || "", st: null, cp: null };
-    spawnSync(p[0], [...p.slice(1), "json", "-o", j], { cwd: root, encoding: "utf8", timeout: 10000 });
+    const args2 = [...p.slice(1), "json", "-o", j];
+    if (verboseEnabled()) {
+      console.debug(`[matrix-core] coverage json argv: ${p[0]} ${args2.join(" ")}`);
+    }
+    spawnSync(p[0], args2, { cwd: root, encoding: "utf8", timeout: 10000 });
     return { out: (rt.stdout || "") + (rt.stderr || ""), st: rt.status, cp: fs.existsSync(j) ? j : null };
   }
-  const r = spawnSync(b[0], [...b.slice(1), ...extra, "-q"], { cwd: root, encoding: "utf8", timeout: 120000 });
+  const args = [...b.slice(1), ...extra, "-q"];
+  if (verboseEnabled()) {
+    console.debug(`[matrix-core] pytest argv: ${b[0]} ${args.join(" ")}`);
+  }
+  const r = spawnSync(b[0], args, { cwd: root, encoding: "utf8", timeout: 120000 });
+  if (verboseEnabled()) {
+    console.debug(
+      `[matrix-core] pytest exit=${r.status} stdout=${(r.stdout || "").slice(0, 500)} stderr=${(r.stderr || "").slice(0, 500)}`,
+    );
+  }
   return { out: (r.stdout || "") + (r.stderr || ""), st: r.status, cp: null };
 }
 function parsePct(p: string | null): number | null {

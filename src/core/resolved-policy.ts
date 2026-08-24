@@ -3,9 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentSmithConfig, PolicyCheck, ResolvedConfig, ResolvedPolicy } from "./types.js";
-import { loadAgents, loadRules, loadSkills } from "../agentsmith/registry.js";
+import { loadSpecialists } from "../agentsmith/registry.js";
 import { loadStructuredRules } from "../agentsmith/rules.js";
 import { resolveCachedGitHubPolicy } from "./github-policy.js";
+import { AGENTSMITH_STRATEGY_HASH, AGENTSMITH_STRATEGY_VERSION } from "../agentsmith/strategy.js";
 
 export interface PolicyProvider {
   resolve(): ResolvedPolicy;
@@ -117,14 +118,12 @@ export class EmbeddedPolicyProvider implements PolicyProvider {
       },
     ];
     const agentAssets = {
-      agents: loadAgents(),
-      rules: loadRules(),
+      specialists: loadSpecialists(),
       structuredRules: loadStructuredRules(),
-      skills: loadSkills(),
     };
     const agent = {
-      id: "agentsmith.unified.v2",
-      outputSchemaVersion: 2,
+      id: "agentsmith.unified.v4",
+      outputSchemaVersion: AGENTSMITH_STRATEGY_VERSION,
       provider: "ollama",
       models: [
         {
@@ -133,10 +132,21 @@ export class EmbeddedPolicyProvider implements PolicyProvider {
           model: "qwen3.5:9b-q4_K_M",
           contextTokens: 8192,
           reviewCapability: "small" as const,
-          requestedOutputTokens: 1024,
+          requestedOutputTokens: 4096,
           safetyReserveTokens: 1000,
           tokenizer: { kind: "conservative-ratio" as const, codeCharsPerToken: 2, proseCharsPerToken: 3 },
-          inference: { temperature: 0, thinking: false, timeoutMs: 120000 },
+          inference: { temperature: 0, thinking: false, timeoutMs: 300000 },
+        },
+        {
+          id: "qwen35-9b-verifier-local",
+          provider: "ollama" as const,
+          model: "qwen3.5:9b-q4_K_M",
+          contextTokens: 8192,
+          reviewCapability: "small" as const,
+          requestedOutputTokens: 512,
+          safetyReserveTokens: 1000,
+          tokenizer: { kind: "conservative-ratio" as const, codeCharsPerToken: 2, proseCharsPerToken: 3 },
+          inference: { temperature: 0, thinking: false, timeoutMs: 300000 },
         },
         {
           id: "qwen35-122b-local",
@@ -149,8 +159,19 @@ export class EmbeddedPolicyProvider implements PolicyProvider {
           tokenizer: { kind: "conservative-ratio" as const, codeCharsPerToken: 2, proseCharsPerToken: 3 },
           inference: { temperature: 0, thinking: false, timeoutMs: 600000 },
         },
+        {
+          id: "qwen35-122b-scout-local",
+          provider: "ollama" as const,
+          model: "qwen3.5:122b-a10b",
+          contextTokens: 131072,
+          reviewCapability: "strong" as const,
+          requestedOutputTokens: 1024,
+          safetyReserveTokens: 4096,
+          tokenizer: { kind: "conservative-ratio" as const, codeCharsPerToken: 2, proseCharsPerToken: 3 },
+          inference: { temperature: 0, thinking: false, timeoutMs: 180000 },
+        },
       ],
-      defaultModels: { candidate: "qwen35-9b-local", verifier: "qwen35-9b-local" },
+      defaultModels: { candidate: "qwen35-9b-local", verifier: "qwen35-9b-verifier-local" },
       routing: { inputContextFraction: 0.7, enableHolistic: true, enablePartitioned: true, enableHybrid: true },
       graph: {
         defaultHops: 1 as const,
@@ -160,22 +181,32 @@ export class EmbeddedPolicyProvider implements PolicyProvider {
       },
       partitioned: {
         maxParallelUnits: 20,
-        maxRulesPerUnit: 8,
+        maxRulesPerUnit: 4,
         maxUnitsPerChangedSymbol: 6,
         maxCandidateWorkItems: 4,
         maxVerificationCandidates: 4,
+        maxCandidatesPerWorkItem: 2,
         preferSemanticBoundaries: true,
         hunkFallback: true,
       },
       holistic: { maxCandidates: 60 },
       hybrid: { maxHotspots: 30, redundantDeepMode: false },
-      evidence: { maxRequestsPerCandidate: 8, maxParallelResolutions: 20, maxSnippetLines: 160 },
+      evidence: {
+        maxRequestsPerCandidate: 8,
+        maxParallelResolutions: 20,
+        maxSnippetLines: 160,
+        maxRecordsPerRequest: 3,
+        maxRecordsPerCandidate: 8,
+      },
       verification: { enabled: true, publish: "verified-only" as const },
       concurrency: 1,
-      maxDurationMs: 180_000,
+      maxDurationMs: 1_800_000,
       cache: true,
     };
-    const agentSmith = { ...agent, hash: sha(JSON.stringify({ agent, agentAssets })) };
+    const agentSmith = {
+      ...agent,
+      hash: sha(JSON.stringify({ agent, agentAssets, strategyHash: AGENTSMITH_STRATEGY_HASH })),
+    };
     const body = {
       schemaVersion: 1 as const,
       provider: "embedded",

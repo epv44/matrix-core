@@ -6,6 +6,7 @@ import { resolveWorkspaceSet } from "./workspace.js";
 import { resolvePolicyForConfig } from "./resolved-policy.js";
 import { toolVersion } from "./runner.js";
 import { traceStatus } from "../agentsmith/trace.js";
+import { mcpRuntimeWarnings } from "./runtime.js";
 export function runDoctor(opts: { configFlag?: string; cwd?: string; root?: string }): DoctorResult {
   const resolved: ResolvedConfig = resolveConfig({ configFlag: opts.configFlag, cwd: opts.cwd, root: opts.root });
   const configRoot = resolved.configRoot;
@@ -74,8 +75,12 @@ export function runDoctor(opts: { configFlag?: string; cwd?: string; root?: stri
   const gitRepo = isGitRepo(opts.cwd || opts.root || process.cwd());
   const passed = capabilities.filter((c) => c.required && !c.found).length === 0;
   const tracing = traceStatus(configRoot);
-  const warnings =
-    tracing.enabled && !tracing.gitIgnored ? ["AgentSmith tracing is enabled but .quality/ is not Git-ignored"] : [];
+  const warnings = [
+    ...(tracing.enabled && !tracing.gitIgnored
+      ? ["AgentSmith tracing is enabled but .quality/ is not Git-ignored"]
+      : []),
+    ...mcpRuntimeWarnings(configRoot),
+  ];
   return { capabilities, config: resolved, baselineExists: false, baselinePath: "", gitRepo, passed, warnings };
 }
 export function doctorToJson(result: DoctorResult) {

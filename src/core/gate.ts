@@ -2,7 +2,7 @@ import { ENGINE_NAME, ENGINE_VERSION } from "./meta.js";
 import { resolveConfig } from "./config-resolver.js";
 import { runEngine } from "./runner.js";
 import { computeWorkspaceVersion } from "./version.js";
-import { writeGateResult } from "./gate-store.js";
+import { clearActiveGateRun, writeActiveGateRun, writeGateResult } from "./gate-store.js";
 import { getChangedFiles } from "./changed.js";
 import fs from "node:fs";
 import path from "node:path";
@@ -53,10 +53,9 @@ export function detectWorkspaceMutation(root: string, preVersion: string, postVe
 /**
  * Run the deterministic gate for the workspace state at `cwd`.
  *
- * The result is immutable once persisted: the store first records RUNNING
- * (so a crash can never leave a stale PASS alive), then the engine runs, then
- * the terminal PASS/FAIL result is written with the exact workspace version it
- * validated. Callers must not reuse a result for a different version.
+ * Terminal evidence is replaced only by another terminal result. Active-run
+ * state is stored separately so merely starting a duplicate run cannot erase a
+ * valid PASS. Callers must not reuse a result for a different identity.
  */
 export async function runGate(opts: RunGateOptions): Promise<GateResult> {
   if (opts.signal?.aborted) throw opts.signal.reason ?? new Error("Quality gate cancelled");
@@ -90,6 +89,7 @@ export async function runGate(opts: RunGateOptions): Promise<GateResult> {
     enginePackageRoot: runtime.packageRoot,
   };
   const startedAt = new Date().toISOString();
+  const runId = crypto.randomUUID();
   const running: GateResult = {
     schemaVersion: 2,
     version,
@@ -109,74 +109,78 @@ export async function runGate(opts: RunGateOptions): Promise<GateResult> {
     policy: initialPolicy,
     toolVersions: {},
   };
-  writeGateResult(root, running);
+  writeActiveGateRun(root, runId, running);
 
-  const engine = await runEngine({
-    cwd: root,
-    root,
-    configFlag: opts.configFlag,
-    changed: mode === "changed",
-    full: mode !== "changed",
-    baseBranch,
-    fast,
-    changedFiles,
-    policy: initialPolicy,
-  });
-  if (opts.signal?.aborted) throw opts.signal.reason ?? new Error("Quality gate cancelled");
-
-  const postVersion = computeWorkspaceVersion(root);
-  const postWorkspaces = resolveWorkspaceSet(root, manifest.application);
-  let postPolicyHash: string | null = null;
-  let postPolicyError: string | null = null;
   try {
-    postPolicyHash = resolvePolicyForConfig(resolveConfig({ cwd: root, configFlag: opts.configFlag })).policyHash;
-  } catch (error) {
-    postPolicyError = error instanceof Error ? error.message : String(error);
-  }
-  const identityChanged =
-    postVersion !== version ||
-    postWorkspaces.workspaceHash !== initialWorkspaces.workspaceHash ||
-    postPolicyHash !== initialPolicy.policyHash;
-  if (identityChanged) {
-    const mutated = detectWorkspaceMutation(root, version, postVersion);
-    appendGateLog(
+    const engine = await runEngine({
+      cwd: root,
       root,
-      "error",
-      `runGate: gate identity changed during execution (${version.slice(0, 12)} -> ${postVersion.slice(0, 12)}) - ` +
-        (mutated.length > 0
-          ? `changed files: ${mutated.join(", ")} - `
-          : "no changed files resolved (unignored artifact?) - ") +
-        "a check is mutating the workspace; gitignore the artifact so the gate result stays valid",
-    );
-  }
+      configFlag: opts.configFlag,
+      changed: mode === "changed",
+      full: mode !== "changed",
+      baseBranch,
+      fast,
+      changedFiles,
+      policy: initialPolicy,
+    });
+    if (opts.signal?.aborted) throw opts.signal.reason ?? new Error("Quality gate cancelled");
 
-  const mutationFailure = `Workspace, resolution, or policy changed during deterministic execution${postPolicyError ? `: ${postPolicyError}` : ""}`;
-  const result: GateResult = {
-    schemaVersion: 2,
-    version,
-    mode,
-    fast,
-    baseBranch,
-    changedFilesHash,
-    changedFileCount: normalizedChangedFiles.length,
-    status: engine.passed && !identityChanged ? "PASS" : "FAIL",
-    checks: engine.results,
-    failures: identityChanged ? [...engine.failures, mutationFailure] : engine.failures,
-    metrics: engine.metrics,
-    timestamp: new Date().toISOString(),
-    createdBy,
-    workspaces: engine.config.workspaces!,
-    workspaceHash: engine.config.workspaceHash!,
-    policy: engine.config.policy!,
-    toolVersions: Object.fromEntries(
-      engine.capabilities
-        .filter((capability) => capability.version)
-        .map((capability) => [capability.name, capability.version!])
-        .sort(([a], [b]) => a.localeCompare(b)),
-    ),
-  };
-  writeGateResult(root, result);
-  return result;
+    const postVersion = computeWorkspaceVersion(root);
+    const postWorkspaces = resolveWorkspaceSet(root, manifest.application);
+    let postPolicyHash: string | null = null;
+    let postPolicyError: string | null = null;
+    try {
+      postPolicyHash = resolvePolicyForConfig(resolveConfig({ cwd: root, configFlag: opts.configFlag })).policyHash;
+    } catch (error) {
+      postPolicyError = error instanceof Error ? error.message : String(error);
+    }
+    const identityChanged =
+      postVersion !== version ||
+      postWorkspaces.workspaceHash !== initialWorkspaces.workspaceHash ||
+      postPolicyHash !== initialPolicy.policyHash;
+    if (identityChanged) {
+      const mutated = detectWorkspaceMutation(root, version, postVersion);
+      appendGateLog(
+        root,
+        "error",
+        `runGate: gate identity changed during execution (${version.slice(0, 12)} -> ${postVersion.slice(0, 12)}) - ` +
+          (mutated.length > 0
+            ? `changed files: ${mutated.join(", ")} - `
+            : "no changed files resolved (unignored artifact?) - ") +
+          "a check is mutating the workspace; gitignore the artifact so the gate result stays valid",
+      );
+    }
+
+    const mutationFailure = `Workspace, resolution, or policy changed during deterministic execution${postPolicyError ? `: ${postPolicyError}` : ""}`;
+    const result: GateResult = {
+      schemaVersion: 2,
+      version,
+      mode,
+      fast,
+      baseBranch,
+      changedFilesHash,
+      changedFileCount: normalizedChangedFiles.length,
+      status: engine.passed && !identityChanged ? "PASS" : "FAIL",
+      checks: engine.results,
+      failures: identityChanged ? [...engine.failures, mutationFailure] : engine.failures,
+      metrics: engine.metrics,
+      timestamp: new Date().toISOString(),
+      createdBy,
+      workspaces: engine.config.workspaces!,
+      workspaceHash: engine.config.workspaceHash!,
+      policy: engine.config.policy!,
+      toolVersions: Object.fromEntries(
+        engine.capabilities
+          .filter((capability) => capability.version)
+          .map((capability) => [capability.name, capability.version!])
+          .sort(([a], [b]) => a.localeCompare(b)),
+      ),
+    };
+    writeGateResult(root, result);
+    return result;
+  } finally {
+    clearActiveGateRun(root, runId);
+  }
 }
 
 export function gatePassesForVersion(gate: GateResult | null, version: string): boolean {

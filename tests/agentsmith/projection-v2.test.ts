@@ -160,4 +160,36 @@ describe("adaptive projection planning", () => {
     expect(selection.selected[0].kind).toBe("interaction");
     expect(selection.omitted).toHaveLength(1);
   });
+
+  it("deduplicates overlapping provider facts and stratifies selected review surfaces", () => {
+    const duplicateChanged = { ...changed, provider: "tree-sitter-wasm" };
+    const duplicateEdge = { ...edge, provider: "tree-sitter-wasm", confidence: "syntactic" as const };
+    const duplicatedGraph: GraphContext = {
+      ...graph,
+      changedSymbols: [changed, duplicateChanged],
+      nodes: [...graph.nodes, { symbol: duplicateChanged, score: 120, distance: 0 }],
+      edges: [edge, duplicateEdge],
+    };
+    const projection = buildProjection({ scope, graph: duplicatedGraph, profile: small, rules, kind: "full" });
+    const items = buildWorkItems({
+      projection,
+      graph: duplicatedGraph,
+      profile: small,
+      rules,
+      inputBudgetTokens: 20_000,
+      policy: {
+        maxParallelUnits: 20,
+        maxRulesPerUnit: 8,
+        maxUnitsPerChangedSymbol: 6,
+        preferSemanticBoundaries: true,
+        hunkFallback: true,
+      },
+    });
+    expect(items).toHaveLength(2);
+    expect(new Set(items.map((item) => item.id)).size).toBe(2);
+    const selection = selectWorkItems([...items, ...items], 2, 20_000);
+    expect(selection.selected).toHaveLength(2);
+    expect(new Set(selection.selected.map((item) => item.kind))).toEqual(new Set(["local", "interaction"]));
+    expect(selection.omitted).toHaveLength(0);
+  });
 });

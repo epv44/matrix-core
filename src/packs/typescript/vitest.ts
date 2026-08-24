@@ -2,6 +2,8 @@ import { spawnSync } from "node:child_process";
 import type { QualityPlugin } from "../interface.js";
 import path from "node:path";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
+import { verboseEnabled } from "../../core/verbose.js";
+import { childProcessEnv } from "../../core/process-env.js";
 
 function getCfg(ctx: RunCtx, keys: string[]) {
   for (const k of keys) {
@@ -19,8 +21,16 @@ function runVitest(root: string, extra: string[]): { stdout: string; stderr: str
     ["npx", ["--no-install", "vitest", "run", "--reporter=json", ...extra]],
   ];
   for (const [bin, a] of candidates) {
+    if (verboseEnabled()) {
+      console.debug(`[matrix-core] vitest argv: ${bin} ${a.join(" ")}`);
+    }
     try {
-      const res = spawnSync(bin, a, { cwd: root, encoding: "utf8", timeout: 120000 });
+      const res = spawnSync(bin, a, { cwd: root, encoding: "utf8", timeout: 120000, env: childProcessEnv() });
+      if (verboseEnabled()) {
+        console.debug(
+          `[matrix-core] vitest exit=${res.status} stdout=${(res.stdout || "").slice(0, 500)} stderr=${(res.stderr || "").slice(0, 500)}`,
+        );
+      }
       if (res.error) continue;
       if (res.status !== null) return { stdout: res.stdout || "", stderr: res.stderr || "", status: res.status };
     } catch {}

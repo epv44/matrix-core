@@ -20,6 +20,42 @@ function location(finding: ReviewFinding) {
   return `${finding.file}:${finding.line}${finding.endLine && finding.endLine !== finding.line ? `-${finding.endLine}` : ""}`;
 }
 
+const incompleteReasonLabels: Record<NonNullable<ReviewResult["incompleteReasons"]>[number]["kind"], string> = {
+  "stale-workspace": "Workspace changed during review",
+  "provider-failure": "Review provider failed",
+  timeout: "Review deadline reached",
+  "unfinished-work-item": "Selected review work did not complete",
+  "unadjudicated-candidate": "Candidate verification did not complete",
+  "insufficient-evidence": "Candidates lacked sufficient evidence",
+  "likely-unpublished": "Likely findings could not be verified",
+  "material-omission": "Material review scope was omitted",
+};
+
+const omissionReasonLabels: Record<string, string> = {
+  binary: "Binary files excluded",
+  generated: "Generated files excluded",
+  "unsafe-large-file": "Files exceeded the safe review size",
+  "lower-ranked": "Outside the selected risk-ranked scope",
+  "token-budget": "Outside the review token budget",
+  timeout: "Review deadline reached",
+};
+
+function coverageLimitations(review: ReviewResult): Array<[string, number]> {
+  const counts = new Map<string, number>();
+  const detailedIds = new Set(review.incompleteReasons?.flatMap((reason) => (reason.id ? [reason.id] : [])) ?? []);
+  const add = (label: string) => counts.set(label, (counts.get(label) ?? 0) + 1);
+
+  for (const reason of review.incompleteReasons ?? []) add(incompleteReasonLabels[reason.kind]);
+  for (const omission of review.coverage.omissions) {
+    if (detailedIds.has(omission.id)) continue;
+    add(omissionReasonLabels[omission.reason] ?? "Other review scope omissions");
+  }
+  if (review.errors?.length && !review.incompleteReasons?.some((reason) => reason.kind === "provider-failure"))
+    for (const _error of review.errors) add("Review infrastructure errors");
+
+  return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right));
+}
+
 export function formatAgentSmithReview(
   review: ReviewResult | null,
   options: { gateStatus?: GateStatus; artifact?: string | null } = {},
@@ -45,15 +81,101 @@ export function formatAgentSmithReview(
   lines.push(`**Outcome:** ${outcome}.`);
   if (options.gateStatus) lines.push(`**Deterministic gate:** ${options.gateStatus}.`);
   lines.push(`**Review status:** ${review.status}.`);
+  lines.push(`**Review path:** ${review.reviewPath}.`);
   lines.push(`**Candidate mode:** ${review.mode}.`);
   if (review.coverage.selection) lines.push(`**Selection:** ${review.coverage.selection}.`);
-  if (review.coverage.timeout)
-    lines.push(
-      `**Deadline:** ${review.coverage.timeout.deadlineMs}ms; elapsed ${review.coverage.timeout.elapsedMs}ms; calls ${review.coverage.timeout.callsStarted} started, ${review.coverage.timeout.callsCompleted} completed, ${review.coverage.timeout.callsCancelled} cancelled.`,
-    );
-  if (review.profileHash) lines.push(`**Profile hash:** \`${review.profileHash}\`.`);
-  lines.push(`**Review version:** \`${review.version}\`.`);
   if (options.artifact) lines.push(`**Artifact:** \`${options.artifact}\`.`);
+
+  lines.push("", "### AgentSmith Summary", "", review.summary || "No summary available.");
+
+  if (review.reviewPath === "specialist" && review.specialists?.length) {
+    const labels = {
+      "architecture-reviewer": "Architecture Reviewer",
+      "perf-reviewer": "Performance Reviewer",
+      "bug-hunter": "Correctness Reviewer",
+      "semantic-reviewer": "Semantic Reviewer",
+    } as const;
+    lines.push("", "### Specialist Reviews");
+    for (const specialist of review.specialists) {
+      lines.push(
+        "",
+        `#### ${labels[specialist.reviewer]}`,
+        "",
+        `**Status:** ${specialist.status}.`,
+        "",
+        "##### Summary",
+        "",
+        specialist.summary || "No summary available.",
+        "",
+        "##### Candidate Outcomes",
+        "",
+      );
+      if (specialist.candidates.length)
+        lines.push(
+          table(
+            ["ID", "Severity", "Location", "Candidate", "Disposition", "Reason"],
+            specialist.candidates.map((candidate) => [
+              candidate.id,
+              candidate.severity,
+              `${candidate.file}:${candidate.line}`,
+              candidate.title,
+              candidate.disposition.replaceAll("_", " "),
+              candidate.reasoning ?? "—",
+            ]),
+          ),
+        );
+      else lines.push("No candidates reported.");
+    }
+  }
+
+  lines.push("", "### Verified Findings", "");
+  if (review.findings.length) {
+    lines.push(
+      table(
+        ["ID", "Severity", "Category", "Location", "Finding", "Evidence", "Suggestion", "Reported by"],
+        review.findings.map((finding) => [
+          finding.id,
+          finding.severity,
+          finding.category,
+          location(finding),
+          `${finding.title}: ${finding.description}`,
+          finding.evidence.map((evidence) => `${evidence.file}:${evidence.startLine}-${evidence.endLine}`).join(", "),
+          finding.suggestion,
+          finding.sourceReviewers?.length ? finding.sourceReviewers.join(", ") : "generic engine",
+        ]),
+      ),
+    );
+  } else lines.push("No verified findings.");
+
+  lines.push("", "### Candidate Verification", "");
+  if (review.candidates) {
+    lines.push(
+      table(
+        [
+          "Generated",
+          "Shortlisted",
+          "Adjudicated",
+          "Omitted",
+          "Verified",
+          "Likely",
+          "Rejected",
+          "Insufficient evidence",
+        ],
+        [
+          [
+            review.candidates.generated,
+            review.candidates.shortlisted ?? "—",
+            review.candidates.adjudicated ?? "—",
+            review.candidates.omitted ?? "—",
+            review.candidates.verified,
+            review.candidates.likely,
+            review.candidates.rejected,
+            review.candidates.insufficientEvidence,
+          ],
+        ],
+      ),
+    );
+  } else lines.push("No candidates generated.");
 
   lines.push("", "### Coverage", "");
   lines.push(
@@ -78,85 +200,14 @@ export function formatAgentSmithReview(
       ],
     ),
   );
-  if (review.coverage.globalScan) {
-    const bounds = [
-      ["Configured parallelism", review.coverage.configuredParallelism ?? "—"],
-      ["Effective parallelism", review.coverage.effectiveParallelism ?? "—"],
-      ["Max in-flight calls", review.coverage.maxObservedConcurrency ?? "—"],
-      ["Deadline", review.coverage.deadlineMs ? `${review.coverage.deadlineMs}ms` : "—"],
-      ["Elapsed", review.coverage.elapsedMs ? `${review.coverage.elapsedMs}ms` : "—"],
-    ];
-    const tokens = [
-      ["Candidate budget", review.coverage.candidateTokenBudget ?? "—"],
-      ["Candidate est. usage", review.coverage.candidateTokensEstimated ?? "—"],
-      ["Verification budget", review.coverage.verificationTokenBudget ?? "—"],
-      ["Verification est. usage", review.coverage.verificationTokensEstimated ?? "—"],
-    ];
-    const accounting = [
-      ["Calls started", review.coverage.callsStarted ?? "—"],
-      ["Calls completed", review.coverage.callsCompleted ?? "—"],
-      ["Calls cancelled", review.coverage.callsCancelled ?? "—"],
-      ["Work items selected", review.coverage.selectedWorkItems ?? "—"],
-      ["Work items omitted", review.coverage.omittedWorkItems ?? "—"],
-      ["Token-budget omissions", review.coverage.tokenBudgetOmissions ?? "—"],
-      ["Timeout omissions", review.coverage.timeoutOmissions ?? "—"],
-    ];
-    lines.push("", "### Execution bounds", "");
-    lines.push(table(["Metric", "Value"], bounds));
-    lines.push(table(["Metric", "Value"], tokens));
-    lines.push(table(["Metric", "Value"], accounting));
-  }
-  if (review.findings.length) {
-    lines.push("", "### Verified findings", "");
-    lines.push(
-      table(
-        ["ID", "Severity", "Category", "Location", "Finding", "Evidence", "Suggestion"],
-        review.findings.map((finding) => [
-          finding.id,
-          finding.severity,
-          finding.category,
-          location(finding),
-          `${finding.title}: ${finding.description}`,
-          finding.evidence.map((evidence) => `${evidence.file}:${evidence.startLine}-${evidence.endLine}`).join(", "),
-          finding.suggestion,
-        ]),
-      ),
-    );
-  }
-  if (review.candidates) {
-    lines.push("", "### Candidate verification", "");
-    lines.push(
-      table(
-        ["Generated", "Verified", "Likely (not published)", "Rejected", "Insufficient evidence"],
-        [
-          [
-            review.candidates.generated,
-            review.candidates.verified,
-            review.candidates.likely,
-            review.candidates.rejected,
-            review.candidates.insufficientEvidence,
-          ],
-        ],
-      ),
-    );
-  }
-  if (review.coverage.omissions.length) {
-    lines.push("", "### Omissions", "");
-    lines.push(
-      table(
-        ["Kind", "Item", "Reason"],
-        review.coverage.omissions.map((item) => [item.kind, item.id, item.reason]),
-      ),
-    );
+  const limitations = coverageLimitations(review);
+  if (limitations.length) {
+    lines.push("", "### Coverage Limitations", "");
+    lines.push(table(["Reason", "Count"], limitations));
   }
   if (review.errors?.length) {
-    lines.push("", "### Review errors", "");
-    lines.push(
-      table(
-        ["Error"],
-        review.errors.map((error) => [error]),
-      ),
-    );
+    lines.push("", "### Review Errors", "");
+    lines.push(table(["Error", "Count"], [["Review infrastructure or provider failure", review.errors.length]]));
   }
   if (review.findings.length)
     lines.push(

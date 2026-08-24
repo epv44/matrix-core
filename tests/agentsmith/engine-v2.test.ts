@@ -42,18 +42,16 @@ describe("unified v2 verification pipeline", () => {
               }
             : {
                 raw: JSON.stringify({
-                  summary: "speculation",
-                  candidates: [
+                  c: [
                     {
-                      sourceWorkItemIds: [],
-                      file: ".agentignore",
-                      line: 1,
-                      severity: "critical",
-                      category: "contract",
-                      title: "Checklist is wrong",
-                      description: "The instruction might conflict with code.",
-                      candidateConfidence: 0.8,
-                      evidenceRequests: [],
+                      f: ".agentignore",
+                      l: 1,
+                      s: "critical",
+                      k: "contract",
+                      t: "Checklist is wrong",
+                      d: "The instruction might conflict with code.",
+                      q: 0.8,
+                      e: [],
                     },
                   ],
                 }),

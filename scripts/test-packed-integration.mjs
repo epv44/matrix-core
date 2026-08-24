@@ -58,6 +58,21 @@ try {
     ["install", "--ignore-scripts", "--no-package-lock", path.join(packDirectory, tarball)],
     { cwd: consumer, env: npmEnvironment },
   );
+  const installedRoot = path.join(consumer, "node_modules", "@epv44", "matrixcore", "dist", "agentsmith");
+  for (const specialist of [
+    "architecture-reviewer.md",
+    "perf-reviewer.md",
+    "bug-hunter.md",
+    "semantic-reviewer.md",
+  ])
+    assert.equal(
+      fs.existsSync(path.join(installedRoot, "agents", "sub-agents", specialist)),
+      true,
+      `missing live specialist asset ${specialist}`,
+    );
+  assert.equal(fs.existsSync(path.join(installedRoot, "rules", "registry.yaml")), true);
+  for (const removed of ["agents/agent-smith.md", "agents/security", "rules/languages", "rules/security", "skills"])
+    assert.equal(fs.existsSync(path.join(installedRoot, removed)), false, `packed obsolete AgentSmith asset ${removed}`);
   fs.writeFileSync(
     path.join(consumer, "quality.yaml"),
     "version: 2\nproject: packed-consumer\nreview:\n  agentsmith: false\n",
@@ -124,9 +139,9 @@ try {
     arguments: { root: consumer, mode: "completion" },
   });
   assert.equal(unavailableReview.structuredContent.deterministicPassed, true);
-  assert.equal(unavailableReview.structuredContent.completionAllowed, false);
+  assert.equal(unavailableReview.structuredContent.completionAllowed, true);
   assert.equal(unavailableReview.structuredContent.advisoryReview.status, "provider_error");
-  assert.equal(hook(consumer, { cwd: consumer }).decision, "block");
+  assert.deepEqual(hook(consumer, { cwd: consumer }), {});
 
   const currentGate = JSON.parse(fs.readFileSync(path.join(consumer, ".quality", "completion-gate.json"), "utf8"));
   const otherEngine = {

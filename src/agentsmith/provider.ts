@@ -1,15 +1,26 @@
 import type { AgentSmithConfig, ModelProfile } from "../core/types.js";
 
-export type ReviewOutputKind = "candidates" | "scout" | "verification";
+export type ReviewOutputKind = "candidates" | "specialist" | "scout" | "verification";
 
 export interface ProviderUsage {
   inputTokens: number;
   outputTokens: number;
 }
 
+export interface ProviderCompletionMetadata {
+  model: string;
+  done: boolean | null;
+  doneReason: string | null;
+  totalDurationNs: number | null;
+  loadDurationNs: number | null;
+  promptEvalDurationNs: number | null;
+  evalDurationNs: number | null;
+}
+
 export interface ProviderResponse {
   raw: string;
   usage: ProviderUsage;
+  completion?: ProviderCompletionMetadata;
 }
 
 export interface ReviewProvider {
@@ -19,33 +30,35 @@ export interface ReviewProvider {
     prompt: string;
     outputKind: ReviewOutputKind;
     allowedFiles?: string[];
+    maxCandidates?: number;
     signal?: AbortSignal;
   }): Promise<ProviderResponse>;
 }
 
-function findingProperties(allowedFiles?: string[]) {
+function compactCandidateProperties(allowedFiles?: string[]) {
   return {
-    sourceWorkItemIds: { type: "array", items: { type: "string" } },
-    file: allowedFiles?.length ? { type: "string", enum: [...new Set(allowedFiles)] } : { type: "string" },
-    line: { type: "integer", minimum: 1 },
-    endLine: { type: "integer", minimum: 1 },
-    severity: { type: "string", enum: ["critical", "high", "medium", "low"] },
-    category: { type: "string", enum: ["correctness", "security", "performance", "contract"] },
-    title: { type: "string" },
-    description: { type: "string" },
-    suggestion: { type: "string" },
-    primarySymbol: { type: "string" },
-    ruleId: { type: "string" },
-    candidateConfidence: { type: "number", minimum: 0, maximum: 1 },
-    evidenceRequests: {
+    f: allowedFiles?.length ? { type: "string", enum: [...new Set(allowedFiles)] } : { type: "string", minLength: 1 },
+    l: { type: "integer", minimum: 1 },
+    x: { type: "integer", minimum: 1 },
+    s: { type: "string", enum: ["critical", "high", "medium", "low"] },
+    k: { type: "string", enum: ["correctness", "security", "performance", "contract"] },
+    t: { type: "string", minLength: 1, maxLength: 80 },
+    d: { type: "string", minLength: 1, maxLength: 280 },
+    g: { type: "string", maxLength: 160 },
+    p: { type: "string", maxLength: 160 },
+    r: { type: "string", maxLength: 120 },
+    q: { type: "number", minimum: 0, maximum: 1, description: "Candidate confidence as a decimal from 0 through 1." },
+    e: {
       type: "array",
+      maxItems: 2,
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["kind", "reason"],
+        required: ["k", "v", "r"],
         properties: {
-          kind: {
+          k: {
             type: "string",
+            description: "Evidence relationship or lookup kind.",
             enum: [
               "definition",
               "callers",
@@ -59,17 +72,21 @@ function findingProperties(allowedFiles?: string[]) {
               "search",
             ],
           },
-          symbol: { type: "string" },
-          pathHint: { type: "string" },
-          query: { type: "string" },
-          reason: { type: "string" },
+          v: {
+            type: "string",
+            minLength: 1,
+            maxLength: 240,
+            description: "Required symbol for semantic lookups or literal value for search/config/test/schema lookups.",
+          },
+          p: { type: "string", maxLength: 240, description: "Optional repository-relative path hint." },
+          r: { type: "string", minLength: 1, maxLength: 120, description: "Why this evidence is needed." },
         },
       },
     },
   };
 }
 
-function outputSchema(kind: ReviewOutputKind, allowedFiles?: string[]) {
+function outputSchema(kind: ReviewOutputKind, allowedFiles?: string[], maxCandidates = 2) {
   if (kind === "verification")
     return {
       type: "object",
@@ -114,33 +131,25 @@ function outputSchema(kind: ReviewOutputKind, allowedFiles?: string[]) {
         },
       },
     };
-  return {
+  const candidateOutput = {
     type: "object",
     additionalProperties: false,
-    required: ["summary", "candidates"],
+    required: kind === "specialist" ? ["summary", "c"] : ["c"],
     properties: {
-      summary: { type: "string" },
-      candidates: {
+      ...(kind === "specialist" ? { summary: { type: "string", minLength: 1, maxLength: 1200 } } : {}),
+      c: {
         type: "array",
+        maxItems: maxCandidates,
         items: {
           type: "object",
           additionalProperties: false,
-          required: [
-            "sourceWorkItemIds",
-            "file",
-            "line",
-            "severity",
-            "category",
-            "title",
-            "description",
-            "candidateConfidence",
-            "evidenceRequests",
-          ],
-          properties: findingProperties(allowedFiles),
+          required: ["f", "l", "s", "k", "t", "d", "q", "e"],
+          properties: compactCandidateProperties(allowedFiles),
         },
       },
     },
   };
+  return candidateOutput;
 }
 
 export class OllamaProvider implements ReviewProvider {
@@ -162,6 +171,7 @@ export class OllamaProvider implements ReviewProvider {
     prompt: string;
     outputKind: ReviewOutputKind;
     allowedFiles?: string[];
+    maxCandidates?: number;
     signal?: AbortSignal;
   }): Promise<ProviderResponse> {
     const controller = new AbortController();
@@ -180,7 +190,8 @@ export class OllamaProvider implements ReviewProvider {
           prompt: input.prompt,
           stream: false,
           think: input.profile.inference.thinking,
-          format: outputSchema(input.outputKind, input.allowedFiles),
+          format: outputSchema(input.outputKind, input.allowedFiles, input.maxCandidates),
+          keep_alive: `${Math.ceil(this.config.maxDurationMs / 60_000) + 5}m`,
           options: {
             temperature: input.profile.inference.temperature,
             num_ctx: input.profile.contextTokens,
@@ -196,6 +207,15 @@ export class OllamaProvider implements ReviewProvider {
         usage: {
           inputTokens: Number(body.prompt_eval_count ?? 0),
           outputTokens: Number(body.eval_count ?? 0),
+        },
+        completion: {
+          model: String(body.model ?? input.profile.model),
+          done: typeof body.done === "boolean" ? body.done : null,
+          doneReason: typeof body.done_reason === "string" ? body.done_reason : null,
+          totalDurationNs: Number.isFinite(body.total_duration) ? Number(body.total_duration) : null,
+          loadDurationNs: Number.isFinite(body.load_duration) ? Number(body.load_duration) : null,
+          promptEvalDurationNs: Number.isFinite(body.prompt_eval_duration) ? Number(body.prompt_eval_duration) : null,
+          evalDurationNs: Number.isFinite(body.eval_duration) ? Number(body.eval_duration) : null,
         },
       };
     } finally {

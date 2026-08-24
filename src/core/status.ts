@@ -92,7 +92,12 @@ function mismatchReason(identity: CompletionIdentityDiagnostics): string {
     const key = dimension as Exclude<keyof CompletionIdentitySnapshot, "toolVersions">;
     return `${dimension} (recorded=${recorded[key] ?? "missing"}, current=${identity.current[key] ?? "missing"})`;
   });
-  return `Completion evidence is stale: ${details.join("; ")}. Run quality_run with mode=completion.`;
+  const runtimeContext = identity.mismatches.some((dimension) =>
+    ["engineVersion", "enginePackageRoot"].includes(dimension),
+  )
+    ? `; producer=${recorded.engineVersion ?? "unknown"}@${recorded.enginePath ?? recorded.enginePackageRoot ?? "unknown"}; hook=${identity.current.engineVersion ?? "unknown"}@${identity.current.enginePath ?? identity.current.enginePackageRoot ?? "unknown"}`
+    : "";
+  return `Completion evidence is stale: ${details.join("; ")}${runtimeContext}. Run quality_run with mode=completion.`;
 }
 
 export function getQualityStatus(cwd: string): QualityStatus {
@@ -142,6 +147,8 @@ export function getQualityStatus(cwd: string): QualityStatus {
   const changedGate = readGateResult(root, "changed");
   const review = readReviewResult(root);
   const reviewRequired = resolved.config.agentsmith?.enabled === true;
+  const reviewAdvisory = resolved.config.agentsmith?.advisory !== false;
+  const reviewBlocksCompletion = reviewRequired && !reviewAdvisory;
   const currentIdentity: CompletionIdentitySnapshot = {
     workspaceVersion: version,
     workspaceHash: workspaceSet.workspaceHash,
@@ -163,6 +170,8 @@ export function getQualityStatus(cwd: string): QualityStatus {
       review,
       ...reviewPresentation(review),
       reviewRequired,
+      reviewEnabled: reviewRequired,
+      reviewAdvisory,
       completionAllowed: false,
       reason: readLegacyGateResult(root)
         ? "Legacy gate evidence has no execution scope and cannot authorize completion. Run quality_run with mode=completion."
@@ -234,7 +243,7 @@ export function getQualityStatus(cwd: string): QualityStatus {
       identity,
     };
   if (
-    reviewRequired &&
+    reviewBlocksCompletion &&
     (!review ||
       review.version !== version ||
       review.profileHash !== policy.agentSmith.hash ||
@@ -250,6 +259,8 @@ export function getQualityStatus(cwd: string): QualityStatus {
       review,
       ...reviewPresentation(review, gate.status),
       reviewRequired,
+      reviewEnabled: reviewRequired,
+      reviewAdvisory,
       completionAllowed: false,
       reason: "AgentSmith review is missing or stale. Run quality_run with mode=completion before finishing.",
       workspaces,
@@ -258,7 +269,7 @@ export function getQualityStatus(cwd: string): QualityStatus {
       runtime,
       identity,
     };
-  if (reviewRequired && (!review || review.status !== "completed" || Boolean(review.errors?.length)))
+  if (reviewBlocksCompletion && (!review || review.status !== "completed" || Boolean(review.errors?.length)))
     return {
       schemaVersion: 1,
       configured: true,
@@ -269,6 +280,8 @@ export function getQualityStatus(cwd: string): QualityStatus {
       review,
       ...reviewPresentation(review, gate.status),
       reviewRequired,
+      reviewEnabled: reviewRequired,
+      reviewAdvisory,
       completionAllowed: false,
       reason:
         "AgentSmith review did not complete successfully. Resolve provider/review errors and run quality_run with mode=completion.",
@@ -288,6 +301,8 @@ export function getQualityStatus(cwd: string): QualityStatus {
     review,
     ...reviewPresentation(review, gate.status),
     reviewRequired,
+    reviewEnabled: reviewRequired,
+    reviewAdvisory,
     completionAllowed: true,
     workspaces,
     workspaceHash: workspaceSet.workspaceHash,

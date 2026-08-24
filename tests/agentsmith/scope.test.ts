@@ -60,4 +60,32 @@ describe("ReviewScope", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("classifies captured eval inputs as generated replay data", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-scope-eval-"));
+    try {
+      git(root, "init", "-b", "main");
+      git(root, "config", "user.email", "test@example.com");
+      git(root, "config", "user.name", "Test");
+      fs.writeFileSync(path.join(root, "README.md"), "fixture\n");
+      git(root, "add", ".");
+      git(root, "commit", "-m", "base");
+      const directory = path.join(root, "evals", "agentsmith", "case-one");
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, "input.json"), '{"schemaVersion":3}\n');
+      const scope = captureReviewScope({ root });
+      expect(scope.manifest).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: "evals/agentsmith/case-one/input.json", generated: true }),
+        ]),
+      );
+      expect(scope.omissions).toContainEqual({
+        kind: "file",
+        id: "evals/agentsmith/case-one/input.json",
+        reason: "generated",
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

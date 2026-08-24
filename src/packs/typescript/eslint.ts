@@ -2,6 +2,8 @@ import { spawnSync } from "node:child_process";
 import type { QualityPlugin } from "../interface.js";
 import path from "node:path";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
+import { verboseEnabled } from "../../core/verbose.js";
+import { childProcessEnv } from "../../core/process-env.js";
 
 function tryEslint(
   root: string,
@@ -16,9 +18,20 @@ function tryEslint(
   const local = designated ?? path.join(root, "node_modules", ".bin", "eslint");
   const candidates: Array<[string, string[]]> = [[local, args]];
   for (const [bin, a] of candidates) {
+    if (verboseEnabled()) {
+      console.debug(`[matrix-core] eslint argv: ${bin} ${a.join(" ")}`);
+    }
     try {
-      const res = spawnSync(bin, a, { cwd: root, encoding: "utf8", timeout: 60000 });
-      if (res.error) continue;
+      const res = spawnSync(bin, a, { cwd: root, encoding: "utf8", timeout: 60000, env: childProcessEnv() });
+      if (verboseEnabled()) {
+        console.debug(
+          `[matrix-core] eslint exit=${res.status} stdout=${(res.stdout || "").slice(0, 500)} stderr=${(res.stderr || "").slice(0, 500)}`,
+        );
+      }
+      if (res.error) {
+        const error = res.error as NodeJS.ErrnoException;
+        return { stdout: res.stdout || "", status: null, error: `${error.code ?? "spawn"}: ${error.message}` };
+      }
       if (res.status !== null) return { stdout: res.stdout || "", status: res.status };
     } catch {}
   }

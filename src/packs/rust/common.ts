@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import type { Observation, RunCtx } from "../../core/types.js";
+import { verboseEnabled } from "../../core/verbose.js";
 
 export function cargoWorkspaces(root: string): string[] {
   const manifests: string[] = [];
@@ -48,12 +49,21 @@ export function runCargo(ctx: RunCtx, workspace: string, args: string[]): SpawnS
   const suffix = Buffer.from(path.relative(ctx.root, workspace) || "root")
     .toString("hex")
     .slice(0, 32);
-  return spawnSync("cargo", args, {
+  if (verboseEnabled()) {
+    console.debug(`[matrix-core] cargo argv: cargo ${args.join(" ")} (ws=${workspace})`);
+  }
+  const res = spawnSync("cargo", args, {
     cwd: workspace,
     encoding: "utf8",
     timeout: 120000,
     env: { ...process.env, CARGO_TARGET_DIR: path.join(ctx.root, ".quality", "cache", "rust", suffix) },
   });
+  if (verboseEnabled()) {
+    console.debug(
+      `[matrix-core] cargo exit=${res.status} stdout=${(res.stdout || "").slice(0, 500)} stderr=${(res.stderr || "").slice(0, 500)}`,
+    );
+  }
+  return res;
 }
 
 export function parseCargoDiagnostics(output: string, root: string): Observation[] {

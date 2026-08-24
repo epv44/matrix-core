@@ -1,6 +1,6 @@
 {
   "name": "matrix-core",
-  "version": "0.5.0+codex.20260817212719",
+  "version": "0.5.1+codex.20260823025837",
   "description": "Universal deterministic quality gates and advisory AgentSmith review",
   "author": {
     "name": "MatrixCore"

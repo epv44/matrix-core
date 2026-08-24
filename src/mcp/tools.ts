@@ -7,6 +7,7 @@ import { getQualityStatus } from "../core/status.js";
 import { resolveConfig } from "../core/config-resolver.js";
 import { recordEngineRuntime } from "../core/runtime.js";
 import { repositoryGraph } from "../core/graph/index.js";
+import { turnStore } from "../core/turn-store.js";
 
 export type QualityToolName = "quality_run" | "quality_status" | "quality_fix" | "graph_status";
 
@@ -45,8 +46,8 @@ export async function executeQualityTool(
       findingIds: input.finding_ids ?? [],
     });
   const mode = input.mode ?? "full";
-  if (mode === "completion")
-    return runQualityCompletion({
+  if (mode === "completion") {
+    const completion = await runQualityCompletion({
       cwd: root,
       mode: "full",
       fast: false,
@@ -55,6 +56,8 @@ export async function executeQualityTool(
       adapter: "mcp",
       signal,
     });
+    return completion;
+  }
   if (mode === "review")
     return runQualityReview({
       cwd: root,
@@ -65,7 +68,7 @@ export async function executeQualityTool(
       adapter: "mcp",
       signal,
     });
-  return runGate({
+  const gate = await runGate({
     cwd: root,
     mode,
     fast: input.fast,
@@ -74,4 +77,8 @@ export async function executeQualityTool(
     adapter: "mcp",
     signal,
   });
+  if (gate.mode === "full" && !gate.fast) {
+    turnStore.recordGateResult(root, gate, gate.status === "PASS" ? "PASS" : "REJECT", "mcp");
+  }
+  return gate;
 }

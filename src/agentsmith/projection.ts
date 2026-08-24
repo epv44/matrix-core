@@ -204,7 +204,9 @@ export function buildProjection(opts: {
       ...(opts.scope.manifest ?? [])
         .filter(
           (entry) =>
-            (entry.sizeBytes ?? 0) > 300_000 && !opts.graph.changedSymbols.some((symbol) => symbol.file === entry.path),
+            !entry.generated &&
+            (entry.sizeBytes ?? 0) > 300_000 &&
+            !opts.graph.changedSymbols.some((symbol) => symbol.file === entry.path),
         )
         .map((entry) => ({
           kind: "file" as const,
@@ -214,7 +216,7 @@ export function buildProjection(opts: {
         })),
     ],
   };
-  base.rules = selectRules(opts.rules, base, Number.POSITIVE_INFINITY, opts.kind === "full");
+  base.rules = selectRules(opts.rules, base, Number.POSITIVE_INFINITY);
   const manifestText = JSON.stringify(base.manifest);
   const fixed =
     estimateTokens(manifestText, opts.profile, false) +
@@ -394,18 +396,47 @@ function symbolPriority(symbol: GraphSymbol, nodes: GraphContextNode[]) {
   return nodes.find((node) => symbolKey(node.symbol) === symbolKey(symbol))?.score ?? 0;
 }
 
-export function selectWorkItems(items: ReviewWorkItem[], limit: number, tokenBudget = Number.POSITIVE_INFINITY) {
-  const ranked = [...items].sort(
-    (left, right) =>
-      (right.priority ?? 0) - (left.priority ?? 0) ||
-      left.kind.localeCompare(right.kind) ||
-      left.id.localeCompare(right.id),
+function workItemRank(left: ReviewWorkItem, right: ReviewWorkItem) {
+  return (
+    (right.priority ?? 0) - (left.priority ?? 0) ||
+    left.kind.localeCompare(right.kind) ||
+    left.id.localeCompare(right.id)
   );
+}
+
+function uniqueWorkItems(items: ReviewWorkItem[]): ReviewWorkItem[] {
+  const values = new Map<string, ReviewWorkItem>();
+  for (const item of items) if (!values.has(item.id)) values.set(item.id, item);
+  return [...values.values()];
+}
+
+export function selectWorkItems(items: ReviewWorkItem[], limit: number, tokenBudget = Number.POSITIVE_INFINITY) {
+  const ranked = uniqueWorkItems(items).sort(workItemRank);
   const selected: ReviewWorkItem[] = [];
   const omitted: ReviewWorkItem[] = [];
   const tokenOmitted: ReviewWorkItem[] = [];
   let usedTokens = 0;
+  if (limit >= 2) {
+    const locals = ranked.filter((item) => item.kind === "local");
+    const interactions = ranked.filter((item) => item.kind === "interaction");
+    let pair: [ReviewWorkItem, ReviewWorkItem] | undefined;
+    for (const local of locals) {
+      for (const interaction of interactions) {
+        if (local.estimatedTokens + interaction.estimatedTokens <= tokenBudget) {
+          pair = [local, interaction];
+          break;
+        }
+      }
+      if (pair) break;
+    }
+    if (pair) {
+      selected.push(...pair.sort(workItemRank));
+      usedTokens = pair.reduce((sum, item) => sum + item.estimatedTokens, 0);
+    }
+  }
+  const selectedIds = new Set(selected.map((item) => item.id));
   for (const item of ranked) {
+    if (selectedIds.has(item.id)) continue;
     if (selected.length >= Math.max(0, limit)) {
       omitted.push(item);
       continue;
@@ -416,6 +447,7 @@ export function selectWorkItems(items: ReviewWorkItem[], limit: number, tokenBud
       continue;
     }
     selected.push(item);
+    selectedIds.add(item.id);
     usedTokens += item.estimatedTokens;
   }
   return { selected, omitted, tokenOmitted, estimatedTokens: usedTokens };
@@ -431,6 +463,12 @@ export function buildWorkItems(opts: {
   maxInteractionNeighborsPerSymbol?: number;
   hotspots?: ScoutFinding[];
 }): ReviewWorkItem[] {
+  const changedSymbols = [...new Map(opts.graph.changedSymbols.map((symbol) => [symbolKey(symbol), symbol])).values()];
+  const graphEdges = [
+    ...new Map(
+      opts.graph.edges.map((edge) => [`${edge.kind}:${edge.source}:${edge.target ?? edge.targetText}`, edge]),
+    ).values(),
+  ];
   const bySymbol = new Map(
     opts.projection.code.filter((code) => code.symbol).map((code) => [`${code.file}:${code.symbol}`, code]),
   );
@@ -446,7 +484,7 @@ export function buildWorkItems(opts: {
   );
   const hasScoutTargets = Boolean(opts.hotspots?.length && (hotspotSymbols.size || hotspotEdgeKinds.size));
   const locals: ReviewWorkItem[] = [];
-  for (const symbol of opts.graph.changedSymbols) {
+  for (const symbol of changedSymbols) {
     if (
       hasScoutTargets &&
       !hotspotSymbols.has(symbolKey(symbol)) &&
@@ -466,9 +504,7 @@ export function buildWorkItems(opts: {
         primarySymbols: [symbol],
         relatedSymbols: [],
         code: [boundedSnippet(source, codeBudget, opts.profile, range)],
-        graphEdges: opts.graph.edges.filter(
-          (edge) => edge.source === symbolKey(symbol) || edge.target === symbolKey(symbol),
-        ),
+        graphEdges: graphEdges.filter((edge) => edge.source === symbolKey(symbol) || edge.target === symbolKey(symbol)),
         rules: [],
         deterministicReport,
         estimatedTokens: 0,
@@ -513,8 +549,8 @@ export function buildWorkItems(opts: {
   }
   const interactions: ReviewWorkItem[] = [];
   const fanout = new Map<string, number>();
-  const changed = new Set(opts.graph.changedSymbols.map(symbolKey));
-  const rankedEdges = [...opts.graph.edges].sort((left, right) => {
+  const changed = new Set(changedSymbols.map(symbolKey));
+  const rankedEdges = [...graphEdges].sort((left, right) => {
     return (
       interactionPriority(right, changed, hotspotSymbols) - interactionPriority(left, changed, hotspotSymbols) ||
       left.source.localeCompare(right.source) ||
@@ -582,7 +618,7 @@ export function buildWorkItems(opts: {
     interactions.push(item);
     fanout.set(primaryKey, (fanout.get(primaryKey) ?? 0) + 1);
   }
-  return [...locals, ...interactions];
+  return uniqueWorkItems([...locals, ...interactions]);
 }
 
 export function extensionLanguage(file: string) {

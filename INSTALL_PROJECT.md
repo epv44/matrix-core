@@ -9,7 +9,7 @@ integration lives under `integrations/`; Cline setup is documented in `INSTALL_C
 - The toolchain the checks need. Verify with the engine's doctor:
 
   ```bash
-  npm install --save-dev --save-exact @epv44/matrixcore@0.5.0
+  npm install --save-dev --save-exact @epv44/matrixcore@0.5.1
   npx --no-install matrix-core doctor
   ```
 
@@ -66,7 +66,7 @@ review:
   agentsmith: true
 ```
 
-The embedded policy approves `qwen35-9b-local` and `qwen35-122b-local`. Bind review roles by
+The embedded policy approves role-specific 9B and 122B profiles. Bind review roles by
 profile ID when selecting models:
 
 ```yaml
@@ -75,8 +75,8 @@ review:
   mode: auto
   models:
     candidate: qwen35-9b-local
-    scout: qwen35-122b-local
-    verifier: qwen35-9b-local
+    scout: qwen35-122b-scout-local
+    verifier: qwen35-9b-verifier-local
 ```
 
 Install only the models you intend to use; MatrixCore never downloads them implicitly:
@@ -114,15 +114,19 @@ centrally owned checks, versions, assets, and hashes.
 ## 6. Reading the output
 
 - Per-check status is PASS / FAIL / ERROR. Missing or incompatible required tools fail closed.
-- The gate is **immutable and versioned**: `GateResult {version, status, checks, failures}` is written
-  `RUNNING` first, then `PASS`/`FAIL` — a crash can never leave a stale PASS.
+- The terminal gate is **immutable and versioned**: `completion-gate.json` is replaced only by a
+  terminal `PASS`/`FAIL`. Active-run and lock artifacts are separate, so a duplicate start cannot
+  erase a current PASS.
 
 ## 7. Caveats
 
 - `quality run` and MCP `quality_run` use the same gate service and persist identical evidence.
+- Concurrent CLI/MCP completion requests are serialized per repository and reuse one result.
 - `--changed` needs a git repo; consumer gates never invoke application tests.
 - `completion` runs the central deterministic profile and runs the central AgentSmith profile only
   when `review.agentsmith: true` is declared in the v2 manifest.
+- AgentSmith results are advisory and remain reported even when partial or unavailable; exact-state
+  deterministic PASS controls completion authorization.
 - Completion enforcement uses each host's native hook and the shared `matrixcore-hook` executable.
 - Planning-only turns bypass completion enforcement before workspace resolution.
 

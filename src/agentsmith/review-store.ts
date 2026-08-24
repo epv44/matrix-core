@@ -12,7 +12,7 @@ export function reviewMarkdownPath(root: string) {
 export function readReviewResult(root: string): ReviewResult | null {
   try {
     const value = yaml.load(fs.readFileSync(reviewResultPath(root), "utf8")) as ReviewResult;
-    if (!value || value.schemaVersion !== 2 || !Array.isArray(value.findings) || !value.coverage) return null;
+    if (!value || value.schemaVersion !== 3 || !Array.isArray(value.findings) || !value.coverage) return null;
     return value;
   } catch {
     return null;
