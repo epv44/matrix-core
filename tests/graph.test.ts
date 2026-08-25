@@ -38,6 +38,7 @@ describe("repository graph", () => {
     const edgeKeys = changed.edges.map((edge) => `${edge.kind}:${edge.source}:${edge.target ?? edge.targetText}`);
     expect(new Set(changedKeys).size).toBe(changedKeys.length);
     expect(new Set(edgeKeys).size).toBe(edgeKeys.length);
+    expect(changed.edges.some((edge) => edge.target?.endsWith(":helper") || edge.targetText === "helper")).toBe(true);
     expect(changed.changedSymbols.find((symbol) => symbol.qualifiedName === "calculate")?.provider).toBe(
       "typescript-compiler",
     );

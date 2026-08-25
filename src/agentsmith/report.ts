@@ -193,8 +193,8 @@ export function formatAgentSmithReview(
         ],
         [
           "Evidence",
-          review.coverage.evidenceResolved,
-          `${review.coverage.evidenceRequests} requests; ${review.coverage.evidenceGaps} gaps`,
+          `${review.coverage.evidenceRequestsSatisfied ?? review.coverage.evidenceResolved}/${review.coverage.evidenceRequests} requests satisfied`,
+          `${review.coverage.evidenceRequestsPartiallySatisfied ?? 0} partial; ${review.coverage.evidenceRequestsUnresolved ?? review.coverage.evidenceGaps} unresolved; ${review.coverage.evidenceRequestsSkipped ?? 0} skipped; ${review.coverage.evidenceRecordsPacked ?? review.coverage.evidenceResolved} records packed`,
         ],
         ["Global scan", review.coverage.globalScan, "—"],
       ],

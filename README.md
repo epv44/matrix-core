@@ -108,11 +108,10 @@ quality policy sync
 quality policy sync --locked
 quality fix --review-version <version> --finding <id...>
 quality trace status
-quality eval list
 quality config show
 ```
 
-## Local AgentSmith traces and evals
+## Local AgentSmith traces
 
 AgentSmith tracing is a local diagnostic feature, not telemetry. It captures locally by default,
 retaining the newest 20 traces within a 250 MiB budget. MatrixCore contains no trace uploader or
@@ -124,7 +123,6 @@ MATRIXCORE_TRACE=agentsmith quality completion
 quality trace status
 quality trace list
 quality trace show <trace-id>
-quality trace metrics <trace-id>
 ```
 
 Enabled traces are private local files under `.quality/traces/agentsmith/`. They contain the frozen
@@ -133,28 +131,14 @@ evidence resolution, verification, coverage, and decision provenance. `quality d
 warns when tracing is enabled and `.quality/` is not ignored by Git. Trace write failures never change
 the review or completion decision.
 
-Promote a deliberately selected trace into an editable regression case, label expected bugs L0-L3,
-then compare candidate-generation strategies against the same frozen snapshot:
+Schema-v5 traces also retain a content-addressed snapshot of tracked and nonignored untracked repository files,
+including executable bits, safe relative symlinks, and deletion state. Shared SHA-256 objects count once
+toward the 250 MiB retention budget and are removed when no retained trace references them. These files
+may contain proprietary or sensitive source; MatrixCore never uploads them, and curated cases still
+require explicit sanitization and redistribution review.
 
-```bash
-quality eval curate --trace <trace-id> --case <slug>
-quality eval run --case <slug> --mode all --replay planner
-quality eval run --case <slug> --mode all --replay recorded
-quality eval run --case <slug> --mode all --replay live
-quality eval compare <baseline-result.json> <current-result.json>
-```
-
-Curated cases are written to `evals/agentsmith/<slug>/`. Inspect `input.json` and `case.yaml` for
-proprietary code, credentials, prompts, and personal data before committing them. Eval reports remain
-ignored under `.quality/evals/runs/`. No trace is ever curated, committed, or transmitted automatically.
-Curated `originalCandidates` can be labeled accepted or rejected, and
-`expectedInspectionTargets` can name files, symbols, and graph edges that a sound planner must inspect.
-Planner replay measures deterministic selection and coverage without an LLM. Recorded replay requires
-exact prompt/model matches and detects strategy drift; live replay measures the complete current stack.
-Reports include finding quality only when it is evaluable, plus file/changed-line coverage, target
-recall, candidate adjudication, evidence relevance, reliability, latency, token use, and explicit
-honesty checks. Rejected candidates must never become verified findings; likely, rejected, and
-insufficient-evidence outcomes remain trace/eval data only.
+The source repository contains a separate diagnostic eval lab under `tools/agentsmith-evals/`. It is
+not part of the published npm package or the `quality` CLI.
 
 ## Deterministic profiles
 

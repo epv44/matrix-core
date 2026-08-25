@@ -1,14 +1,12 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { ENGINE_VERSION } from "../core/meta.js";
 import { executeQualityTool, type QualityToolName } from "./tools.js";
 import { cleanupMcpRuntimeRecords } from "../core/runtime.js";
 import type { Readable, Writable } from "node:stream";
+import { isMainModule } from "../core/process.js";
 
 export function result(value: unknown) {
   const structuredContent = JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
@@ -122,16 +120,7 @@ async function main() {
   await startMatrixCoreMcpServer();
 }
 
-function isMainModule(): boolean {
-  if (!process.argv[1]) return false;
-  try {
-    return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(path.resolve(process.argv[1]));
-  } catch {
-    return false;
-  }
-}
-
-if (isMainModule())
+if (isMainModule(import.meta.url))
   main().catch((error) => {
     console.error(`MatrixCore MCP server failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;

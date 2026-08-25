@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import type {
   ApplicationConfig,
   LanguageWorkspace,
@@ -11,28 +10,8 @@ import type {
   WorkspaceLanguage,
   WorkspaceResolution,
 } from "./types.js";
-
-const IGNORED = new Set([
-  ".git",
-  ".quality",
-  ".next",
-  ".venv",
-  "venv",
-  "dist",
-  "build",
-  "coverage",
-  "node_modules",
-  "__pycache__",
-]);
-
-function walk(root: string, visit: (file: string) => void) {
-  for (const entry of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-    if (entry.isDirectory() && IGNORED.has(entry.name)) continue;
-    const absolute = path.join(root, entry.name);
-    if (entry.isDirectory()) walk(absolute, visit);
-    else if (entry.isFile()) visit(absolute);
-  }
-}
+import { sha256 } from "./hash.js";
+import { walkFiles } from "./filesystem.js";
 
 function nearest(start: string, root: string, names: string[]): string | null {
   let current = path.dirname(start);
@@ -49,7 +28,7 @@ function relative(root: string, files: string[]) {
 }
 
 function sha(value: string | Buffer) {
-  return crypto.createHash("sha256").update(value).digest("hex");
+  return sha256(value);
 }
 
 function fileRecords(root: string, files: string[]) {
@@ -59,7 +38,12 @@ function fileRecords(root: string, files: string[]) {
 }
 
 function pythonEnvironment(packageRoot: string): ToolEnvironment {
-  for (const name of [".venv", "venv"]) {
+  const discovered = fs
+    .readdirSync(packageRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && fs.existsSync(path.join(packageRoot, entry.name, "pyvenv.cfg")))
+    .map((entry) => entry.name)
+    .sort();
+  for (const name of [...new Set([".venv", "venv", ...discovered])]) {
     const bin = path.join(packageRoot, name, process.platform === "win32" ? "Scripts" : "bin");
     const python = path.join(bin, process.platform === "win32" ? "python.exe" : "python");
     if (fs.existsSync(python)) {
@@ -110,7 +94,7 @@ function validatePythonLocks(packageRoot: string) {
 
 function typescriptConfigs(packageRoot: string) {
   const configs: string[] = [];
-  walk(packageRoot, (file) => {
+  walkFiles(packageRoot, (file) => {
     if (
       /^tsconfig(?:\.[^.]+)*\.json$/i.test(path.basename(file)) &&
       nearest(file, packageRoot, ["package.json"]) === packageRoot
@@ -212,7 +196,7 @@ function isWithin(parent: string, child: string) {
 
 function sqlFacetSources(sourceRoot: string, sources: SqlApplicationFacet["sources"]) {
   const files: string[] = [];
-  walk(sourceRoot, (file) => {
+  walkFiles(sourceRoot, (file) => {
     if (sources.includes("files") && /\.(?:sql|sql\.j2|dml|ddl)$/i.test(file)) files.push(file);
     if (sources.includes("python") && file.endsWith(".py")) files.push(file);
   });
@@ -242,7 +226,7 @@ function attachSqlFacets(root: string, workspaces: LanguageWorkspace[], applicat
     }
   }
   const uncoveredSql: string[] = [];
-  walk(root, (file) => {
+  walkFiles(root, (file) => {
     if (!/\.(?:sql|sql\.j2|dml|ddl)$/i.test(file)) return;
     if (!resolvedRoots.some((facet) => isWithin(facet.root, file))) uncoveredSql.push(path.relative(root, file));
   });
@@ -301,7 +285,7 @@ export function resolveLanguageWorkspaces(rootInput: string, application?: Appli
   const root = fs.realpathSync(rootInput);
   const python: string[] = [];
   const typescript: string[] = [];
-  walk(root, (file) => {
+  walkFiles(root, (file) => {
     if (file.endsWith(".py")) python.push(file);
     if (/\.(?:ts|tsx|mts|cts)$/.test(file) && !file.endsWith(".d.ts")) typescript.push(file);
   });

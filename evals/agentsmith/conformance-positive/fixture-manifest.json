@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "repositoryFingerprint": "conformance-positive",
+  "gitHead": null,
+  "entries": [
+    {
+      "path": ".matrixcore-ignore",
+      "type": "file",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "size": 1,
+      "executable": false
+    },
+    {
+      "path": "quality.yaml",
+      "type": "file",
+      "sha256": "c4f4ad4f630f068e83a42bbd86458bd2afb56bed50319c1b9a165be8ef3288fe",
+      "size": 68,
+      "executable": false
+    },
+    {
+      "path": "src/consumer.ts",
+      "type": "file",
+      "sha256": "d80b008e999f8850386953173e4ea53f9309c0e3ede88ba7baca4d808830a15f",
+      "size": 113,
+      "executable": false
+    },
+    {
+      "path": "src/producer.ts",
+      "type": "file",
+      "sha256": "bb08b16cf0edd8978519eba86d8d452d24af16c991ff82aa0bc8eac5516983d6",
+      "size": 97,
+      "executable": false
+    }
+  ],
+  "deletedPaths": []
+}

@@ -1,36 +1,75 @@
-schemaVersion: 2
+schemaVersion: 4
 id: matrixcore-large-diff-clear
-sourceTraceId: 2026-08-22T04-14-53-168Z-7df84d4b-5967-4bd8-9f6e-5ceb338229d6
-expectedOutcome: clear
-expectedFindings: []
-originalCandidates:
-  - candidateId: ebd5515cbeb365a1
-    label: rejected
-    rationale: appendEvent is explicitly best-effort audit logging and is not authoritative turn state.
-  - candidateId: 03ef820dbf7b12a8
-    label: rejected
-    rationale: readGateResult failures do not silently permit completion; status fails closed through the surrounding path.
-  - candidateId: b5af4c260b656ab4
-    label: rejected
-    rationale: unavailable background-task metadata is represented conservatively and does not violate a caller contract.
+status: draft
+kind: benchmark
+source:
+  traceId: 2026-08-22T04-14-53-168Z-7df84d4b-5967-4bd8-9f6e-5ceb338229d6
+  traceSchemaVersion: 2
+  repositoryFingerprint: 707fe844fe09843a679509ae6494b51c9fcc6ecea1a1f5da655d139a5f73db12
+  fixture: null
+  project: matrix-core
+sanitization:
+  reviewed: true
+  absolutePathsRemoved: true
+  sensitiveContentReviewed: true
+  redistributable: true
+expectations:
+  graph:
+    files: [src/hooks/runner.ts, src/hooks/adapters/claude.ts, src/core/status.ts]
+    symbols:
+      - src/hooks/runner.ts#bgTasks
+      - src/hooks/adapters/claude.ts#getBackgroundTasks
+      - src/core/status.ts#getQualityStatus
+    edges:
+      - src/hooks/runner.ts:bgTasks->src/hooks/adapters/claude.ts:getBackgroundTasks:calls
+  planning:
+    route: partitioned
+    files: [src/hooks/runner.ts, src/hooks/adapters/claude.ts, src/core/status.ts]
+    symbols:
+      - src/hooks/runner.ts#bgTasks
+      - src/hooks/adapters/claude.ts#getBackgroundTasks
+      - src/core/status.ts#getQualityStatus
+    edges:
+      - src/hooks/runner.ts:bgTasks->src/hooks/adapters/claude.ts:getBackgroundTasks:calls
+  candidates:
+    items: &rejected_candidates
+      - id: append-event-authority
+        file: src/core/completion-coordinator.ts
+        lineStart: 73
+        lineEnd: 77
+        category: contract
+        titleContains: appendEvent
+        expectedPresence: false
+        expectedVerdict: rejected
+        requiredEvidenceKinds: [callers, implementation]
+        rationale: appendEvent is best-effort audit logging and does not own authoritative turn state.
+      - id: changed-gate-nullability
+        file: src/core/status.ts
+        lineStart: 145
+        lineEnd: 149
+        category: contract
+        titleContains: ChangedGate
+        expectedPresence: false
+        expectedVerdict: rejected
+        requiredEvidenceKinds: [callers, callees]
+        rationale: readGateResult failures do not silently permit completion; the surrounding path fails closed.
+      - id: background-task-nullability
+        file: src/hooks/adapters/claude.ts
+        lineStart: 39
+        lineEnd: 43
+        category: contract
+        titleContains: BackgroundTasks
+        expectedPresence: false
+        expectedVerdict: rejected
+        requiredEvidenceKinds: [callers, callees]
+        rationale: unavailable background-task metadata is conservative optional adapter input.
+  verification:
+    candidates: *rejected_candidates
+  aggregation:
+    outcome: clear
+    findings: []
 narrative:
   summary: Large MatrixCore release diff used to regress duplicate planning, bounded surface diversity, and false-positive promotion.
-  trueCodeFlow: Candidate completion is coordinated through persisted deterministic evidence; background-task metadata is optional adapter input.
-  references:
-    - .quality/traces/agentsmith/2026-08-22T04-14-53-168Z-7df84d4b-5967-4bd8-9f6e-5ceb338229d6/trace.json
-expectedInspectionTargets:
-  files:
-    - src/hooks/runner.ts
-    - src/hooks/adapters/claude.ts
-    - src/core/status.ts
-  symbols:
-    - src/hooks/runner.ts#bgTasks
-    - src/hooks/adapters/claude.ts#getBackgroundTasks
-    - src/core/status.ts#getQualityStatus
-  edges:
-    - src/hooks/runner.ts:bgTasks->src/hooks/adapters/claude.ts:getBackgroundTasks:calls
-tags:
-  - large-diff
-  - duplicate-planning
-  - evidence-contract
-  - clear
+  trueCodeFlow: Candidate completion uses persisted deterministic evidence; background-task metadata and audit logging are non-authoritative inputs.
+  references: []
+tags: [large-diff, duplicate-planning, evidence-contract, negative-control, awaiting-fixture, non-hermetic]

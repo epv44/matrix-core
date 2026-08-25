@@ -46,4 +46,26 @@ describe("v2 policy runner", () => {
     );
     fs.rmSync(root, { recursive: true, force: true });
   });
+
+  it("uses the shared execution pipeline for SQL facets", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-runner-sql-"));
+    fs.writeFileSync(
+      path.join(root, "quality.yaml"),
+      "version: 2\nproject: sql\napplication:\n  sql:\n    - root: queries\n      dialect: sqlite\n      templater: raw\n      sources: [files]\n",
+    );
+    fs.mkdirSync(path.join(root, "queries"));
+    fs.writeFileSync(path.join(root, "app.py"), "value = 1\n");
+    fs.writeFileSync(path.join(root, "queries", "query.sql"), "select 1;\n");
+    const result = await runEngine({ cwd: root });
+    expect(result.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          plugin: "sql.sqlfluff",
+          pack: "sql",
+          reason: "required SQL tool environment missing",
+        }),
+      ]),
+    );
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 });

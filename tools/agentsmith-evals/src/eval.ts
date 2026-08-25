@@ -1,170 +1,32 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import yaml from "js-yaml";
-import { z } from "zod";
-import type { ReviewFinding } from "../core/types.js";
-import { resolveConfig } from "../core/config-resolver.js";
-import { resolvePolicyForConfig } from "../core/resolved-policy.js";
-import { OllamaProvider, type ReviewProvider } from "./provider.js";
-import { executeReviewEngine } from "./engine.js";
-import { readAgentSmithTrace, type AgentSmithTrace } from "./trace.js";
+import type { ReviewFinding } from "../../../src/core/types.js";
+import { resolveConfig } from "../../../src/core/config-resolver.js";
+import { resolvePolicyForConfig } from "../../../src/core/resolved-policy.js";
+import { ENGINE_VERSION } from "../../../src/core/meta.js";
+import { OllamaProvider, type ReviewProvider } from "../../../src/agentsmith/provider.js";
+import { executeReviewEngine } from "../../../src/agentsmith/engine.js";
+import { AGENTSMITH_STRATEGY_HASH } from "../../../src/agentsmith/strategy.js";
 import { collectEvalMetrics } from "./eval-metrics.js";
 import { PlannerReviewProvider, RecordedReviewProvider } from "./eval-provider.js";
+import { corpusHash, listEvalCases, materializeEvalRun, readEvalCase, type EvalCase } from "./case.js";
+import { evaluateStages, formatStageScorecard, type EvalStage } from "./stage-score.js";
 
-const CASE_SCHEMA_VERSION = 2;
-const slugPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export type EvalMode =
   "holistic" | "partitioned-local" | "partitioned-evidence" | "partitioned-interactions" | "hybrid";
-export type EvalReplayMode = "live" | "recorded" | "planner";
+export type EvalReplayMode = "live" | "recorded" | "stage";
+type ExpectedFinding = NonNullable<EvalCase["expectations"]["aggregation"]>["findings"][number];
+type InspectionTargets = { files: string[]; symbols: string[]; edges: string[] };
 
-const expectedFindingSchema = z.object({
-  id: z.string().min(1),
-  file: z.string().min(1),
-  lineStart: z.number().int().positive(),
-  lineEnd: z.number().int().positive(),
-  severity: z.enum(["critical", "high", "medium", "low"]).optional(),
-  category: z.enum(["correctness", "security", "performance", "contract"]).optional(),
-  discoveryClass: z.enum(["L0", "L1", "L2", "L3"]),
-  requiredEvidence: z.array(z.string()).default([]),
-  symbols: z.array(z.string()).default([]),
-  graphDistance: z.number().int().min(0).max(3).optional(),
-  description: z.string().default(""),
-  rationale: z.string().default(""),
-});
-const evalCaseSchema = z
-  .object({
-    schemaVersion: z.literal(CASE_SCHEMA_VERSION),
-    id: z.string().min(1),
-    sourceTraceId: z.string().min(1),
-    expectedOutcome: z.enum(["clear", "findings"]),
-    expectedFindings: z.array(expectedFindingSchema).default([]),
-    originalCandidates: z
-      .array(
-        z.object({
-          candidateId: z.string(),
-          label: z.enum(["unreviewed", "accepted", "rejected"]),
-          rationale: z.string().default(""),
-        }),
-      )
-      .default([]),
-    narrative: z
-      .object({
-        summary: z.string().default(""),
-        trueCodeFlow: z.string().default(""),
-        references: z.array(z.string()).default([]),
-      })
-      .default({}),
-    expectedInspectionTargets: z
-      .object({
-        files: z.array(z.string()).default([]),
-        symbols: z.array(z.string()).default([]),
-        edges: z.array(z.string()).default([]),
-      })
-      .default({}),
-    tags: z.array(z.string()).default([]),
-  })
-  .superRefine((value, context) => {
-    value.expectedFindings.forEach((finding, index) => {
-      if (finding.lineEnd < finding.lineStart)
-        context.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["expectedFindings", index, "lineEnd"],
-          message: "lineEnd must be >= lineStart",
-        });
-    });
-    const derived = value.expectedFindings.length ? "findings" : "clear";
-    if (value.expectedOutcome !== derived)
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["expectedOutcome"],
-        message: `expectedOutcome must be ${derived}`,
-      });
-  });
-export type EvalCase = z.infer<typeof evalCaseSchema>;
-
-function caseDirectory(root: string, slug: string) {
-  if (!slugPattern.test(slug)) throw new Error(`Invalid eval case slug: ${slug}`);
-  return path.join(root, "evals", "agentsmith", slug);
-}
-function initialCase(trace: AgentSmithTrace, slug: string): EvalCase {
-  const expectedFindings = trace.result.findings.map((finding, index) => ({
-    id: `expected-${index + 1}`,
-    file: finding.file,
-    lineStart: finding.line,
-    lineEnd: finding.endLine ?? finding.line,
-    severity: finding.severity,
-    category: finding.category,
-    discoveryClass: "L0" as const,
-    requiredEvidence: finding.evidence.map((record) => record.id),
-    symbols: [],
-    description: finding.description,
-    rationale: "REVIEW_REQUIRED",
-  }));
-  return {
-    schemaVersion: 2,
-    id: slug,
-    sourceTraceId: trace.traceId,
-    expectedOutcome: expectedFindings.length ? "findings" : "clear",
-    expectedFindings,
-    originalCandidates: (trace.execution?.candidates ?? []).map((candidate) => ({
-      candidateId: candidate.id,
-      label: "unreviewed",
-      rationale: "",
-    })),
-    narrative: { summary: "", trueCodeFlow: "", references: [] },
-    expectedInspectionTargets: { files: [], symbols: [], edges: [] },
-    tags: [],
-  };
-}
-export function curateTrace(root: string, traceId: string, slug: string) {
-  const trace = readAgentSmithTrace(root, traceId);
-  const directory = caseDirectory(root, slug);
-  if (fs.existsSync(directory)) throw new Error(`Eval case already exists: ${directory}`);
-  fs.mkdirSync(directory, { recursive: true });
-  fs.writeFileSync(path.join(directory, "input.json"), `${JSON.stringify(trace, null, 2)}\n`, { mode: 0o600 });
-  fs.writeFileSync(
-    path.join(directory, "case.yaml"),
-    yaml.dump(initialCase(trace, slug), { noRefs: true, sortKeys: false, lineWidth: 120 }),
-    { encoding: "utf8", mode: 0o600 },
-  );
-  return {
-    directory,
-    warning:
-      "Review input.json and case.yaml for proprietary code, prompts, credentials, and personal data before committing.",
-  };
-}
-export function readEvalCase(root: string, slug: string): { definition: EvalCase; trace: AgentSmithTrace } {
-  const directory = caseDirectory(root, slug);
-  const definition = evalCaseSchema.parse(yaml.load(fs.readFileSync(path.join(directory, "case.yaml"), "utf8")));
-  if (definition.id !== slug) throw new Error(`Eval case id must match directory name: ${slug}`);
-  const trace = JSON.parse(fs.readFileSync(path.join(directory, "input.json"), "utf8")) as AgentSmithTrace;
-  if (![2, 3].includes(trace.schemaVersion) || trace.traceId !== definition.sourceTraceId)
-    throw new Error(`Eval case ${slug} references an incompatible trace`);
-  return { definition, trace };
-}
-export function listEvalCases(root: string): string[] {
-  try {
-    return fs
-      .readdirSync(path.join(root, "evals", "agentsmith"), { withFileTypes: true })
-      .filter(
-        (entry) =>
-          entry.isDirectory() && fs.existsSync(path.join(root, "evals", "agentsmith", entry.name, "case.yaml")),
-      )
-      .map((entry) => entry.name)
-      .sort();
-  } catch {
-    return [];
-  }
-}
-function findingMatches(actual: ReviewFinding, expected: EvalCase["expectedFindings"][number]) {
+function findingMatches(actual: ReviewFinding, expected: ExpectedFinding) {
   if (actual.file !== expected.file || actual.line < expected.lineStart || actual.line > expected.lineEnd) return false;
   if (expected.category && actual.category !== expected.category) return false;
   return expected.requiredEvidence.every((anchor) =>
     actual.evidence.some((record) => record.id === anchor || record.snippet.includes(anchor)),
   );
 }
-export function scoreFindings(actual: ReviewFinding[], expected: EvalCase["expectedFindings"]) {
+export function scoreFindings(actual: ReviewFinding[], expected: ExpectedFinding[]) {
   const unmatched = new Set(actual.map((_, index) => index));
   const matched: Array<{ expectedId: string; actualFindingId: string; discoveryClass: string }> = [];
   for (const gold of expected) {
@@ -201,7 +63,7 @@ export function scoreFindings(actual: ReviewFinding[], expected: EvalCase["expec
 
 export function scoreInspectionTargets(
   execution: Awaited<ReturnType<typeof executeReviewEngine>>["execution"],
-  expected: EvalCase["expectedInspectionTargets"],
+  expected: InspectionTargets,
 ) {
   const inspectedFiles = new Set(execution.workItems.flatMap((item) => item.code.map((snippet) => snippet.file)));
   const inspectedSymbols = new Set(
@@ -281,36 +143,46 @@ export async function runEvalCases(opts: {
   repeat?: number;
   provider?: ReviewProvider;
   replay?: EvalReplayMode;
+  stages?: EvalStage[];
+  label?: string;
 }) {
   const slugs = opts.slugs?.length ? opts.slugs : listEvalCases(opts.root);
   if (!slugs.length) throw new Error("No AgentSmith eval cases found");
-  const resolved = resolveConfig({ cwd: opts.root });
-  const policy = resolvePolicyForConfig(resolved);
   const replay = opts.replay ?? "live";
-  const modes = opts.modes?.length
-    ? opts.modes
-    : (["holistic", "partitioned-local", "partitioned-evidence", "partitioned-interactions", "hybrid"] as EvalMode[]);
+  const modes = opts.modes?.length ? opts.modes : (["partitioned-interactions"] as EvalMode[]);
   const repeat = Math.max(1, opts.repeat ?? 1);
   const cases = [];
   for (const slug of slugs) {
     const { definition, trace } = readEvalCase(opts.root, slug);
+    if (definition.status !== "active") throw new Error(`Eval case ${slug} is draft and cannot be replayed`);
+    if (!definition.source.fixture) throw new Error(`Eval case ${slug} has no frozen fixture`);
+    const expectedFindings = definition.expectations.aggregation?.findings ?? [];
+    const expectedOutcome = definition.expectations.aggregation?.outcome ?? null;
+    const expectedCandidates =
+      definition.expectations.verification?.candidates ?? definition.expectations.candidates?.items ?? [];
+    const rejectedCandidates = expectedCandidates.filter((candidate) => candidate.expectedVerdict !== "verified");
     const results = [];
     for (let iteration = 0; iteration < repeat; iteration++)
       for (const mode of modes) {
         const started = Date.now();
+        let cleanup: (() => void) | undefined;
         try {
+          const replayWorkspace = materializeEvalRun(opts.root, slug);
+          cleanup = replayWorkspace.cleanup;
+          const resolved = resolveConfig({ cwd: replayWorkspace.root });
+          const policy = resolvePolicyForConfig(resolved);
           const config = modeConfig(mode, resolved.config.agentsmith!);
           const provider =
             opts.provider ??
             (replay === "recorded"
               ? new RecordedReviewProvider(trace)
-              : replay === "planner"
+              : replay === "stage"
                 ? new PlannerReviewProvider(config)
                 : new OllamaProvider(config));
           const execution = await executeReviewEngine({
-            root: opts.root,
+            root: replayWorkspace.root,
             version: trace.version,
-            scope: trace.scope,
+            scope: { ...trace.scope, root: replayWorkspace.root },
             config,
             provider,
             profileHash: policy.agentSmith.hash,
@@ -322,13 +194,17 @@ export async function runEvalCases(opts: {
               resolveEvidence: mode !== "partitioned-local",
             },
           });
-          const promotedRejectedCandidates = definition.originalCandidates
-            .filter(
-              (candidate) =>
-                candidate.label === "rejected" &&
-                execution.result.findings.some((finding) => finding.id === candidate.candidateId),
+          const promotedRejectedCandidates = rejectedCandidates
+            .filter((candidate) =>
+              execution.result.findings.some(
+                (finding) =>
+                  finding.file === candidate.file &&
+                  finding.line >= candidate.lineStart &&
+                  finding.line <= candidate.lineEnd &&
+                  (!candidate.category || finding.category === candidate.category),
+              ),
             )
-            .map((candidate) => candidate.candidateId);
+            .map((candidate) => candidate.id);
           const durationMs = Date.now() - started;
           const benchmark = collectEvalMetrics({
             scope: trace.scope,
@@ -336,10 +212,42 @@ export async function runEvalCases(opts: {
             execution: execution.execution,
             durationMs,
           });
-          const findingMetrics = scoreFindings(execution.result.findings, definition.expectedFindings);
-          const inspectionTargets = scoreInspectionTargets(execution.execution, definition.expectedInspectionTargets);
+          const findingMetrics = scoreFindings(execution.result.findings, expectedFindings);
+          const inspectionTargets = scoreInspectionTargets(
+            execution.execution,
+            definition.expectations.planning ?? definition.expectations.graph ?? { files: [], symbols: [], edges: [] },
+          );
+          let stages = evaluateStages({
+            definition,
+            trace,
+            execution: execution.execution,
+            result: execution.result,
+            tier: replay,
+            hermetic: true,
+            selected: opts.stages,
+          });
+          const recordedMisses =
+            replay === "recorded"
+              ? (execution.result.errors ?? []).filter((message) => /Recorded replay miss/.test(message))
+              : [];
+          if (recordedMisses.length) {
+            const dependentStages = new Set<EvalStage>([
+              "candidates",
+              "evidence",
+              "verification",
+              "aggregation",
+              "reporting",
+            ]);
+            stages = stages.map((stage) =>
+              dependentStages.has(stage.stage)
+                ? { ...stage, evaluation: "incompatible" as const, metrics: [], diagnostics: recordedMisses }
+                : stage,
+            );
+          }
           results.push({
             mode,
+            tier: replay,
+            iteration,
             outcome: execution.result.outcome,
             findings: execution.result.findings,
             coverage: execution.result.coverage,
@@ -347,33 +255,90 @@ export async function runEvalCases(opts: {
             metrics: findingMetrics,
             benchmark,
             inspectionTargets,
-            qualityEvaluable: definition.expectedFindings.length > 0 || benchmark.coverage.changedFiles.rate === 1,
-            outcomeCorrect: execution.result.outcome === definition.expectedOutcome,
+            stages,
+            qualityEvaluable:
+              replay !== "stage" && !recordedMisses.length && Boolean(definition.expectations.aggregation),
+            outcomeCorrect:
+              replay !== "stage" && !recordedMisses.length && expectedOutcome
+                ? execution.result.outcome === expectedOutcome
+                : null,
             promotedRejectedCandidates,
             inputTokens: execution.execution.inputTokens,
             outputTokens: execution.execution.outputTokens,
             diagnostics: evaluationDiagnostics(execution),
-            errors: execution.result.errors ?? [],
+            errors: recordedMisses.length ? [] : (execution.result.errors ?? []),
+            incompatibilities: recordedMisses,
+            provenance: {
+              fixtureDigest: replayWorkspace.fixtureDigest,
+              traceSchemaVersion: trace.schemaVersion,
+              evaluatorVersion: ENGINE_VERSION,
+              policyHash: policy.policyHash,
+              agentSmithProfileHash: policy.agentSmith.hash,
+              strategyHash: AGENTSMITH_STRATEGY_HASH,
+              graphSchemaVersion: execution.execution.graphSnapshot.schemaVersion,
+              graphProviderVersions: execution.execution.graphSnapshot.providerVersions,
+              models: config.model_profiles.map((profile) => ({ id: profile.id, model: profile.model })),
+            },
           });
         } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const incompatible = replay === "recorded" && /Recorded replay miss/.test(message);
           results.push({
             mode,
+            tier: replay,
+            iteration,
             outcome: "incomplete" as const,
             findings: [],
             durationMs: Date.now() - started,
-            metrics: scoreFindings([], definition.expectedFindings),
-            outcomeCorrect: false,
+            metrics: scoreFindings([], expectedFindings),
+            stages: (
+              opts.stages ?? [
+                "snapshot",
+                "graph",
+                "planning",
+                "candidates",
+                "evidence",
+                "verification",
+                "aggregation",
+                "reporting",
+              ]
+            ).map((stage) => ({
+              stage,
+              evaluation: incompatible ? ("incompatible" as const) : ("not-evaluable" as const),
+              metrics: [],
+              diagnostics: [message],
+            })),
+            qualityEvaluable: false,
+            outcomeCorrect: null,
             promotedRejectedCandidates: [],
             inputTokens: 0,
             outputTokens: 0,
-            errors: [error instanceof Error ? error.message : String(error)],
+            errors: incompatible ? [] : [message],
+            incompatibilities: incompatible ? [message] : [],
           });
+        } finally {
+          cleanup?.();
         }
       }
-    cases.push({ id: slug, expectedOutcome: definition.expectedOutcome, results });
+    cases.push({
+      id: slug,
+      kind: definition.kind,
+      expectedOutcome,
+      results,
+    });
   }
   const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID()}`;
-  const reportBase = { schemaVersion: 3, runId, createdAt: new Date().toISOString(), replay, modes, repeat, cases };
+  const reportBase = {
+    schemaVersion: 5,
+    runId,
+    label: opts.label ?? null,
+    createdAt: new Date().toISOString(),
+    corpusHash: corpusHash(opts.root, slugs),
+    replay,
+    modes,
+    repeat,
+    cases,
+  };
   const report = { ...reportBase, summary: summarizeEvalReport(reportBase) };
   const directory = path.join(opts.root, ".quality", "evals", "runs", runId);
   fs.mkdirSync(directory, { recursive: true });
@@ -382,14 +347,19 @@ export async function runEvalCases(opts: {
     `# AgentSmith eval ${runId}`,
     "",
     `Replay: ${replay}`,
+    `Corpus: ${report.corpusHash}`,
     "",
     ...cases.flatMap((item) => [
       `## ${item.id}`,
       "",
-      ...item.results.map(
-        (result) =>
-          `- ${result.mode}: outcome ${result.outcome} (expected ${item.expectedOutcome}); precision ${result.qualityEvaluable ? result.metrics.precision.toFixed(3) : "N/A"}, recall ${result.qualityEvaluable ? result.metrics.recall.toFixed(3) : "N/A"}, F1 ${result.qualityEvaluable ? result.metrics.f1.toFixed(3) : "N/A"}; file coverage ${result.benchmark ? `${((result.benchmark.coverage.changedFiles.rate ?? 0) * 100).toFixed(1)}%` : "N/A"}; line coverage ${result.benchmark ? `${((result.benchmark.coverage.changedLines.rate ?? 0) * 100).toFixed(1)}%` : "N/A"}; adjudication ${result.benchmark ? `${((result.benchmark.candidates.adjudicationRate ?? 0) * 100).toFixed(1)}%` : "N/A"}; evidence relevance ${result.benchmark?.evidence.relevanceRate === null || !result.benchmark ? "N/A" : `${(result.benchmark.evidence.relevanceRate * 100).toFixed(1)}%`}; honest ${result.benchmark?.honesty.honest ?? false}; tokens ${result.inputTokens}/${result.outputTokens}; ${result.promotedRejectedCandidates.length} rejected-candidate promotion(s); ${result.errors.length} error(s)`,
-      ),
+      ...item.results.flatMap((result) => [
+        `### ${result.mode} · iteration ${result.iteration + 1}`,
+        "",
+        `Outcome: ${result.outcome}${result.qualityEvaluable ? ` (expected ${item.expectedOutcome ?? "N/A"})` : " (diagnostic only)"}; F1 ${result.qualityEvaluable ? result.metrics.f1.toFixed(3) : "N/A"}; tokens ${result.inputTokens}/${result.outputTokens}; ${result.promotedRejectedCandidates.length} rejected-candidate promotion(s); ${result.errors.length} harness error(s).`,
+        "",
+        ...formatStageScorecard(result.stages),
+        "",
+      ]),
       "",
     ]),
   ].join("\n");
@@ -403,6 +373,36 @@ function mean(values: number[]): number | null {
 
 function numeric(values: Array<number | null | undefined>): number[] {
   return values.filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+}
+
+function standardDeviation(values: number[]): number | null {
+  if (!values.length) return null;
+  const average = mean(values)!;
+  return Math.sqrt(values.reduce((sum, value) => sum + (value - average) ** 2, 0) / values.length);
+}
+
+function summarizeStages(results: any[]) {
+  const keys = new Set<string>();
+  for (const result of results)
+    for (const stage of result.stages ?? [])
+      for (const metric of stage.metrics ?? [])
+        if (typeof metric.value === "number") keys.add(`${stage.stage}.${metric.name}`);
+  return Object.fromEntries(
+    [...keys].sort().map((key) => {
+      const [stageName, ...metricParts] = key.split(".");
+      const metricName = metricParts.join(".");
+      const values = numeric(
+        results.flatMap((result) =>
+          (result.stages ?? [])
+            .filter((stage: any) => stage.stage === stageName)
+            .flatMap((stage: any) =>
+              stage.metrics.filter((metric: any) => metric.name === metricName).map((metric: any) => metric.value),
+            ),
+        ),
+      );
+      return [key, { mean: mean(values), standardDeviation: standardDeviation(values), runs: values.length }];
+    }),
+  );
 }
 
 export function summarizeEvalReport(report: { cases: Array<{ id: string; results: any[] }> }) {
@@ -430,15 +430,27 @@ export function summarizeEvalReport(report: { cases: Array<{ id: string; results
         outputTokens: mean(numeric(results.map((result) => result.outputTokens))),
         honestRunRate: mean(results.map((result) => (result.benchmark?.honesty.honest ? 1 : 0))),
         errorRuns: results.filter((result) => result.errors?.length).length,
+        incompatibleRuns: results.filter((result) => result.incompatibilities?.length).length,
+        outcomeAgreement:
+          results.length > 0
+            ? Math.max(
+                ...[...new Set(results.map((result) => result.outcome))].map(
+                  (outcome) => results.filter((result) => result.outcome === outcome).length / results.length,
+                ),
+              )
+            : null,
+        stageMetrics: summarizeStages(results),
       };
     });
   });
 }
 
 export function compareEvalReports(
-  baseline: { cases: Array<{ id: string; results: any[] }> },
-  current: { cases: Array<{ id: string; results: any[] }> },
+  baseline: { corpusHash?: string; cases: Array<{ id: string; results: any[] }> },
+  current: { corpusHash?: string; cases: Array<{ id: string; results: any[] }> },
 ) {
+  if (baseline.corpusHash && current.corpusHash && baseline.corpusHash !== current.corpusHash)
+    throw new Error("Eval reports use different corpus hashes and cannot be compared");
   const before = new Map(summarizeEvalReport(baseline).map((item) => [`${item.caseId}:${item.mode}`, item]));
   return summarizeEvalReport(current).map((item) => {
     const prior = before.get(`${item.caseId}:${item.mode}`);
@@ -467,6 +479,16 @@ export function compareEvalReports(
         inputTokens: delta("inputTokens"),
         outputTokens: delta("outputTokens"),
         honestRunRate: delta("honestRunRate"),
+        outcomeAgreement: delta("outcomeAgreement"),
+        stageMetrics: Object.fromEntries(
+          Object.entries(item.stageMetrics ?? {}).map(([key, value]: [string, any]) => {
+            const beforeValue = (prior as any)?.stageMetrics?.[key]?.mean;
+            return [
+              key,
+              typeof beforeValue === "number" && typeof value.mean === "number" ? value.mean - beforeValue : null,
+            ];
+          }),
+        ),
       },
     };
   });

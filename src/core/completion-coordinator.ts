@@ -7,6 +7,8 @@ import { computeWorkspaceVersion } from "./version.js";
 import { resolveConfig } from "./config-resolver.js";
 import { resolvePolicyForConfig } from "./resolved-policy.js";
 import type { QualityCompletionResult } from "./types.js";
+import { atomicWriteFile, readJsonFile } from "./filesystem.js";
+import { isProcessAlive } from "./process.js";
 
 interface CompletionIdentity {
   repositoryHash: string;
@@ -48,28 +50,8 @@ function sameIdentity(left: CompletionIdentity, right: CompletionIdentity): bool
   return left.repositoryHash === right.repositoryHash && left.policyHash === right.policyHash;
 }
 
-function readJson<T>(file: string): T | null {
-  try {
-    return JSON.parse(fs.readFileSync(file, "utf8")) as T;
-  } catch {
-    return null;
-  }
-}
-
 function atomicWrite(file: string, value: unknown): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`);
-  fs.renameSync(temporary, file);
-}
-
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
+  atomicWriteFile(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function appendEvent(root: string, event: Record<string, unknown>): void {
@@ -112,9 +94,9 @@ async function coordinatedRun(
       descriptor = fs.openSync(lockPath, "wx");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const active = readJson<CompletionLock>(lockPath);
+      const active = readJsonFile<CompletionLock>(lockPath);
       const expired = active ? Date.parse(active.leaseUntil) <= Date.now() : false;
-      const dead = active ? active.hostname === os.hostname() && !processAlive(active.pid) : false;
+      const dead = active ? active.hostname === os.hostname() && !isProcessAlive(active.pid) : false;
       let malformedAndStale = false;
       if (!active) {
         try {
@@ -122,7 +104,7 @@ async function coordinatedRun(
         } catch {}
       }
       if ((active && (expired || dead)) || malformedAndStale) {
-        const latest = readJson<CompletionLock>(lockPath);
+        const latest = readJsonFile<CompletionLock>(lockPath);
         if ((active && latest?.runId === active.runId) || (!active && latest === null)) {
           fs.unlinkSync(lockPath);
           appendEvent(root, {
@@ -136,7 +118,7 @@ async function coordinatedRun(
       const joinedRunId = active?.runId;
       appendEvent(root, { type: "run_joined", runId: joinedRunId ?? null, pid: process.pid });
       while (fs.existsSync(lockPath)) await wait(100, signal);
-      const completed = readJson<StoredCompletionResult>(resultPath);
+      const completed = readJsonFile<StoredCompletionResult>(resultPath);
       if (completed && completed.runId === joinedRunId && sameIdentity(completed.identity, requestedIdentity)) {
         if (completed.status === "COMPLETED" && completed.result) return completed.result;
         throw new Error(completed.error ?? "Joined completion run failed");
@@ -205,7 +187,7 @@ async function coordinatedRun(
     } finally {
       clearInterval(heartbeat);
       fs.closeSync(descriptor);
-      const current = readJson<CompletionLock>(lockPath);
+      const current = readJsonFile<CompletionLock>(lockPath);
       if (current?.runId === runId) fs.unlinkSync(lockPath);
     }
   }

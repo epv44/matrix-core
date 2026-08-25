@@ -4,9 +4,10 @@ import path from "node:path";
 import type { QualityPlugin } from "../interface.js";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
 import { verboseEnabled } from "../../core/verbose.js";
+import { getCheckConfig } from "../common.js";
 
 function getCfg(ctx: RunCtx) {
-  return ctx.config?.checks?.pytest ?? ctx.config?.checks?.["python.pytest"];
+  return getCheckConfig(ctx, ["pytest", "python.pytest"]);
 }
 
 function findPy(caps: Map<string, Capability>): string | null {
@@ -110,6 +111,25 @@ function parsePct(p: string | null): number | null {
   }
 }
 
+function pytestMetrics(
+  testCount: number | null,
+  passed: number | null,
+  failed: number | null,
+  coverage: number | null,
+): Record<string, number | null> {
+  return {
+    "python.pytest.test_count": testCount,
+    "pytest.test_count": testCount,
+    "python.pytest.passed": passed,
+    "pytest.passed": passed,
+    "python.pytest.failed": failed,
+    "pytest.failed": failed,
+    "python.pytest.coverage_percent": coverage,
+    "pytest.coverage_percent": coverage,
+    "python.coverage_percent": coverage,
+  };
+}
+
 export const pytestPlugin: QualityPlugin = {
   name: "python.pytest",
   pack: "python",
@@ -123,16 +143,7 @@ export const pytestPlugin: QualityPlugin = {
         observations: [
           { message: "pytest skipped in fast hook mode (run quality_run mode=full for suite)", severity: "info" },
         ],
-        metrics: {
-          "python.pytest.test_count": 0,
-          "pytest.test_count": 0,
-          "python.pytest.passed": 0,
-          "pytest.passed": 0,
-          "python.pytest.failed": 0,
-          "pytest.failed": 0,
-          "pytest.coverage_percent": null,
-          "python.coverage_percent": null,
-        },
+        metrics: pytestMetrics(0, 0, 0, null),
         score: null,
         reason: "fast mode - deferred to full gate",
       };
@@ -143,16 +154,7 @@ export const pytestPlugin: QualityPlugin = {
         plugin: "python.pytest",
         status: req ? "FAIL" : "SKIPPED",
         observations: [{ message: "pytest executable not found", severity: req ? "error" : "info" }],
-        metrics: {
-          "python.pytest.test_count": null,
-          "pytest.test_count": null,
-          "python.pytest.passed": null,
-          "pytest.passed": null,
-          "python.pytest.failed": null,
-          "pytest.failed": null,
-          "python.coverage_percent": null,
-          "pytest.coverage_percent": null,
-        },
+        metrics: pytestMetrics(null, null, null, null),
         reason: req ? "executable not found but required=true" : "executable not found, required=false",
       };
     }
@@ -164,16 +166,7 @@ export const pytestPlugin: QualityPlugin = {
           plugin: "python.pytest",
           status: "PASS",
           observations: [],
-          metrics: {
-            "python.pytest.test_count": 0,
-            "pytest.test_count": 0,
-            "python.pytest.passed": 0,
-            "pytest.passed": 0,
-            "python.pytest.failed": 0,
-            "pytest.failed": 0,
-            "python.pytest.coverage_percent": null,
-            "pytest.coverage_percent": null,
-          },
+          metrics: pytestMetrics(0, 0, 0, null),
           score: 100,
           reason: "no relevant files changed",
         };
@@ -187,7 +180,7 @@ export const pytestPlugin: QualityPlugin = {
           plugin: "python.pytest",
           status: "ERROR",
           observations: [{ message: "could not resolve pytest binary", severity: "error" }],
-          metrics: { "python.pytest.test_count": null, "pytest.test_count": null, "pytest.coverage_percent": null },
+          metrics: pytestMetrics(null, null, null, null),
           reason: "binary resolution failed",
         };
       const cov = getCov(py);
@@ -199,7 +192,7 @@ export const pytestPlugin: QualityPlugin = {
           plugin: "python.pytest",
           status: "ERROR",
           observations: [{ message: run.out.slice(0, 2000), severity: "error" }],
-          metrics: { "python.pytest.test_count": null, "pytest.coverage_percent": null },
+          metrics: pytestMetrics(null, null, null, null),
           reason: "execution error",
         };
       if (run.st === 5) {
@@ -207,16 +200,7 @@ export const pytestPlugin: QualityPlugin = {
           plugin: "python.pytest",
           status: "SKIPPED",
           observations: [{ message: "no tests collected (pytest exit 5)", severity: "info" }],
-          metrics: {
-            "python.pytest.test_count": 0,
-            "pytest.test_count": 0,
-            "python.pytest.passed": 0,
-            "pytest.passed": 0,
-            "python.pytest.failed": 0,
-            "pytest.failed": 0,
-            "pytest.coverage_percent": null,
-            "python.coverage_percent": null,
-          },
+          metrics: pytestMetrics(0, 0, 0, null),
           score: null,
           reason: "no tests ran",
         };
@@ -238,17 +222,7 @@ export const pytestPlugin: QualityPlugin = {
         status,
         score: status === "PASS" ? 100 : 0,
         observations: obs,
-        metrics: {
-          "python.pytest.test_count": passed + failed || passed || null,
-          "pytest.test_count": passed + failed || passed || null,
-          "python.pytest.passed": passed || null,
-          "pytest.passed": passed || null,
-          "python.pytest.failed": failed || null,
-          "pytest.failed": failed || null,
-          "python.pytest.coverage_percent": pct,
-          "pytest.coverage_percent": pct,
-          "python.coverage_percent": pct,
-        },
+        metrics: pytestMetrics(passed + failed || passed || null, passed || null, failed || null, pct),
         reason: status === "FAIL" ? `pytest status ${run.st}` : pct != null ? `coverage ${pct.toFixed(1)}%` : undefined,
       };
     } catch (e: any) {
@@ -256,7 +230,7 @@ export const pytestPlugin: QualityPlugin = {
         plugin: "python.pytest",
         status: "ERROR",
         observations: [{ message: e.message, severity: "error" }],
-        metrics: { "python.pytest.test_count": null, "pytest.coverage_percent": null },
+        metrics: pytestMetrics(null, null, null, null),
         reason: "exception",
       };
     }

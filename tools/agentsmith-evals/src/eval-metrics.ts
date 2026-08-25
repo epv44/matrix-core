@@ -1,11 +1,15 @@
-import type { ReviewResult } from "../core/types.js";
-import type { EngineExecution, ReviewWorkItem } from "./engine-types.js";
-import type { ReviewScope } from "./scope.js";
-import type { AgentSmithTrace } from "./trace.js";
-import { evidenceLocatorParts } from "./evidence.js";
+import type { ReviewResult } from "../../../src/core/types.js";
+import type { EngineExecution, ReviewWorkItem } from "../../../src/agentsmith/engine-types.js";
+import type { ReviewScope } from "../../../src/agentsmith/scope.js";
+import type { AgentSmithTrace } from "../../../src/agentsmith/trace.js";
+import { evidenceLocatorParts } from "../../../src/agentsmith/evidence.js";
 
 function ratio(numerator: number, denominator: number): number | null {
   return denominator > 0 ? numerator / denominator : null;
+}
+
+function isMaterialSeverity(candidate: { severity: string }): boolean {
+  return ["critical", "high"].includes(candidate.severity);
 }
 
 function changedLineRanges(diff: string): Map<string, Array<{ start: number; end: number }>> {
@@ -106,14 +110,14 @@ export function collectEvalMetrics(opts: {
   const modelAdjudicated = execution.verification.filter((item) => item.cacheStatus !== undefined).length;
   const omittedIds = new Set(candidateOmissions.map((item) => item.id));
   const omittedHighSeverity = execution.candidates.filter(
-    (candidate) => omittedIds.has(candidate.id) && ["critical", "high"].includes(candidate.severity),
+    (candidate) => omittedIds.has(candidate.id) && isMaterialSeverity(candidate),
   ).length;
   const tokenOmittedCandidateIds = new Set(
     candidateOmissions.filter((item) => item.reason === "token-budget").map((item) => item.id),
   );
   const materialCandidateOmissions = new Set([
     ...execution.candidates
-      .filter((candidate) => omittedIds.has(candidate.id) && ["critical", "high"].includes(candidate.severity))
+      .filter((candidate) => omittedIds.has(candidate.id) && isMaterialSeverity(candidate))
       .map((candidate) => candidate.id),
     ...tokenOmittedCandidateIds,
   ]).size;

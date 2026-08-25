@@ -1,10 +1,16 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { CandidateFinding, EvidencePolicy, EvidenceRecord, EvidenceRequest } from "../core/types.js";
+import type {
+  CandidateFinding,
+  EvidencePolicy,
+  EvidenceRecord,
+  EvidenceRequest,
+  EvidenceResolutionOutcome,
+} from "../core/types.js";
 import type { GraphContext } from "../core/graph/types.js";
 import type { ReviewScope } from "./scope.js";
 import { changedRanges } from "./projection.js";
+import { sha256Json } from "../core/hash.js";
 
 function safePath(root: string, value: string) {
   const relative = path.normalize(value).replaceAll("\\", "/").replace(/^\.\//, "");
@@ -53,20 +59,25 @@ export function evidenceLocatorParts(request: EvidenceRequest): {
   };
 }
 
+export function evidenceRequestId(request: EvidenceRequest): string {
+  return sha256Json(
+    { kind: request.kind, symbol: request.symbol ?? "", pathHint: request.pathHint ?? "", query: request.query ?? "" },
+    16,
+  );
+}
+
 function record(
+  requestId: string,
   request: EvidenceRequest,
   file: string,
   startLine: number,
   lines: string[],
   symbol?: string,
   relation?: string,
+  matchedLocator?: string,
 ): EvidenceRecord {
   const snippet = lines.join("\n");
-  const id = crypto
-    .createHash("sha256")
-    .update(JSON.stringify({ file, startLine, snippet, symbol }))
-    .digest("hex")
-    .slice(0, 16);
+  const id = sha256Json({ requestId, file, startLine, snippet, symbol }, 16);
   return {
     id,
     requestKind: request.kind,
@@ -76,6 +87,9 @@ function record(
     symbol,
     snippet,
     relation,
+    requestId,
+    matchedLocator,
+    reason: request.reason,
   };
 }
 
@@ -111,9 +125,10 @@ export function resolveEvidenceRequests(opts: {
   scope: ReviewScope;
   graph: GraphContext;
   policy: EvidencePolicy;
-}): { records: EvidenceRecord[]; gaps: string[] } {
+}): { records: EvidenceRecord[]; gaps: string[]; outcomes: EvidenceResolutionOutcome[] } {
   const records: EvidenceRecord[] = [];
   const gaps: string[] = [];
+  const outcomes: EvidenceResolutionOutcome[] = [];
   const symbols = opts.graph.nodes.map((node) => node.symbol);
   const maxPerRequest = opts.policy.maxRecordsPerRequest ?? 3;
   const maxPerCandidate = opts.policy.maxRecordsPerCandidate ?? 8;
@@ -126,11 +141,16 @@ export function resolveEvidenceRequests(opts: {
     ).values(),
   ].slice(0, opts.policy.maxRequestsPerCandidate);
   for (const request of requests) {
-    if (records.length >= maxPerCandidate) break;
-    let matched = false;
-    let requestRecords = 0;
+    const requestId = evidenceRequestId(request);
+    if (records.length >= maxPerCandidate) {
+      const reason = "candidate evidence record limit reached";
+      outcomes.push({ requestId, request, status: "unresolved", records: [], reason });
+      gaps.push(`${request.kind}: ${reason}`);
+      continue;
+    }
+    const requestRecords: EvidenceRecord[] = [];
     const locator = evidenceLocatorParts(request);
-    const selectedSymbols = symbols.filter((symbol) => {
+    const matchedSymbols = symbols.filter((symbol) => {
       const symbolFile = normalizedRepositoryPath(symbol.file);
       if (locator.pathHint && symbolFile !== locator.pathHint && !symbolFile.endsWith(`/${locator.pathHint}`))
         return false;
@@ -144,60 +164,85 @@ export function resolveEvidenceRequests(opts: {
         )
       )
         return false;
-      if (["callers", "callees", "usage"].includes(request.kind)) {
-        const key = `${symbol.file}:${symbol.qualifiedName}`;
-        return opts.graph.edges.some(
-          (edge) =>
-            edge.source === key ||
-            edge.target === key ||
-            locator.symbolCandidates.some((candidate) => edge.targetText === candidate),
-        );
-      }
       return Boolean(request.symbol || locator.pathHint);
     });
-    for (const symbol of selectedSymbols.slice(0, maxPerRequest)) {
+    const matchedFiles = new Set(matchedSymbols.map((symbol) => normalizedRepositoryPath(symbol.file)));
+    if (!locator.pathHint && matchedFiles.size > 1) {
+      const reason = `ambiguous locator matched ${matchedFiles.size} files: ${[...matchedFiles].sort().join(", ")}`;
+      outcomes.push({ requestId, request, status: "unresolved", records: [], reason });
+      gaps.push(`${request.kind}: ${reason}`);
+      continue;
+    }
+    const selectedSymbols = new Map<string, (typeof symbols)[number]>();
+    if (["callers", "callees", "usage"].includes(request.kind)) {
+      const matchedKeys = new Set(matchedSymbols.map((symbol) => `${symbol.file}:${symbol.qualifiedName}`));
+      for (const edge of opts.graph.edges) {
+        const relatedKeys =
+          request.kind === "callees"
+            ? matchedKeys.has(edge.source) && edge.target
+              ? [edge.target]
+              : []
+            : request.kind === "callers"
+              ? edge.target && matchedKeys.has(edge.target)
+                ? [edge.source]
+                : []
+              : [
+                  ...(matchedKeys.has(edge.source) && edge.target ? [edge.target] : []),
+                  ...(edge.target && matchedKeys.has(edge.target) ? [edge.source] : []),
+                ];
+        for (const key of relatedKeys) {
+          const related = symbols.find((symbol) => `${symbol.file}:${symbol.qualifiedName}` === key);
+          if (related) selectedSymbols.set(key, related);
+        }
+      }
+    } else {
+      for (const symbol of matchedSymbols) selectedSymbols.set(`${symbol.file}:${symbol.qualifiedName}`, symbol);
+    }
+    for (const symbol of [...selectedSymbols.values()].slice(0, maxPerRequest)) {
       const lines = readLines(opts.scope, symbol.file);
       if (!lines.length) continue;
       const start = Math.max(1, symbol.startLine);
       const end = Math.min(lines.length, symbol.endLine, start + opts.policy.maxSnippetLines - 1);
-      records.push(
-        record(request, symbol.file, start, lines.slice(start - 1, end), symbol.qualifiedName, request.kind),
+      requestRecords.push(
+        record(
+          requestId,
+          request,
+          symbol.file,
+          start,
+          lines.slice(start - 1, end),
+          symbol.qualifiedName,
+          request.kind,
+          locator.symbolCandidates[0],
+        ),
       );
-      matched = true;
-      requestRecords += 1;
-      if (records.length >= maxPerCandidate || requestRecords >= maxPerRequest) break;
+      if (records.length + requestRecords.length >= maxPerCandidate || requestRecords.length >= maxPerRequest) break;
     }
     const fallbackPath = locator.pathHint ?? opts.candidate.file;
-    if (!matched && fallbackPath && records.length < maxPerCandidate) {
+    if (!requestRecords.length && fallbackPath && records.length < maxPerCandidate) {
       const resolved = safePath(opts.scope.root, fallbackPath);
       const lines = resolved ? readLines(opts.scope, resolved.relative) : [];
       if (resolved && lines.length) {
         const query = locator.textQueries.find((candidate) => lines.some((line) => line.includes(candidate)));
-        const candidateFile = normalizedRepositoryPath(opts.candidate.file);
-        const index = query
-          ? lines.findIndex((line) => line.includes(query))
-          : resolved.relative === candidateFile
-            ? Math.max(0, Math.min(lines.length - 1, opts.candidate.line - 1))
-            : -1;
+        const index = query ? lines.findIndex((line) => line.includes(query)) : -1;
         if (index >= 0) {
           const startIndex = Math.max(0, index - 12);
-          records.push(
+          requestRecords.push(
             record(
+              requestId,
               request,
               resolved.relative,
               startIndex + 1,
               lines.slice(startIndex, startIndex + opts.policy.maxSnippetLines),
               locator.symbolCandidates.at(-1) ?? request.symbol,
               request.kind,
+              query,
             ),
           );
-          matched = true;
-          requestRecords += 1;
         }
       }
     }
     if (
-      !matched &&
+      !requestRecords.length &&
       ["search", "config", "test", "schema"].includes(request.kind) &&
       request.query &&
       request.query.length >= 3 &&
@@ -209,22 +254,29 @@ export function resolveEvidenceRequests(opts: {
         const index = lines.findIndex((line) => line.includes(request.query!));
         if (index < 0) continue;
         const startIndex = Math.max(0, index - 8);
-        records.push(
+        requestRecords.push(
           record(
+            requestId,
             request,
             file,
             startIndex + 1,
             lines.slice(startIndex, startIndex + Math.min(40, opts.policy.maxSnippetLines)),
             undefined,
             "literal-search",
+            request.query,
           ),
         );
-        matched = true;
-        requestRecords += 1;
-        if (records.length >= maxPerCandidate || requestRecords >= maxPerRequest) break;
+        if (records.length + requestRecords.length >= maxPerCandidate || requestRecords.length >= maxPerRequest) break;
       }
     }
-    if (!matched) gaps.push(`${request.kind}: ${request.reason}`);
+    if (requestRecords.length) {
+      records.push(...requestRecords);
+      outcomes.push({ requestId, request, status: "satisfied", records: requestRecords });
+    } else {
+      const reason = `no exact evidence matched: ${request.reason}`;
+      gaps.push(`${request.kind}: ${reason}`);
+      outcomes.push({ requestId, request, status: "unresolved", records: [], reason });
+    }
   }
-  return { records: [...new Map(records.map((item) => [item.id, item])).values()], gaps };
+  return { records: [...new Map(records.map((item) => [item.id, item])).values()], gaps, outcomes };
 }

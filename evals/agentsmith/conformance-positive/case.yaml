@@ -1,0 +1,55 @@
+schemaVersion: 4
+id: conformance-positive
+status: active
+kind: conformance
+source:
+  traceId: conformance-positive-trace
+  traceSchemaVersion: 4
+  repositoryFingerprint: conformance-positive
+  fixture:
+    path: fixture/repo
+    manifestPath: fixture-manifest.json
+    digest: 13dc717431e120784e78bfed79e8af859e09670bcd79534e5456420047757df6
+  project: synthetic
+sanitization: { reviewed: true, absolutePathsRemoved: true, sensitiveContentReviewed: true, redistributable: true }
+expectations:
+  snapshot:
+    files:
+      - { path: src/producer.ts, changeKind: modified }
+  planning:
+    route: partitioned
+    files: [src/producer.ts, src/consumer.ts]
+    symbols: [src/producer.ts#loadUrl, src/consumer.ts#normalizedUrl]
+    edges: [src/consumer.ts:normalizedUrl->src/producer.ts:loadUrl:calls]
+  candidates:
+    items: &expected_candidates
+      - id: nullable-url-contract
+        file: src/producer.ts
+        lineStart: 1
+        lineEnd: 3
+        category: contract
+        expectedPresence: true
+        expectedVerdict: verified
+        requiredEvidenceKinds: [callers, usage]
+        rationale: loadUrl can now return undefined while normalizedUrl unconditionally calls trim.
+  verification:
+    candidates: *expected_candidates
+  aggregation:
+    outcome: findings
+    findings:
+      - id: nullable-url-contract
+        file: src/producer.ts
+        lineStart: 1
+        lineEnd: 3
+        category: contract
+        discoveryClass: L2
+        requiredEvidence: []
+        symbols: [loadUrl, normalizedUrl]
+        graphDistance: 1
+        description: Producer return type violates its direct consumer.
+        rationale: The caller invokes trim without handling undefined.
+narrative:
+  summary: Harness-only two-file positive control.
+  trueCodeFlow: normalizedUrl calls loadUrl and dereferences the optional result.
+  references: []
+tags: [conformance, synthetic, finding, L2]

@@ -11,6 +11,7 @@ import type { GateResult } from "./types.js";
 import { resolveWorkspaceSet } from "./workspace.js";
 import { resolvePolicyForConfig } from "./resolved-policy.js";
 import { engineRuntimeIdentity, recordEngineRuntime } from "./runtime.js";
+import { sha256Json } from "./hash.js";
 
 export interface RunGateOptions {
   cwd: string;
@@ -63,18 +64,17 @@ export async function runGate(opts: RunGateOptions): Promise<GateResult> {
   recordEngineRuntime(root, opts.adapter === "mcp" ? "mcp" : "cli");
   const mode = opts.mode ?? "full";
   const fast = opts.fast === true;
-  const baseBranch = opts.base ?? "main";
+  const baseBranch = opts.base ?? (mode === "changed" ? "working-tree" : "main");
   const changedFiles =
-    mode === "changed" ? (opts.changedFiles ?? getChangedFiles({ cwd: root, base: baseBranch })) : undefined;
+    mode === "changed"
+      ? (opts.changedFiles ?? getChangedFiles({ cwd: root, ...(opts.base ? { base: opts.base } : {}) }))
+      : undefined;
   const normalizedChangedFiles = (changedFiles ?? [])
     .map((file) =>
       path.relative(root, path.isAbsolute(file) ? file : path.resolve(root, file)).replaceAll(path.sep, "/"),
     )
     .sort();
-  const changedFilesHash =
-    mode === "changed"
-      ? crypto.createHash("sha256").update(JSON.stringify(normalizedChangedFiles)).digest("hex")
-      : null;
+  const changedFilesHash = mode === "changed" ? sha256Json(normalizedChangedFiles) : null;
   const version = computeWorkspaceVersion(root);
   const initialResolved = resolveConfig({ cwd: root, configFlag: opts.configFlag });
   const manifest = initialResolved.config;

@@ -43,6 +43,25 @@ describe("language workspace resolution", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it("detects and excludes Python virtual environments with custom directory names", () => {
+    const root = temp();
+    write(path.join(root, "app.py"), "value = 1\n");
+    write(path.join(root, "fantasy_env/pyvenv.cfg"), "home = /usr/bin\n");
+    write(path.join(root, "fantasy_env/lib/python/site-packages/vendor.py"), "vendor = True\n");
+    write(path.join(root, "fantasy_env/bin/python"));
+    write(path.join(root, "fantasy_env/bin/ruff"));
+
+    const [workspace] = resolveLanguageWorkspaces(root);
+    expect(resolveLanguageWorkspaces(root)).toHaveLength(1);
+    expect(workspace.resolutionEvidence.some((item) => item.path.includes("site-packages"))).toBe(false);
+    expect(workspace.toolEnvironment).toMatchObject({
+      kind: "python-venv",
+      root: "fantasy_env",
+      binaries: { ruff: path.join(fs.realpathSync(root), "fantasy_env/bin/ruff") },
+    });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it("sorts multiple package roots and fails closed on conflicting locks", () => {
     const root = temp();
     for (const name of ["zeta", "alpha"]) {

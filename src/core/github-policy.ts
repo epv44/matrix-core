@@ -6,6 +6,8 @@ import { z } from "zod";
 import { ENGINE_VERSION } from "./meta.js";
 import { AGENTSMITH_STRATEGY_HASH } from "../agentsmith/strategy.js";
 import type { AgentSmithProfile, GitHubPolicySource, PolicyCheck, ResolvedPolicy, WorkspaceLanguage } from "./types.js";
+import { atomicWriteFile } from "./filesystem.js";
+import { sha256 } from "./hash.js";
 
 export const POLICY_LOCK_FILE = "matrixcore-policy.lock.json";
 export const POLICY_BUNDLE_SCHEMA_VERSION = 1;
@@ -249,7 +251,7 @@ const KNOWN_CHECKS: Record<
 };
 
 function sha(value: string | Buffer): string {
-  return crypto.createHash("sha256").update(value).digest("hex");
+  return sha256(value);
 }
 
 function canonical(value: unknown): string {
@@ -577,13 +579,6 @@ function rawUrl(source: GitHubPolicySource, commit: string, relative: string): s
   return `https://raw.githubusercontent.com/${source.repository}/${commit}/${safe.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-function writeAtomic(target: string, contents: string | Buffer) {
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  fs.writeFileSync(temporary, contents);
-  fs.renameSync(temporary, target);
-}
-
 export async function syncGitHubPolicy(opts: {
   root: string;
   source: GitHubPolicySource;
@@ -678,7 +673,7 @@ export async function syncGitHubPolicy(opts: {
     },
   };
   const policy = parseCached(opts.root, opts.source, lock);
-  if (!opts.locked) writeAtomic(path.join(opts.root, POLICY_LOCK_FILE), `${JSON.stringify(lock, null, 2)}\n`);
+  if (!opts.locked) atomicWriteFile(path.join(opts.root, POLICY_LOCK_FILE), `${JSON.stringify(lock, null, 2)}\n`);
   const changes = prior
     ? [
         ...lock.summary.checks.filter((check) => !prior.summary.checks.includes(check)).map((check) => `+ ${check}`),

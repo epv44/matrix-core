@@ -1,6 +1,7 @@
 import type {
   CandidateFinding,
   EvidenceRecord,
+  EvidenceResolutionOutcome,
   ModelProfile,
   ReviewCategory,
   ReviewCoverage,
@@ -9,7 +10,7 @@ import type {
   ReviewSeverity,
   SpecialistReviewerId,
 } from "../core/types.js";
-import type { GraphContextEdge, GraphSymbol } from "../core/graph/types.js";
+import type { GraphContextEdge, GraphSnapshot, GraphSymbol } from "../core/graph/types.js";
 import type { ProviderCompletionMetadata, ProviderUsage, ReviewOutputKind } from "./provider.js";
 
 export type OmissionReason =
@@ -81,7 +82,7 @@ export interface ReviewProjection {
   graphEdges: GraphContextEdge[];
   graphSummary: string;
   deterministicReport?: string;
-  metadata: { base: string; snapshotId: string; languages: string[] };
+  metadata: { base: string | null; snapshotId: string; languages: string[] };
   audit: ProjectionAuditItem[];
   omissions: ReviewOmission[];
 }
@@ -97,6 +98,14 @@ export interface ReviewWorkItem {
   rules: RenderedRule[];
   deterministicReport?: string;
   estimatedTokens: number;
+  rankFactors?: {
+    edgeRisk: number;
+    changedEndpoints: number;
+    productionSurface: number;
+    changedLines: number;
+    graphDegree: number;
+  };
+  selectionReason?: string;
 }
 
 export interface RuleTrigger {
@@ -161,6 +170,8 @@ export interface VerificationResult {
   completion?: ProviderCompletionMetadata;
   cacheStatus?: "hit" | "miss";
   diagnostics?: ProviderFailureDiagnostic[];
+  citationRepairAttempted?: boolean;
+  providerInvocations?: number;
 }
 
 export interface ProviderFailureDiagnostic {
@@ -171,7 +182,7 @@ export interface ProviderFailureDiagnostic {
   usage: ProviderUsage;
   completion: ProviderCompletionMetadata;
   parseError: string;
-  failureKind: "json-syntax" | "schema-validation";
+  failureKind: "json-syntax" | "schema-validation" | "citation-validation";
   validationIssues: Array<{ path: string; message: string }>;
   attempt: number;
   parsePosition: number | null;
@@ -188,6 +199,7 @@ export interface RouteDecision {
 }
 
 export interface EngineExecution {
+  graphSnapshot: GraphSnapshot;
   mode: ReviewMode;
   reviewPath: ReviewPath;
   route: RouteDecision;
@@ -208,6 +220,7 @@ export interface EngineExecution {
   candidateBatches: CandidateBatch[];
   candidates: CandidateFinding[];
   evidence: Record<string, EvidenceRecord[]>;
+  evidenceOutcomes?: Record<string, EvidenceResolutionOutcome[]>;
   verification: VerificationResult[];
   providerFailures?: ProviderFailureDiagnostic[];
   providerDiagnostics?: ProviderFailureDiagnostic[];
@@ -215,4 +228,31 @@ export interface EngineExecution {
   errors: string[];
   inputTokens: number;
   outputTokens: number;
+  stageTimingsMs?: Partial<
+    Record<
+      | "snapshot"
+      | "providerHealth"
+      | "graph"
+      | "planning"
+      | "candidateGeneration"
+      | "evidence"
+      | "verification"
+      | "aggregation"
+      | "reporting",
+      number
+    >
+  >;
+  plannerManifest?: Array<{
+    id: string;
+    kind: ReviewWorkItem["kind"];
+    priority: number;
+    estimatedTokens: number;
+    selected: boolean;
+    tokenOmitted: boolean;
+    files: string[];
+    symbols: string[];
+    edges: string[];
+    rankFactors?: ReviewWorkItem["rankFactors"];
+    selectionReason?: string;
+  }>;
 }

@@ -51,7 +51,7 @@ export interface GateCfg {
   hook_timeout_ms?: number;
 }
 export interface QualityConfig {
-  version: number;
+  version: 2;
   project?: string;
   review?: {
     agentsmith: boolean;
@@ -401,6 +401,18 @@ export interface EvidenceRecord {
   symbol?: string;
   snippet: string;
   relation?: string;
+  requestId?: string;
+  matchedLocator?: string;
+  reason?: string;
+}
+
+export interface EvidenceResolutionOutcome {
+  requestId: string;
+  request: EvidenceRequest;
+  status: "satisfied" | "partial" | "unresolved" | "skipped";
+  records: EvidenceRecord[];
+  packedRecordIds?: string[];
+  reason?: string;
 }
 
 export interface CandidateFinding {
@@ -470,6 +482,14 @@ export interface ReviewCoverage {
   dependencyEdgesEligible: number;
   dependencyEdgesReviewed: number;
   evidenceRequests: number;
+  evidenceRequestsAttempted?: number;
+  evidenceRequestsSatisfied?: number;
+  evidenceRequestsPartiallySatisfied?: number;
+  evidenceRequestsUnresolved?: number;
+  evidenceRequestsSkipped?: number;
+  evidenceRecordsResolved?: number;
+  evidenceRecordsPacked?: number;
+  /** @deprecated Legacy count of packed non-anchor records. */
   evidenceResolved: number;
   evidenceGaps: number;
   globalScan: "full" | "compact" | "none";
@@ -500,6 +520,8 @@ export interface ReviewCoverage {
   cacheHits?: number;
   cacheMisses?: number;
   structuredRepairs?: number;
+  citationRepairs?: number;
+  providerInvocations?: number;
   candidateProviderMs?: number;
   verificationProviderMs?: number;
   scoutProviderMs?: number;

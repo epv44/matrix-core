@@ -1,9 +1,9 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import ts from "typescript";
 import type { LanguageWorkspace } from "./types.js";
+import { sha256 } from "./hash.js";
 
 const RESOLUTION_OPTIONS = new Set([
   "target",
@@ -34,7 +34,7 @@ const RESOLUTION_OPTIONS = new Set([
 ]);
 
 function sha(value: string) {
-  return crypto.createHash("sha256").update(value).digest("hex");
+  return sha256(value);
 }
 
 function optionToJson(name: string, value: unknown): unknown {

@@ -2,14 +2,7 @@ import { spawnSync } from "node:child_process";
 import type { QualityPlugin } from "../interface.js";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
 import { verboseEnabled } from "../../core/verbose.js";
-
-function getCfg(ctx: RunCtx, keys: string[]) {
-  for (const k of keys) {
-    const cfg = ctx.config?.checks?.[k];
-    if (cfg) return cfg;
-  }
-  return undefined;
-}
+import { getCheckConfig } from "../common.js";
 
 function tryMypy(root: string, files: string[] | undefined, extra: string[], binary = "mypy") {
   const args = [...extra, ...(files && files.length > 0 ? files : ["."])];
@@ -92,7 +85,7 @@ export const mypyPlugin: QualityPlugin = {
         reason: req ? "executable not found but required=true" : "executable not found, required=false",
       };
     }
-    const extra = ctx.policyCheck?.args ?? ((getCfg(ctx, ["python.mypy", "mypy"])?.args || []) as string[]);
+    const extra = ctx.policyCheck?.args ?? ((getCheckConfig(ctx, ["python.mypy", "mypy"])?.args || []) as string[]);
     const binary = ctx.workspace?.toolEnvironment.binaries.mypy ?? "mypy";
     const pyChanged = (ctx.changedFiles || []).filter((f) => f.endsWith(".py"));
 

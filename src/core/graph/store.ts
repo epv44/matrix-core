@@ -1,13 +1,13 @@
 import Database from "better-sqlite3";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { GraphContextEdge, GraphFile, GraphFacts, GraphSnapshot, GraphSymbol } from "./types.js";
+import { sha256Json } from "../hash.js";
 
 const SCHEMA_VERSION = 1;
 
 function hash(value: unknown): string {
-  return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  return sha256Json(value);
 }
 
 export class GraphStore {
@@ -73,48 +73,73 @@ export class GraphStore {
       .run(SCHEMA_VERSION, workspaceHash, indexedCommit, JSON.stringify(providerVersions), state);
   }
 
+  private insertFilesAndSymbols(facts: GraphFacts[]): Map<string, number> {
+    const fileIds = new Map<string, number>();
+    const insertFile = this.db.prepare("INSERT INTO files(path, language, content_hash) VALUES(?, ?, ?)");
+    for (const file of facts.flatMap((fact) => fact.files))
+      fileIds.set(file.path, Number(insertFile.run(file.path, file.language, file.contentHash).lastInsertRowid));
+
+    const symbolIds = new Map<string, number>();
+    const insertSymbol = this.db.prepare(
+      "INSERT INTO symbols(file_id, provider, kind, name, qualified_name, start_line, end_line, content_hash) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    for (const symbol of facts.flatMap((fact) => fact.symbols)) {
+      const id = Number(
+        insertSymbol.run(
+          fileIds.get(symbol.file),
+          symbol.provider,
+          symbol.kind,
+          symbol.name,
+          symbol.qualifiedName,
+          symbol.startLine,
+          symbol.endLine,
+          symbol.contentHash,
+        ).lastInsertRowid,
+      );
+      symbolIds.set(`${symbol.file}:${symbol.qualifiedName}`, id);
+    }
+    return symbolIds;
+  }
+
+  private includeStoredSymbols(symbolIds: Map<string, number>): void {
+    const rows = this.db
+      .prepare(
+        "SELECT s.id, f.path AS file, s.qualified_name AS qualifiedName FROM symbols s JOIN files f ON f.id=s.file_id",
+      )
+      .all() as Array<{ id: number; file: string; qualifiedName: string }>;
+    for (const row of rows) symbolIds.set(`${row.file}:${row.qualifiedName}`, row.id);
+  }
+
+  private insertEdges(facts: GraphFacts[], symbolIds: Map<string, number>): void {
+    const insertEdge = this.db.prepare(
+      "INSERT INTO edges(source_symbol_id, target_symbol_id, target_text, kind, confidence, provider) VALUES(?, ?, ?, ?, ?, ?)",
+    );
+    for (const edge of facts.flatMap((fact) => fact.edges)) {
+      const source = symbolIds.get(edge.source);
+      if (source)
+        insertEdge.run(
+          source,
+          edge.target ? (symbolIds.get(edge.target) ?? null) : null,
+          edge.targetText,
+          edge.kind,
+          edge.confidence,
+          edge.provider,
+        );
+    }
+  }
+
+  private completeSnapshot(snapshotHash: string): void {
+    this.db
+      .prepare("UPDATE index_meta SET completed_at=?, state='READY', snapshot_hash=? WHERE id=1")
+      .run(new Date().toISOString(), snapshotHash);
+  }
+
   replaceFacts(facts: GraphFacts[], workspaceHash: string, _indexedCommit: string | null): GraphSnapshot {
     const providerVersions = Object.fromEntries(facts.map((fact) => [fact.provider, fact.providerVersion]));
     const tx = this.db.transaction(() => {
       this.db.exec("DELETE FROM edges; DELETE FROM symbols; DELETE FROM files;");
-      const fileIds = new Map<string, number>();
-      const insertFile = this.db.prepare("INSERT INTO files(path, language, content_hash) VALUES(?, ?, ?)");
-      for (const file of facts.flatMap((fact) => fact.files))
-        fileIds.set(file.path, Number(insertFile.run(file.path, file.language, file.contentHash).lastInsertRowid));
-      const symbolIds = new Map<string, number>();
-      const insertSymbol = this.db.prepare(
-        "INSERT INTO symbols(file_id, provider, kind, name, qualified_name, start_line, end_line, content_hash) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      );
-      for (const symbol of facts.flatMap((fact) => fact.symbols)) {
-        const id = Number(
-          insertSymbol.run(
-            fileIds.get(symbol.file),
-            symbol.provider,
-            symbol.kind,
-            symbol.name,
-            symbol.qualifiedName,
-            symbol.startLine,
-            symbol.endLine,
-            symbol.contentHash,
-          ).lastInsertRowid,
-        );
-        symbolIds.set(`${symbol.file}:${symbol.qualifiedName}`, id);
-      }
-      const insertEdge = this.db.prepare(
-        "INSERT INTO edges(source_symbol_id, target_symbol_id, target_text, kind, confidence, provider) VALUES(?, ?, ?, ?, ?, ?)",
-      );
-      for (const edge of facts.flatMap((fact) => fact.edges)) {
-        const source = symbolIds.get(edge.source);
-        if (source)
-          insertEdge.run(
-            source,
-            edge.target ? (symbolIds.get(edge.target) ?? null) : null,
-            edge.targetText,
-            edge.kind,
-            edge.confidence,
-            edge.provider,
-          );
-      }
+      const symbolIds = this.insertFilesAndSymbols(facts);
+      this.insertEdges(facts, symbolIds);
       const snapshotHash = hash({
         workspaceHash,
         providerVersions,
@@ -122,9 +147,7 @@ export class GraphStore {
         symbols: facts.flatMap((fact) => fact.symbols),
         edges: facts.flatMap((fact) => fact.edges),
       });
-      this.db
-        .prepare("UPDATE index_meta SET completed_at=?, state='READY', snapshot_hash=? WHERE id=1")
-        .run(new Date().toISOString(), snapshotHash);
+      this.completeSnapshot(snapshotHash);
       return snapshotHash;
     });
     tx();
@@ -153,51 +176,9 @@ export class GraphStore {
           .run(...ids, ...ids);
         this.db.prepare(`DELETE FROM files WHERE id IN (${idList})`).run(...ids);
       }
-      const fileIds = new Map<string, number>();
-      const insertFile = this.db.prepare("INSERT INTO files(path, language, content_hash) VALUES(?, ?, ?)");
-      for (const file of facts.flatMap((fact) => fact.files))
-        fileIds.set(file.path, Number(insertFile.run(file.path, file.language, file.contentHash).lastInsertRowid));
-      const symbolIds = new Map<string, number>();
-      const insertSymbol = this.db.prepare(
-        "INSERT INTO symbols(file_id, provider, kind, name, qualified_name, start_line, end_line, content_hash) VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
-      );
-      for (const symbol of facts.flatMap((fact) => fact.symbols))
-        symbolIds.set(
-          `${symbol.file}:${symbol.qualifiedName}`,
-          Number(
-            insertSymbol.run(
-              fileIds.get(symbol.file),
-              symbol.provider,
-              symbol.kind,
-              symbol.name,
-              symbol.qualifiedName,
-              symbol.startLine,
-              symbol.endLine,
-              symbol.contentHash,
-            ).lastInsertRowid,
-          ),
-        );
-      const lookup = this.db
-        .prepare(
-          "SELECT s.id, f.path AS file, s.qualified_name AS qualifiedName FROM symbols s JOIN files f ON f.id=s.file_id",
-        )
-        .all() as any[];
-      for (const row of lookup) symbolIds.set(`${row.file}:${row.qualifiedName}`, row.id);
-      const insertEdge = this.db.prepare(
-        "INSERT INTO edges(source_symbol_id, target_symbol_id, target_text, kind, confidence, provider) VALUES(?, ?, ?, ?, ?, ?)",
-      );
-      for (const edge of facts.flatMap((fact) => fact.edges)) {
-        const source = symbolIds.get(edge.source);
-        if (source)
-          insertEdge.run(
-            source,
-            edge.target ? (symbolIds.get(edge.target) ?? null) : null,
-            edge.targetText,
-            edge.kind,
-            edge.confidence,
-            edge.provider,
-          );
-      }
+      const symbolIds = this.insertFilesAndSymbols(facts);
+      this.includeStoredSymbols(symbolIds);
+      this.insertEdges(facts, symbolIds);
       const snapshotHash = hash({
         workspaceHash,
         providerVersions,
@@ -205,9 +186,7 @@ export class GraphStore {
         symbols: this.symbols(),
         edges: this.edges(),
       });
-      this.db
-        .prepare("UPDATE index_meta SET completed_at=?, state='READY', snapshot_hash=? WHERE id=1")
-        .run(new Date().toISOString(), snapshotHash);
+      this.completeSnapshot(snapshotHash);
     });
     tx();
     return this.snapshot();

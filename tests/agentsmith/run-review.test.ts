@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { materializeCachedReview, runReview } from "../../src/agentsmith/scripts/run-review.js";
 import type { ReviewProvider } from "../../src/agentsmith/provider.js";
 import type { ReviewResult } from "../../src/core/types.js";
+import { emptyReviewCoverage, noReviewResult } from "../../src/core/reviewer.js";
 
 const coverage = {
   changedFiles: 1,
@@ -23,6 +24,22 @@ const coverage = {
 };
 
 describe("runReview v2", () => {
+  it("builds unavailable reviews from the shared result factories", () => {
+    expect(
+      emptyReviewCoverage({
+        changedFiles: ["a.ts", "b.ts"],
+        omissions: [{ kind: "file", id: "b.ts", reason: "generated" }],
+      }),
+    ).toMatchObject({ changedFiles: 2, changedFilesReviewed: 0, omissions: [{ id: "b.ts" }] });
+    expect(noReviewResult("v", "error", { message: "offline", errors: ["offline"] })).toMatchObject({
+      version: "v",
+      status: "error",
+      summary: "offline",
+      errors: ["offline"],
+      coverage: { changedFiles: 0 },
+    });
+  });
+
   it("rebinds a v2 cache entry to current identity", () => {
     const cached: ReviewResult = {
       schemaVersion: 3,

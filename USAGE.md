@@ -116,25 +116,17 @@ change deterministic authorization. Findings remain user-selected for any later 
 
 ## 9. Local review traces
 
-Trace capture is off unless the local process explicitly sets `MATRIXCORE_TRACE=agentsmith`. This is
-intentionally separate from `quality.yaml`, so a repository cannot silently enable capture for its
-contributors. MatrixCore writes only to `.quality/traces/agentsmith/` and has no upload capability.
+Trace capture is local by default and can be disabled with `MATRIXCORE_TRACE=off`. MatrixCore writes
+only to `.quality/traces/agentsmith/` and has no upload capability.
 
 ```bash
 MATRIXCORE_TRACE=agentsmith quality review
 quality trace status
 quality trace list
-quality eval curate --trace <trace-id> --case <slug>
-quality eval run --mode all --repeat 1
 ```
 
-Edit the curated `case.yaml` to accept or reject original findings, add missed expected findings,
-record narrative follow-up and true code flow, and identify required context. Exact replay measures
-model variability; current replay applies the current reviewer assets to the frozen input. The eval
-report includes finding precision/recall/F1, verdicts, rejected claims, errors, latency, and required
-context coverage. A human-rejected original claim may disappear or remain rejected, but the eval fails
-if it is promoted into the validated findings that influence the verdict. Always sanitize a case before
-adding it to source control.
+The MatrixCore source repository has a separate, unpublished eval lab for maintainers. Consumer
+installations do not include eval commands, fixtures, or corpus data.
 
 The full consumer profile includes Ruff, Ruff format, mypy, Xenon, and deptry for Python; tsc and
 ESLint for TypeScript; and SQLFluff for explicitly declared SQL facets. MatrixCore discovers nested

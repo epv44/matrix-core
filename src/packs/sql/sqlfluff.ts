@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { Capability, Observation, PluginResult, RunCtx } from "../../core/types.js";
 import type { QualityPlugin } from "../interface.js";
 import { verboseEnabled } from "../../core/verbose.js";
+import { walkFiles } from "../../core/filesystem.js";
 
 interface ExtractedFragment {
   file: string;
@@ -27,31 +28,10 @@ interface GeneratedRegion {
   endLine: number;
 }
 
-const IGNORED = new Set([
-  ".git",
-  ".quality",
-  ".venv",
-  "venv",
-  "node_modules",
-  "dist",
-  "build",
-  "coverage",
-  "__pycache__",
-]);
-
-function walk(root: string, visit: (file: string) => void) {
-  for (const entry of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-    if (entry.isDirectory() && IGNORED.has(entry.name)) continue;
-    const candidate = path.join(root, entry.name);
-    if (entry.isDirectory()) walk(candidate, visit);
-    else if (entry.isFile()) visit(candidate);
-  }
-}
-
 function relevantFiles(ctx: RunCtx) {
   const facet = ctx.sqlFacet!;
   const all: string[] = [];
-  walk(facet.sourceRoot, (file) => {
+  walkFiles(facet.sourceRoot, (file) => {
     if (facet.sources.includes("files") && /\.(?:sql|sql\.j2|dml|ddl)$/i.test(file)) all.push(file);
     if (facet.sources.includes("python") && file.endsWith(".py")) all.push(file);
   });

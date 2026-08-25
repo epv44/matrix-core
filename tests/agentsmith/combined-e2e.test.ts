@@ -13,11 +13,13 @@ class FakeProvider implements ReviewProvider {
   }
   async invoke(input: Parameters<ReviewProvider["invoke"]>[0]) {
     this.calls++;
-    if (input.outputKind === "verification")
+    if (input.outputKind === "verification") {
+      const evidenceId = /\[([0-9a-f]{16})\]/.exec(input.prompt)?.[1];
       return {
-        raw: '{"verdict":"verified","confidence":1,"supportingEvidenceIds":[]}',
+        raw: JSON.stringify({ verdict: "verified", confidence: 1, supportingEvidenceIds: [evidenceId] }),
         usage: { inputTokens: 20, outputTokens: 5 },
       };
+    }
     if (input.outputKind === "scout") return { raw: '{"hotspots":[]}', usage: { inputTokens: 20, outputTokens: 5 } };
     const file = input.prompt.includes("defect.txt") ? "defect.txt" : "quality.yaml";
     const line = file === "defect.txt" ? 1 : 4;

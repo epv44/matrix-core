@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "repositoryFingerprint": "conformance-clear",
+  "gitHead": null,
+  "entries": [
+    {
+      "path": ".matrixcore-ignore",
+      "type": "file",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "size": 1,
+      "executable": false
+    },
+    {
+      "path": "quality.yaml",
+      "type": "file",
+      "sha256": "4e87cc7079fff9d8ce4c009eee66f4954a51eed9eab4b76e9a8af6c62a11285d",
+      "size": 65,
+      "executable": false
+    },
+    {
+      "path": "src/calculator.ts",
+      "type": "file",
+      "sha256": "8d344bcb231aaa7f94df684340b260c5edc259441a6e56f600f23f736b3f2f5e",
+      "size": 52,
+      "executable": false
+    }
+  ],
+  "deletedPaths": []
+}

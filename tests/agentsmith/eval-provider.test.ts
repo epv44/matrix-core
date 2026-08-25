@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PlannerReviewProvider, RecordedReviewProvider } from "../../src/agentsmith/eval-provider.js";
+import { PlannerReviewProvider, RecordedReviewProvider } from "../../tools/agentsmith-evals/src/eval-provider.js";
 
 const profile = { id: "small", model: "qwen:test" } as any;
 

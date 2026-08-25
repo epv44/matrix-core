@@ -12,7 +12,7 @@ function tmpDir(): string {
 }
 
 function gitInit(dir: string) {
-  spawnSync("git", ["init", "-q"], { cwd: dir });
+  spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
   spawnSync("git", ["config", "user.email", "t@t"], { cwd: dir });
   spawnSync("git", ["config", "user.name", "t"], { cwd: dir });
 }
@@ -73,6 +73,25 @@ describe("isGitRepo / getChangedFiles", () => {
       fs.unlinkSync(deleted);
       expect(getChangedPaths({ cwd: dir })).toContain(path.join(fs.realpathSync(dir), "architecture.md"));
       expect(getChangedFiles({ cwd: dir })).not.toContain(path.join(fs.realpathSync(dir), "architecture.md"));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(hasGit)("requires an explicit base before including committed branch changes", () => {
+    const dir = tmpDir();
+    try {
+      gitInit(dir);
+      fs.writeFileSync(path.join(dir, "base.ts"), "export const base = true;\n");
+      spawnSync("git", ["add", "."], { cwd: dir });
+      spawnSync("git", ["commit", "-m", "base"], { cwd: dir });
+      spawnSync("git", ["switch", "-q", "-c", "feature"], { cwd: dir });
+      const feature = path.join(dir, "feature.ts");
+      fs.writeFileSync(feature, "export const feature = true;\n");
+      spawnSync("git", ["add", "."], { cwd: dir });
+      spawnSync("git", ["commit", "-m", "feature"], { cwd: dir });
+      expect(getChangedPaths({ cwd: dir })).toEqual([]);
+      expect(getChangedPaths({ cwd: dir, base: "main" })).toContain(path.join(fs.realpathSync(dir), "feature.ts"));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

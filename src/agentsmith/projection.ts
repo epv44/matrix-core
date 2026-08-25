@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
 import path from "node:path";
+import { sha256Json } from "../core/hash.js";
 import type { ModelProfile, PartitionedReviewPolicy, ReviewRoutingPolicy } from "../core/types.js";
 import type { GraphContext, GraphContextEdge, GraphContextNode, GraphSymbol } from "../core/graph/types.js";
 import type { ReviewScope } from "./scope.js";
@@ -13,9 +13,10 @@ import type {
   StructuredReviewRule,
 } from "./engine-types.js";
 import { selectRules } from "./rules.js";
+import { parseChangedRanges } from "../core/diff.js";
 
 function sha(value: unknown) {
-  return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 20);
+  return sha256Json(value, 20);
 }
 
 export function projectionBudget(profile: ModelProfile, routing: ReviewRoutingPolicy): ProjectionBudget {
@@ -38,31 +39,7 @@ export function estimateTokens(value: string, profile: ModelProfile, code = true
   return Math.ceil(value.length / ratio);
 }
 
-interface ChangedRange {
-  file: string;
-  start: number;
-  end: number;
-}
-
-export function changedRanges(diff: string): ChangedRange[] {
-  const ranges: ChangedRange[] = [];
-  let file: string | undefined;
-  for (const line of diff.split("\n")) {
-    const diffHeader = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-    if (diffHeader) file = diffHeader[2];
-    const header = /^\+\+\+ b\/(.+)$/.exec(line);
-    if (header) file = header[1];
-    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
-    if (file && hunk) {
-      const newCount = Number(hunk[4] ?? 1);
-      const useOldSide = newCount === 0;
-      const start = Number(useOldSide ? hunk[1] : hunk[3]);
-      const count = Number(useOldSide ? (hunk[2] ?? 1) : newCount);
-      ranges.push({ file, start, end: Math.max(start, start + count - 1) });
-    }
-  }
-  return ranges;
-}
+export const changedRanges = parseChangedRanges;
 
 function snippet(
   file: string,
@@ -397,10 +374,44 @@ function symbolPriority(symbol: GraphSymbol, nodes: GraphContextNode[]) {
 }
 
 function workItemRank(left: ReviewWorkItem, right: ReviewWorkItem) {
+  const leftFactors = left.rankFactors;
+  const rightFactors = right.rankFactors;
   return (
     (right.priority ?? 0) - (left.priority ?? 0) ||
+    (rightFactors?.productionSurface ?? 0) - (leftFactors?.productionSurface ?? 0) ||
+    (rightFactors?.changedEndpoints ?? 0) - (leftFactors?.changedEndpoints ?? 0) ||
+    (rightFactors?.edgeRisk ?? 0) - (leftFactors?.edgeRisk ?? 0) ||
+    (rightFactors?.graphDegree ?? 0) - (leftFactors?.graphDegree ?? 0) ||
+    (rightFactors?.changedLines ?? 0) - (leftFactors?.changedLines ?? 0) ||
     left.kind.localeCompare(right.kind) ||
-    left.id.localeCompare(right.id)
+    workItemSemanticKey(left).localeCompare(workItemSemanticKey(right))
+  );
+}
+
+function workItemSemanticKey(item: ReviewWorkItem): string {
+  return [
+    item.kind,
+    ...item.primarySymbols.map((symbol) => `${symbol.file}:${symbol.qualifiedName}`),
+    ...item.relatedSymbols.map((symbol) => `${symbol.file}:${symbol.qualifiedName}`),
+    ...item.graphEdges.map((edge) => edge.kind),
+  ].join("|");
+}
+
+function subsystem(file: string): string {
+  return file.split("/").slice(0, 2).join("/");
+}
+
+function selectionNovelty(item: ReviewWorkItem, selected: ReviewWorkItem[]): number {
+  const selectedFiles = new Set(selected.flatMap((entry) => entry.primarySymbols.map((symbol) => symbol.file)));
+  const selectedSubsystems = new Set(
+    selected.flatMap((entry) => entry.primarySymbols.map((symbol) => subsystem(symbol.file))),
+  );
+  const selectedEdges = new Set(selected.flatMap((entry) => entry.graphEdges.map((edge) => edge.kind)));
+  const primaryFiles = item.primarySymbols.map((symbol) => symbol.file);
+  return (
+    (primaryFiles.some((file) => !selectedSubsystems.has(subsystem(file))) ? 4 : 0) +
+    (primaryFiles.some((file) => !selectedFiles.has(file)) ? 2 : 0) +
+    (item.graphEdges.some((edge) => !selectedEdges.has(edge.kind)) ? 1 : 0)
   );
 }
 
@@ -431,24 +442,33 @@ export function selectWorkItems(items: ReviewWorkItem[], limit: number, tokenBud
     }
     if (pair) {
       selected.push(...pair.sort(workItemRank));
+      for (const item of selected)
+        item.selectionReason = `required-${item.kind}; priority=${item.priority ?? 0}; semantic=${workItemSemanticKey(item)}`;
       usedTokens = pair.reduce((sum, item) => sum + item.estimatedTokens, 0);
     }
   }
   const selectedIds = new Set(selected.map((item) => item.id));
-  for (const item of ranked) {
-    if (selectedIds.has(item.id)) continue;
-    if (selected.length >= Math.max(0, limit)) {
-      omitted.push(item);
-      continue;
-    }
-    if (usedTokens + item.estimatedTokens > tokenBudget) {
-      omitted.push(item);
-      tokenOmitted.push(item);
-      continue;
-    }
+  while (selected.length < Math.max(0, limit)) {
+    const remaining = ranked.filter((item) => !selectedIds.has(item.id));
+    const fitting = remaining.filter((item) => usedTokens + item.estimatedTokens <= tokenBudget);
+    if (!fitting.length) break;
+    const highestPriority = fitting[0].priority ?? 0;
+    const riskBand = fitting.filter((item) => (item.priority ?? 0) === highestPriority);
+    riskBand.sort(
+      (left, right) =>
+        selectionNovelty(right, selected) - selectionNovelty(left, selected) || workItemRank(left, right),
+    );
+    const item = riskBand[0];
+    const novelty = selectionNovelty(item, selected);
+    item.selectionReason = `ranked-fill; priority=${item.priority ?? 0}; novelty=${novelty}; semantic=${workItemSemanticKey(item)}`;
     selected.push(item);
     selectedIds.add(item.id);
     usedTokens += item.estimatedTokens;
+  }
+  const budgetLimited = selected.length < Math.max(0, limit);
+  for (const item of ranked.filter((entry) => !selectedIds.has(entry.id))) {
+    omitted.push(item);
+    if (budgetLimited && usedTokens + item.estimatedTokens > tokenBudget) tokenOmitted.push(item);
   }
   return { selected, omitted, tokenOmitted, estimatedTokens: usedTokens };
 }
@@ -484,6 +504,19 @@ export function buildWorkItems(opts: {
   );
   const hasScoutTargets = Boolean(opts.hotspots?.length && (hotspotSymbols.size || hotspotEdgeKinds.size));
   const locals: ReviewWorkItem[] = [];
+  const addLocal = (item: ReviewWorkItem, source: ProjectedSnippet, focus?: { start: number; end: number }): void => {
+    item.rules = selectRules(opts.rules, item, opts.policy.maxRulesPerUnit);
+    const availableCodeTokens = Math.max(
+      64,
+      opts.inputBudgetTokens - overhead - item.rules.reduce((sum, rule) => sum + rule.estimatedTokens, 0),
+    );
+    item.code = [boundedSnippet(source, availableCodeTokens, opts.profile, focus)];
+    item.estimatedTokens =
+      overhead +
+      item.code.reduce((sum, code) => sum + code.estimatedTokens, 0) +
+      item.rules.reduce((sum, rule) => sum + rule.estimatedTokens, 0);
+    locals.push(item);
+  };
   for (const symbol of changedSymbols) {
     if (
       hasScoutTargets &&
@@ -503,23 +536,22 @@ export function buildWorkItems(opts: {
         priority: filePriority(symbol.file) + symbolPriority(symbol, opts.graph.nodes),
         primarySymbols: [symbol],
         relatedSymbols: [],
-        code: [boundedSnippet(source, codeBudget, opts.profile, range)],
+        code: [],
         graphEdges: graphEdges.filter((edge) => edge.source === symbolKey(symbol) || edge.target === symbolKey(symbol)),
         rules: [],
         deterministicReport,
         estimatedTokens: 0,
+        rankFactors: {
+          edgeRisk: 0,
+          changedEndpoints: 1,
+          productionSurface: filePriority(symbol.file) >= 90 ? 1 : 0,
+          changedLines: (source.changedLineRanges ?? []).reduce((sum, value) => sum + value.end - value.start + 1, 0),
+          graphDegree: graphEdges.filter(
+            (edge) => edge.source === symbolKey(symbol) || edge.target === symbolKey(symbol),
+          ).length,
+        },
       };
-      item.rules = selectRules(opts.rules, item, opts.policy.maxRulesPerUnit);
-      const availableCodeTokens = Math.max(
-        64,
-        opts.inputBudgetTokens - overhead - item.rules.reduce((sum, rule) => sum + rule.estimatedTokens, 0),
-      );
-      item.code = [boundedSnippet(source, availableCodeTokens, opts.profile, range)];
-      item.estimatedTokens =
-        overhead +
-        item.code.reduce((sum, code) => sum + code.estimatedTokens, 0) +
-        item.rules.reduce((sum, rule) => sum + rule.estimatedTokens, 0);
-      locals.push(item);
+      addLocal(item, source, range);
     }
   }
   for (const code of opts.projection.code.filter((item) => item.changed && !item.symbol)) {
@@ -529,23 +561,20 @@ export function buildWorkItems(opts: {
       priority: filePriority(code.file) + code.score,
       primarySymbols: [],
       relatedSymbols: [],
-      code: [boundedSnippet(code, codeBudget, opts.profile)],
+      code: [],
       graphEdges: [],
       rules: [],
       deterministicReport,
       estimatedTokens: 0,
+      rankFactors: {
+        edgeRisk: 0,
+        changedEndpoints: 1,
+        productionSurface: filePriority(code.file) >= 90 ? 1 : 0,
+        changedLines: (code.changedLineRanges ?? []).reduce((sum, value) => sum + value.end - value.start + 1, 0),
+        graphDegree: 0,
+      },
     };
-    item.rules = selectRules(opts.rules, item, opts.policy.maxRulesPerUnit);
-    const availableCodeTokens = Math.max(
-      64,
-      opts.inputBudgetTokens - overhead - item.rules.reduce((sum, rule) => sum + rule.estimatedTokens, 0),
-    );
-    item.code = [boundedSnippet(code, availableCodeTokens, opts.profile)];
-    item.estimatedTokens =
-      overhead +
-      item.code.reduce((sum, value) => sum + value.estimatedTokens, 0) +
-      item.rules.reduce((sum, rule) => sum + rule.estimatedTokens, 0);
-    locals.push(item);
+    addLocal(item, code);
   }
   const interactions: ReviewWorkItem[] = [];
   const fanout = new Map<string, number>();
@@ -600,6 +629,21 @@ export function buildWorkItems(opts: {
       rules: [],
       deterministicReport,
       estimatedTokens: 0,
+      rankFactors: {
+        edgeRisk: interactionPriority(edge, changed, hotspotSymbols),
+        changedEndpoints: Number(changed.has(edge.source)) + Number(changed.has(edge.target)),
+        productionSurface: Number(filePriority(primary.file) >= 90) + Number(filePriority(related.file) >= 90),
+        changedLines: [primaryCode, relatedCode]
+          .flatMap((code) => code.changedLineRanges ?? [])
+          .reduce((sum, value) => sum + value.end - value.start + 1, 0),
+        graphDegree: graphEdges.filter(
+          (candidate) =>
+            candidate.source === primaryKey ||
+            candidate.target === primaryKey ||
+            candidate.source === otherKey ||
+            candidate.target === otherKey,
+        ).length,
+      },
     };
     item.rules = selectRules(opts.rules, item, opts.policy.maxRulesPerUnit);
     const availableCodeTokens = Math.max(

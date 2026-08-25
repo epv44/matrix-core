@@ -9,6 +9,7 @@ import {
 import type { ModelProfile } from "../../src/core/types.js";
 import type { GraphContext } from "../../src/core/graph/types.js";
 import type { ReviewScope } from "../../src/agentsmith/scope.js";
+import type { ReviewWorkItem } from "../../src/agentsmith/engine-types.js";
 
 const small: ModelProfile = {
   id: "small",
@@ -49,6 +50,7 @@ const scope: ReviewScope = {
   base: "main",
   diff: "diff --git a/api.ts b/api.ts\n+++ b/api.ts\n@@ -1,1 +1,1 @@\n-export function read(): string { return oldValue(); }\n+export function read(): number { return 1; }",
   changedFiles: ["api.ts"],
+  changeSources: { "api.ts": ["working-tree"] },
   fileContents: { "api.ts": "export function read(): number { return 1; }\n" },
   suppliedContext: {},
   manifest,
@@ -191,5 +193,38 @@ describe("adaptive projection planning", () => {
     expect(selection.selected).toHaveLength(2);
     expect(new Set(selection.selected.map((item) => item.kind))).toEqual(new Set(["local", "interaction"]));
     expect(selection.omitted).toHaveLength(0);
+  });
+
+  it("uses semantic ranking and subsystem diversity instead of hash identifiers", () => {
+    const workSymbol = (file: string, name: string) => ({ ...changed, file, name, qualifiedName: name });
+    const workItem = (id: string, kind: ReviewWorkItem["kind"], file: string, name: string): ReviewWorkItem => ({
+      id,
+      kind,
+      priority: kind === "interaction" ? 300 : 200,
+      primarySymbols: [workSymbol(file, name)],
+      relatedSymbols: [],
+      code: [],
+      graphEdges: [],
+      rules: [],
+      estimatedTokens: 100,
+      rankFactors: {
+        edgeRisk: kind === "interaction" ? 80 : 0,
+        changedEndpoints: 1,
+        productionSurface: 1,
+        changedLines: 1,
+        graphDegree: 1,
+      },
+    });
+    const local = workItem("local:ffff", "local", "src/core/local.ts", "local");
+    const coreA = workItem("interaction:ffff", "interaction", "src/core/a.ts", "a");
+    const coreB = workItem("interaction:0000", "interaction", "src/core/b.ts", "b");
+    const pack = workItem("interaction:zzzz", "interaction", "src/packs/c.ts", "c");
+    const selected = selectWorkItems([coreB, pack, local, coreA], 3, 1000).selected;
+    expect(selected.map((item) => item.primarySymbols[0].file)).toEqual([
+      "src/core/a.ts",
+      "src/core/local.ts",
+      "src/packs/c.ts",
+    ]);
+    expect(selected.every((item) => item.selectionReason)).toBe(true);
   });
 });

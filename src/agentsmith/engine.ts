@@ -1,15 +1,16 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type {
   AgentSmithConfig,
   CandidateFinding,
   EvidenceRecord,
+  EvidenceResolutionOutcome,
   ModelProfile,
   ReviewCoverage,
   ReviewFinding,
   ReviewResult,
 } from "../core/types.js";
+import { emptyReviewCoverage } from "../core/reviewer.js";
 import { repositoryGraph } from "../core/graph/index.js";
 import type { ReviewProvider } from "./provider.js";
 import type { ReviewScope } from "./scope.js";
@@ -31,11 +32,13 @@ import {
   runScout,
   verifyCandidateWithModel,
 } from "./candidate-generation.js";
-import { candidateAnchorIssue, resolveEvidenceRequests } from "./evidence.js";
+import { candidateAnchorIssue, evidenceRequestId, resolveEvidenceRequests } from "./evidence.js";
 import type { CandidateBatch, EngineExecution, VerificationResult } from "./engine-types.js";
 import { computeWorkspaceVersion } from "../core/version.js";
 import { AGENTSMITH_STRATEGY_HASH } from "./strategy.js";
 import { loadSpecialists } from "./registry.js";
+import { sha256, sha256Json } from "../core/hash.js";
+import { atomicWriteFile } from "../core/filesystem.js";
 
 function profile(config: AgentSmithConfig, id: string | undefined, role: string): ModelProfile {
   if (!id) throw new Error(`Review ${role} model profile is not configured`);
@@ -66,10 +69,7 @@ async function cachedStage<T>(opts: {
   key: unknown;
   run: () => Promise<T>;
 }): Promise<{ value: T; cacheStatus: "hit" | "miss" }> {
-  const digest = crypto
-    .createHash("sha256")
-    .update(JSON.stringify({ strategyHash: AGENTSMITH_STRATEGY_HASH, key: opts.key }))
-    .digest("hex");
+  const digest = sha256Json({ strategyHash: AGENTSMITH_STRATEGY_HASH, key: opts.key });
   const target = path.join(opts.root, ".quality", "cache", "agentsmith-v4", "stages", opts.stage, `${digest}.json`);
   if (opts.enabled && fs.existsSync(target))
     try {
@@ -78,12 +78,7 @@ async function cachedStage<T>(opts: {
       /* regenerate */
     }
   const value = await opts.run();
-  if (opts.enabled) {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    const temporary = `${target}.${process.pid}.tmp`;
-    fs.writeFileSync(temporary, `${JSON.stringify(value)}\n`, "utf8");
-    fs.renameSync(temporary, target);
-  }
+  if (opts.enabled) atomicWriteFile(target, `${JSON.stringify(value)}\n`);
   return { value, cacheStatus: "miss" };
 }
 
@@ -161,7 +156,7 @@ function anchorRecord(candidate: CandidateFinding, scope: ReviewScope): Evidence
   const start = Math.max(1, candidate.line - 2);
   const end = Math.min(lines.length, (candidate.endLine ?? candidate.line) + 2);
   const snippet = lines.slice(start - 1, end).join("\n");
-  const id = crypto.createHash("sha256").update(`${candidate.file}:${start}:${snippet}`).digest("hex").slice(0, 16);
+  const id = sha256(`${candidate.file}:${start}:${snippet}`, 16);
   return {
     id,
     requestKind: "implementation",
@@ -184,6 +179,23 @@ function evidenceRequestKey(request: CandidateFinding["evidenceRequests"][number
 
 function uniqueEvidenceRequests(requests: CandidateFinding["evidenceRequests"], limit: number) {
   return [...new Map(requests.map((request) => [evidenceRequestKey(request), request])).values()].slice(0, limit);
+}
+
+function missingClaimDirectedRequest(candidate: CandidateFinding) {
+  const consumerClaim =
+    candidate.category === "contract" &&
+    /\b(callers?|consumers?|downstream|assum(?:e|es|ed|ption)|expect(?:s|ed|ation)?)\b/i.test(candidate.description);
+  if (
+    !consumerClaim ||
+    candidate.evidenceRequests.some((request) => request.kind === "callers" || request.kind === "usage")
+  )
+    return undefined;
+  return {
+    kind: "callers" as const,
+    symbol: candidate.primarySymbol,
+    pathHint: candidate.file,
+    reason: "candidate omitted required evidence from an actual caller or consumer",
+  };
 }
 
 function normalizeCandidates(candidates: CandidateFinding[], maxEvidenceRequests: number): CandidateFinding[] {
@@ -211,6 +223,22 @@ function normalizeCandidates(candidates: CandidateFinding[], maxEvidenceRequests
   return [...merged.values()].sort(
     (left, right) => left.file.localeCompare(right.file) || left.line - right.line || left.id.localeCompare(right.id),
   );
+}
+
+function failedCandidateBatch(opts: {
+  sourceId: string;
+  error: string;
+  specialist?: CandidateBatch["specialist"];
+  diagnostic?: StructuredOutputError["diagnostic"] | null;
+}): CandidateBatch {
+  return {
+    sourceId: opts.sourceId,
+    specialist: opts.specialist,
+    candidates: [],
+    inputTokens: opts.diagnostic?.usage.inputTokens ?? 0,
+    outputTokens: opts.diagnostic?.usage.outputTokens ?? 0,
+    error: opts.error,
+  };
 }
 
 function severityRank(value: ReviewFinding["severity"]) {
@@ -241,7 +269,13 @@ function deduplicateFindings(findings: ReviewFinding[]): ReviewFinding[] {
 }
 
 type VerificationPreflight =
-  | { candidate: CandidateFinding; kind: "rejected"; reasoning: string; estimatedTokens: number }
+  | {
+      candidate: CandidateFinding;
+      kind: "rejected";
+      reasoning: string;
+      outcomes: EvidenceResolutionOutcome[];
+      estimatedTokens: number;
+    }
   | {
       candidate: CandidateFinding;
       kind: "insufficient";
@@ -249,6 +283,7 @@ type VerificationPreflight =
       anchor: EvidenceRecord;
       records: EvidenceRecord[];
       gaps: string[];
+      outcomes: EvidenceResolutionOutcome[];
       estimatedTokens: number;
     }
   | {
@@ -258,31 +293,11 @@ type VerificationPreflight =
       anchor: EvidenceRecord;
       records: EvidenceRecord[];
       gaps: string[];
+      outcomes: EvidenceResolutionOutcome[];
       originating: string;
       evidenceText: string;
       estimatedTokens: number;
     };
-
-function emptyCoverage(scope: ReviewScope): ReviewCoverage {
-  return {
-    changedFiles: scope.changedFiles.length,
-    changedFilesReviewed: 0,
-    changedSymbols: 0,
-    changedSymbolsReviewed: 0,
-    localUnitsGenerated: 0,
-    localUnitsReviewed: 0,
-    interactionUnitsGenerated: 0,
-    interactionUnitsReviewed: 0,
-    dependencyEdgesIdentified: 0,
-    dependencyEdgesEligible: 0,
-    dependencyEdgesReviewed: 0,
-    evidenceRequests: 0,
-    evidenceResolved: 0,
-    evidenceGaps: 0,
-    globalScan: "none",
-    omissions: (scope.omissions ?? []).map((item) => ({ kind: item.kind, id: item.id, reason: item.reason })),
-  };
-}
 
 export async function executeReviewEngine(opts: {
   root: string;
@@ -297,6 +312,7 @@ export async function executeReviewEngine(opts: {
   variant?: { includeInteractions?: boolean; resolveEvidence?: boolean };
   enforceWorkspaceVersion?: boolean;
 }): Promise<{ result: ReviewResult; execution: EngineExecution }> {
+  const stageTimingsMs: NonNullable<EngineExecution["stageTimingsMs"]> = {};
   const candidateProfile = profile(opts.config, opts.config.models.candidate, "candidate");
   const scoutProfile = opts.config.models.scout ? profile(opts.config, opts.config.models.scout, "scout") : undefined;
   const verifierProfile = profile(opts.config, opts.config.models.verifier ?? opts.config.models.candidate, "verifier");
@@ -307,14 +323,19 @@ export async function executeReviewEngine(opts: {
       ),
     ),
   ];
+  let stageStarted = Date.now();
   const health = await opts.provider.health(opts.signal);
+  stageTimingsMs.providerHealth = Date.now() - stageStarted;
   if (!health.ok) throw new Error(`Review provider unavailable: ${health.error ?? "unknown error"}`);
   const missing = requiredModels.filter(
     (model) => !health.models.some((found) => found === model || found.startsWith(`${model}:`)),
   );
   if (missing.length) throw new Error(`Review model not installed: ${missing.join(", ")}`);
 
+  stageStarted = Date.now();
   const graph = await repositoryGraph(opts.root).getContext(opts.scope, Number.MAX_SAFE_INTEGER, opts.config.graph);
+  stageTimingsMs.graph = Date.now() - stageStarted;
+  stageStarted = Date.now();
   const rules = loadStructuredRules(opts.assetRoot);
   const deterministicReport = compactDeterministicReport(opts.deterministicReport);
   const full = buildProjection({
@@ -405,6 +426,8 @@ export async function executeReviewEngine(opts: {
   const selectedWorkItems = selection.selected;
   const omittedWorkItems = selection.omitted;
   const tokenOmittedWorkItems = selection.tokenOmitted;
+  stageTimingsMs.planning = Date.now() - stageStarted;
+  stageStarted = Date.now();
   const candidateBatches: CandidateBatch[] = [];
   if (reviewPath === "specialist") {
     const specialists = loadSpecialists(opts.assetRoot);
@@ -412,14 +435,7 @@ export async function executeReviewEngine(opts: {
     const batches = await mapLimit(specialists, effectiveParallelism, async (specialist): Promise<CandidateBatch> => {
       const sourceId = `specialist:${specialist.name}`;
       if (!executionBudget.canStart())
-        return {
-          sourceId,
-          specialist: specialist.name,
-          candidates: [],
-          inputTokens: 0,
-          outputTokens: 0,
-          error: "review deadline exceeded",
-        };
+        return failedCandidateBatch({ sourceId, specialist: specialist.name, error: "review deadline exceeded" });
       try {
         const { value, cacheStatus } = await cachedStage({
           root: opts.root,
@@ -445,14 +461,12 @@ export async function executeReviewEngine(opts: {
         const message = `${specialist.name}: ${error instanceof Error ? error.message : String(error)}`;
         const diagnostic = error instanceof StructuredOutputError ? error.diagnostic : null;
         if (!executionBudget.timedOut()) errors.push(message);
-        return {
+        return failedCandidateBatch({
           sourceId,
           specialist: specialist.name,
-          candidates: [],
-          inputTokens: diagnostic?.usage.inputTokens ?? 0,
-          outputTokens: diagnostic?.usage.outputTokens ?? 0,
+          diagnostic,
           error: executionBudget.timedOut() ? "review deadline exceeded" : message,
-        };
+        });
       }
     });
     candidateBatches.push(...batches);
@@ -460,13 +474,7 @@ export async function executeReviewEngine(opts: {
     if (route.mode === "holistic") throw new Error("Holistic review requires the specialist execution path");
     const batches = await mapLimit(selectedWorkItems, effectiveParallelism, async (item) => {
       if (!executionBudget.canStart())
-        return {
-          sourceId: item.id,
-          candidates: [],
-          inputTokens: 0,
-          outputTokens: 0,
-          error: "review deadline exceeded",
-        };
+        return failedCandidateBatch({ sourceId: item.id, error: "review deadline exceeded" });
       try {
         const { value, cacheStatus } = await cachedStage({
           root: opts.root,
@@ -491,13 +499,11 @@ export async function executeReviewEngine(opts: {
         const message = `${item.id}: ${error instanceof Error ? error.message : String(error)}`;
         const diagnostic = error instanceof StructuredOutputError ? error.diagnostic : null;
         if (!executionBudget.timedOut()) errors.push(message);
-        return {
+        return failedCandidateBatch({
           sourceId: item.id,
-          candidates: [],
-          inputTokens: diagnostic?.usage.inputTokens ?? 0,
-          outputTokens: diagnostic?.usage.outputTokens ?? 0,
+          diagnostic,
           error: executionBudget.timedOut() ? "review deadline exceeded" : message,
-        };
+        });
       }
     });
     candidateBatches.push(...batches);
@@ -508,6 +514,7 @@ export async function executeReviewEngine(opts: {
     candidateBatches.flatMap((batch) => batch.candidates),
     opts.config.evidence.maxRequestsPerCandidate,
   );
+  stageTimingsMs.candidateGeneration = Date.now() - stageStarted;
   const workItemPriority = new Map(selectedWorkItems.map((item) => [item.id, item.priority ?? 0]));
   const severityPriority = { critical: 4, high: 3, medium: 2, low: 1 } as const;
   const rankedCandidates = [...candidates].sort(
@@ -527,19 +534,47 @@ export async function executeReviewEngine(opts: {
         (opts.config.partitioned.maxVerificationCandidates ?? 4),
     );
   const verifierCallBudget = projectionBudget(verifierProfile, opts.config.routing).inputBudgetTokens;
+  stageStarted = Date.now();
   const preflights = await mapLimit(
     rankedCandidates,
     Math.min(effectiveParallelism, opts.config.evidence.maxParallelResolutions),
     async (candidate): Promise<VerificationPreflight> => {
       const anchorIssue = candidateAnchorIssue(candidate, opts.scope);
-      if (anchorIssue) return { candidate, kind: "rejected", reasoning: anchorIssue, estimatedTokens: 0 };
+      if (anchorIssue)
+        return {
+          candidate,
+          kind: "rejected",
+          reasoning: anchorIssue,
+          outcomes: candidate.evidenceRequests.map((request) => ({
+            requestId: evidenceRequestId(request),
+            request,
+            status: "skipped",
+            records: [],
+            reason: anchorIssue,
+          })),
+          estimatedTokens: 0,
+        };
       const resolved =
         opts.variant?.resolveEvidence === false
           ? {
               records: [],
               gaps: candidate.evidenceRequests.map((request) => `${request.kind}: evidence resolution disabled`),
+              outcomes: candidate.evidenceRequests.map((request) => ({
+                requestId: evidenceRequestId(request),
+                request,
+                status: "unresolved" as const,
+                records: [],
+                reason: "evidence resolution disabled",
+              })),
             }
           : resolveEvidenceRequests({ candidate, scope: opts.scope, graph, policy: opts.config.evidence });
+      const missingDirected = missingClaimDirectedRequest(candidate);
+      if (missingDirected) {
+        const requestId = evidenceRequestId(missingDirected);
+        const reason = missingDirected.reason;
+        resolved.gaps.push(`callers: ${reason}`);
+        resolved.outcomes.push({ requestId, request: missingDirected, status: "unresolved", records: [], reason });
+      }
       const anchor = anchorRecord(candidate, opts.scope);
       const originating = full.code
         .filter(
@@ -563,7 +598,10 @@ export async function executeReviewEngine(opts: {
       const packingGaps: string[] = [];
       const renderEvidence = (records: EvidenceRecord[]) =>
         [anchor, ...records]
-          .map((item) => `[${item.id}] ${item.file}:${item.startLine}-${item.endLine}\n${item.snippet}`)
+          .map(
+            (item) =>
+              `[${item.id}]${item.requestId ? ` request=${item.requestId}` : " anchor"} ${item.file}:${item.startLine}-${item.endLine}\n${item.snippet}`,
+          )
           .join("\n\n");
       for (const record of resolved.records) {
         const proposed = [...packedRecords, record];
@@ -580,15 +618,44 @@ export async function executeReviewEngine(opts: {
         fixedTokens +
         estimateTokens(boundedOriginating, verifierProfile, true) +
         estimateTokens(evidenceText, verifierProfile, true);
-      const gaps = [...resolved.gaps, ...packingGaps];
-      if (candidate.evidenceRequests.length && !resolved.records.length)
+      const packedIds = new Set(packedRecords.map((record) => record.id));
+      const outcomes = resolved.outcomes.map((outcome): EvidenceResolutionOutcome => {
+        if (outcome.status !== "satisfied") return outcome;
+        const packed = outcome.records.filter((record) => packedIds.has(record.id));
+        if (packed.length === outcome.records.length)
+          return { ...outcome, packedRecordIds: packed.map((record) => record.id) };
+        if (packed.length)
+          return {
+            ...outcome,
+            status: "partial",
+            packedRecordIds: packed.map((record) => record.id),
+            reason: "some resolved evidence was omitted by the verifier token budget",
+          };
+        return {
+          ...outcome,
+          status: "unresolved",
+          packedRecordIds: [],
+          reason: "resolved evidence did not fit the verifier token budget",
+        };
+      });
+      const gaps = [
+        ...new Set([
+          ...resolved.gaps,
+          ...packingGaps,
+          ...outcomes
+            .filter((outcome) => outcome.status === "unresolved")
+            .map((outcome) => `${outcome.request.kind}: ${outcome.reason ?? "unresolved"}`),
+        ]),
+      ];
+      if (candidate.evidenceRequests.length && outcomes.some((outcome) => outcome.status === "unresolved"))
         return {
           candidate,
           kind: "insufficient",
-          reasoning: resolved.gaps.join("; "),
+          reasoning: gaps.join("; ") || "required evidence was unresolved",
           anchor,
-          records: resolved.records,
+          records: packedRecords,
           gaps,
+          outcomes,
           estimatedTokens: 0,
         };
       if (candidate.evidenceRequests.length && !packedRecords.length)
@@ -599,6 +666,7 @@ export async function executeReviewEngine(opts: {
           anchor,
           records: packedRecords,
           gaps,
+          outcomes,
           estimatedTokens: 0,
         };
       return {
@@ -608,20 +676,23 @@ export async function executeReviewEngine(opts: {
         anchor,
         records: packedRecords,
         gaps,
+        outcomes,
         originating: boundedOriginating,
         evidenceText,
         estimatedTokens,
       };
     },
   );
+  stageTimingsMs.evidence = Date.now() - stageStarted;
   const candidatesForVerification: CandidateFinding[] = [];
   const tokenOmittedCandidates: CandidateFinding[] = [];
   const preflightOutcomes: VerificationResult[] = [];
   const evidence: Record<string, EvidenceRecord[]> = {};
+  const evidenceOutcomes: Record<string, EvidenceResolutionOutcome[]> = {};
   let verificationEstimatedTokens = 0;
-  let evidenceGaps = 0;
   for (const preflight of preflights) {
     const candidate = preflight.candidate;
+    evidenceOutcomes[candidate.id] = preflight.outcomes;
     if (preflight.kind === "rejected") {
       preflightOutcomes.push({
         candidateId: candidate.id,
@@ -634,7 +705,6 @@ export async function executeReviewEngine(opts: {
     }
     if (preflight.kind === "insufficient") {
       evidence[candidate.id] = [preflight.anchor, ...preflight.records];
-      evidenceGaps += preflight.gaps.length;
       preflightOutcomes.push({
         candidateId: candidate.id,
         verdict: "insufficient_evidence",
@@ -650,11 +720,11 @@ export async function executeReviewEngine(opts: {
       continue;
     }
     evidence[candidate.id] = [preflight.anchor, ...preflight.records];
-    evidenceGaps += preflight.gaps.length;
     candidatesForVerification.push(candidate);
     verificationEstimatedTokens += preflight.estimatedTokens;
   }
   const preflightById = new Map(preflights.map((preflight) => [preflight.candidate.id, preflight]));
+  stageStarted = Date.now();
   const modelResults = await mapLimit(candidatesForVerification, effectiveParallelism, async (candidate) => {
     const preflight = preflightById.get(candidate.id);
     if (!preflight || preflight.kind !== "ready") return undefined;
@@ -672,6 +742,14 @@ export async function executeReviewEngine(opts: {
               originatingCode: preflight.originating || preflight.anchor.snippet,
               evidenceText: preflight.evidenceText,
               evidenceIds: evidence[candidate.id].map((item) => item.id),
+              requiredEvidenceIdsByRequest: Object.fromEntries(
+                preflight.outcomes
+                  .filter((outcome) => outcome.status === "satisfied" || outcome.status === "partial")
+                  .map((outcome) => [
+                    outcome.requestId,
+                    outcome.packedRecordIds ?? outcome.records.map((record) => record.id),
+                  ]),
+              ),
               profile: verifierProfile,
               provider: opts.provider,
               signal,
@@ -731,6 +809,8 @@ export async function executeReviewEngine(opts: {
       });
     }
   }
+  stageTimingsMs.verification = Date.now() - stageStarted;
+  stageStarted = Date.now();
   const omittedCandidates = candidates.filter(
     (candidate) =>
       !candidatesForVerification.some((selected) => selected.id === candidate.id) &&
@@ -778,7 +858,7 @@ export async function executeReviewEngine(opts: {
   const localItems = selectedWorkItems.filter((item) => item.kind === "local");
   const interactionItems = selectedWorkItems.filter((item) => item.kind === "interaction");
   const rawOmissions = [
-    ...emptyCoverage(opts.scope).omissions,
+    ...emptyReviewCoverage(opts.scope).omissions,
     ...full.omissions.map((item) => ({ kind: item.kind, id: item.id, reason: item.reason })),
     ...omittedWorkItems.map((item) => ({
       kind: "work-item",
@@ -797,9 +877,16 @@ export async function executeReviewEngine(opts: {
       : []),
   ];
   const omissions = [...new Map(rawOmissions.map((item) => [`${item.kind}:${item.id}:${item.reason}`, item])).values()];
+  const allEvidenceOutcomes = Object.values(evidenceOutcomes).flat();
+  const evidenceRequestsSatisfied = allEvidenceOutcomes.filter((outcome) => outcome.status === "satisfied").length;
+  const evidenceRequestsPartiallySatisfied = allEvidenceOutcomes.filter(
+    (outcome) => outcome.status === "partial",
+  ).length;
+  const evidenceRequestsUnresolved = allEvidenceOutcomes.filter((outcome) => outcome.status === "unresolved").length;
+  const evidenceRequestsSkipped = allEvidenceOutcomes.filter((outcome) => outcome.status === "skipped").length;
   const coverage: ReviewCoverage = {
     selection: omittedWorkItems.length || omittedCandidates.length ? "bounded" : "full",
-    ...emptyCoverage(opts.scope),
+    ...emptyReviewCoverage(opts.scope),
     changedFilesReviewed: reviewedFiles.size,
     changedSymbols: graph.changedSymbols.length,
     changedSymbolsReviewed: reviewedSymbols.size,
@@ -810,9 +897,20 @@ export async function executeReviewEngine(opts: {
     dependencyEdgesIdentified: graph.edges.length,
     dependencyEdgesEligible: eligibleEdges.length,
     dependencyEdgesReviewed: [...reviewedEdgeKeys].filter((key) => eligibleEdgeKeys.has(key)).length,
-    evidenceRequests: candidates.reduce((sum, candidate) => sum + candidate.evidenceRequests.length, 0),
+    evidenceRequests: allEvidenceOutcomes.length,
+    evidenceRequestsAttempted: allEvidenceOutcomes.length - evidenceRequestsSkipped,
+    evidenceRequestsSatisfied,
+    evidenceRequestsPartiallySatisfied,
+    evidenceRequestsUnresolved,
+    evidenceRequestsSkipped,
+    evidenceRecordsResolved: allEvidenceOutcomes.reduce((sum, outcome) => sum + outcome.records.length, 0),
+    evidenceRecordsPacked: allEvidenceOutcomes.reduce(
+      (sum, outcome) =>
+        sum + (outcome.packedRecordIds?.length ?? (outcome.status === "satisfied" ? outcome.records.length : 0)),
+      0,
+    ),
     evidenceResolved: Object.values(evidence).reduce((sum, records) => sum + Math.max(0, records.length - 1), 0),
-    evidenceGaps,
+    evidenceGaps: evidenceRequestsUnresolved + evidenceRequestsPartiallySatisfied,
     globalScan:
       route.mode === "holistic" && holisticCompleted
         ? "full"
@@ -850,7 +948,20 @@ export async function executeReviewEngine(opts: {
   ].filter((value): value is "hit" | "miss" => Boolean(value));
   coverage.cacheHits = cacheStatuses.filter((value) => value === "hit").length;
   coverage.cacheMisses = cacheStatuses.filter((value) => value === "miss").length;
-  coverage.structuredRepairs = providerDiagnostics.length;
+  coverage.structuredRepairs = providerDiagnostics.filter(
+    (diagnostic) => diagnostic.failureKind !== "citation-validation",
+  ).length;
+  coverage.citationRepairs = verification.filter((item) => item.citationRepairAttempted).length;
+  coverage.providerInvocations =
+    (scoutTrace && scoutTrace.cacheStatus !== "hit" ? 1 + (scoutTrace.diagnostics?.length ?? 0) : 0) +
+    candidateBatches.reduce(
+      (sum, batch) => sum + (batch.cacheStatus === "hit" || batch.error ? 0 : 1 + (batch.diagnostics?.length ?? 0)),
+      0,
+    ) +
+    verification.reduce(
+      (sum, item) => sum + (item.cacheStatus === "hit" ? 0 : (item.providerInvocations ?? (item.completion ? 1 : 0))),
+      0,
+    );
   const providerMs = (completion: { totalDurationNs?: number | null } | undefined) =>
     completion?.totalDurationNs ? Math.round(completion.totalDurationNs / 1_000_000) : 0;
   coverage.candidateProviderMs = candidateBatches.reduce((sum, batch) => sum + providerMs(batch.completion), 0);
@@ -1000,9 +1111,30 @@ export async function executeReviewEngine(opts: {
       ...executionBudget.stats,
     };
   executionBudget.finish();
+  stageTimingsMs.aggregation = Date.now() - stageStarted;
+  const selectedWorkItemIds = new Set(selectedWorkItems.map((item) => item.id));
+  const tokenOmittedWorkItemIds = new Set(tokenOmittedWorkItems.map((item) => item.id));
+  const plannerManifest: NonNullable<EngineExecution["plannerManifest"]> = eligibleWorkItems.map((item) => ({
+    id: item.id,
+    kind: item.kind,
+    priority: item.priority ?? 0,
+    estimatedTokens: item.estimatedTokens,
+    selected: selectedWorkItemIds.has(item.id),
+    tokenOmitted: tokenOmittedWorkItemIds.has(item.id),
+    files: [...new Set(item.code.map((snippet) => snippet.file))],
+    symbols: [
+      ...new Set(
+        [...item.primarySymbols, ...item.relatedSymbols].map((symbol) => `${symbol.file}#${symbol.qualifiedName}`),
+      ),
+    ],
+    edges: item.graphEdges.map((edge) => `${edge.source}->${edge.target ?? edge.targetText}:${edge.kind}`),
+    rankFactors: item.rankFactors,
+    selectionReason: item.selectionReason,
+  }));
   return {
     result,
     execution: {
+      graphSnapshot: graph.snapshot,
       mode: route.mode,
       reviewPath,
       route,
@@ -1014,6 +1146,7 @@ export async function executeReviewEngine(opts: {
       candidateBatches,
       candidates,
       evidence,
+      evidenceOutcomes,
       verification,
       ...(providerFailures.length ? { providerFailures } : {}),
       ...(providerDiagnostics.length ? { providerDiagnostics } : {}),
@@ -1021,6 +1154,8 @@ export async function executeReviewEngine(opts: {
       errors,
       inputTokens,
       outputTokens,
+      stageTimingsMs,
+      plannerManifest,
     },
   };
 }

@@ -1,16 +1,17 @@
-import crypto from "node:crypto";
+import { atomicWriteFile } from "../../core/filesystem.js";
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
-import type { GateStatus, ReviewCoverage, ReviewResult } from "../../core/types.js";
+import type { GateStatus, ReviewResult } from "../../core/types.js";
 import { resolveConfig } from "../../core/config-resolver.js";
 import { resolvePolicyForConfig } from "../../core/resolved-policy.js";
 import { ENGINE_VERSION } from "../../core/meta.js";
-import { AGENT_SMITH } from "../../core/reviewer.js";
+import { AGENT_SMITH, emptyReviewCoverage } from "../../core/reviewer.js";
 import { OllamaProvider, type ReviewProvider } from "../provider.js";
 import { captureReviewScope, type ReviewScope } from "../scope.js";
 import { executeReviewEngine } from "../engine.js";
-import { writeAgentSmithTrace } from "../trace.js";
+import { isAgentSmithTraceEnabled, writeAgentSmithTrace } from "../trace.js";
+import { captureSourceSnapshot, sourceManifestHash, type CapturedSourceSnapshot } from "../source-snapshot.js";
 import { formatAgentSmithReview, REVIEW_MARKDOWN_ARTIFACT } from "../report.js";
 import { hashDiff } from "./hash-diff.js";
 import { AGENTSMITH_STRATEGY_HASH } from "../strategy.js";
@@ -27,27 +28,6 @@ export interface RunReviewOptions {
 }
 export interface RunReviewDeps {
   provider?: ReviewProvider;
-}
-
-function emptyCoverage(scope: ReviewScope): ReviewCoverage {
-  return {
-    changedFiles: scope.changedFiles.length,
-    changedFilesReviewed: 0,
-    changedSymbols: 0,
-    changedSymbolsReviewed: 0,
-    localUnitsGenerated: 0,
-    localUnitsReviewed: 0,
-    interactionUnitsGenerated: 0,
-    interactionUnitsReviewed: 0,
-    dependencyEdgesIdentified: 0,
-    dependencyEdgesEligible: 0,
-    dependencyEdgesReviewed: 0,
-    evidenceRequests: 0,
-    evidenceResolved: 0,
-    evidenceGaps: 0,
-    globalScan: "none",
-    omissions: (scope.omissions ?? []).map((item) => ({ kind: item.kind, id: item.id, reason: item.reason })),
-  };
 }
 
 export function materializeCachedReview(
@@ -74,9 +54,7 @@ export function writeResult(cwd: string, result: ReviewResult, gateStatus?: Gate
     ],
   ] as const;
   for (const [target, contents] of outputs) {
-    const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
-    fs.writeFileSync(temporary, contents, "utf8");
-    fs.renameSync(temporary, target);
+    atomicWriteFile(target, contents);
   }
 }
 
@@ -84,9 +62,36 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
   const resolved = resolveConfig({ configFlag: opts.config, cwd: opts.cwd });
   const policy = resolvePolicyForConfig(resolved);
   const config = resolved.config.agentsmith!;
+  const scopeStarted = Date.now();
   const scope =
     opts.scope ??
     captureReviewScope({ root: resolved.configRoot, base: opts.base, contextFiles: config.context_files });
+  let sourceSnapshotCapture: CapturedSourceSnapshot | undefined;
+  if (isAgentSmithTraceEnabled()) {
+    try {
+      sourceSnapshotCapture = captureSourceSnapshot(resolved.configRoot, scope.version);
+    } catch (error) {
+      const warning = `source snapshot capture failed: ${error instanceof Error ? error.message : String(error)}`;
+      const manifest = {
+        schemaVersion: 1 as const,
+        repositoryFingerprint: scope.version,
+        gitHead: null,
+        entries: [],
+        deletedPaths: [],
+      };
+      sourceSnapshotCapture = {
+        manifest,
+        manifestHash: sourceManifestHash(manifest),
+        fileCount: 0,
+        totalBytes: 0,
+        complete: false,
+        portable: false,
+        captureDurationMs: 0,
+        warnings: [warning],
+      };
+    }
+  }
+  const snapshotElapsedMs = Date.now() - scopeStarted;
   const timestamp = new Date().toISOString();
   const cacheKey = hashDiff({
     diff: scope.diff,
@@ -105,6 +110,33 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
       const cached = yaml.load(fs.readFileSync(cacheFile, "utf8")) as ReviewResult;
       if (cached?.schemaVersion === 3) {
         const result = materializeCachedReview(cached, { version: opts.version, timestamp, scopeId: scope.id });
+        const recorded = writeAgentSmithTrace(resolved.configRoot, {
+          packageVersion: ENGINE_VERSION,
+          version: result.version,
+          profileHash: result.profileHash,
+          strategyHash: result.strategyHash,
+          graphSnapshotHash: result.graphSnapshotHash,
+          sourceSnapshotCapture,
+          scope,
+          deterministicReport: opts.report ?? "",
+          result,
+          decisionProvenance: {
+            publishedFindingIds: result.findings.map((finding) => finding.id),
+            rejectedCandidateIds: [],
+            likelyCandidateIds: [],
+            insufficientEvidenceCandidateIds: [],
+            aggregateRule: "cached completed result; only previously verified findings are published",
+            errors: result.errors ?? [],
+          },
+        });
+        if (recorded.traceId) result.traceId = recorded.traceId;
+        const traceWarnings = [
+          ...(recorded.warning ? [recorded.warning] : []),
+          ...(sourceSnapshotCapture && (!sourceSnapshotCapture.complete || !sourceSnapshotCapture.portable)
+            ? sourceSnapshotCapture.warnings
+            : []),
+        ];
+        if (traceWarnings.length) result.traceWarnings = traceWarnings;
         writeResult(resolved.configRoot, result);
         return result;
       }
@@ -128,12 +160,17 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
     const insufficient = execution.verification
       .filter((item) => item.verdict === "insufficient_evidence")
       .map((item) => item.candidateId);
+    execution.stageTimingsMs = { ...execution.stageTimingsMs, snapshot: snapshotElapsedMs };
+    const reportingStarted = Date.now();
+    formatAgentSmithReview(result, { artifact: REVIEW_MARKDOWN_ARTIFACT });
+    execution.stageTimingsMs.reporting = Date.now() - reportingStarted;
     const recorded = writeAgentSmithTrace(resolved.configRoot, {
       packageVersion: ENGINE_VERSION,
       version: result.version,
       profileHash: result.profileHash,
       strategyHash: result.strategyHash,
       graphSnapshotHash: result.graphSnapshotHash,
+      sourceSnapshotCapture,
       scope,
       deterministicReport: opts.report ?? "",
       execution,
@@ -148,7 +185,13 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
       },
     });
     if (recorded.traceId) result.traceId = recorded.traceId;
-    if (recorded.warning) result.traceWarnings = [recorded.warning];
+    const traceWarnings = [
+      ...(recorded.warning ? [recorded.warning] : []),
+      ...(sourceSnapshotCapture && (!sourceSnapshotCapture.complete || !sourceSnapshotCapture.portable)
+        ? sourceSnapshotCapture.warnings
+        : []),
+    ];
+    if (traceWarnings.length) result.traceWarnings = traceWarnings;
     if (config.cache && result.status === "completed") {
       fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
       fs.writeFileSync(cacheFile, yaml.dump(result, { noRefs: true, sortKeys: true }), "utf8");
@@ -166,7 +209,7 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
       mode: config.mode === "auto" ? "partitioned" : config.mode,
       reviewPath: "generic",
       findings: [],
-      coverage: emptyCoverage(scope),
+      coverage: emptyReviewCoverage(scope),
       summary: "Review could not be completed.",
       timestamp,
       reviewer: AGENT_SMITH,
@@ -184,6 +227,7 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
       profileHash: result.profileHash,
       strategyHash: result.strategyHash,
       graphSnapshotHash: null,
+      sourceSnapshotCapture,
       scope,
       deterministicReport: opts.report ?? "",
       result,
@@ -197,7 +241,13 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
       },
     });
     if (recorded.traceId) result.traceId = recorded.traceId;
-    if (recorded.warning) result.traceWarnings = [recorded.warning];
+    const traceWarnings = [
+      ...(recorded.warning ? [recorded.warning] : []),
+      ...(sourceSnapshotCapture && (!sourceSnapshotCapture.complete || !sourceSnapshotCapture.portable)
+        ? sourceSnapshotCapture.warnings
+        : []),
+    ];
+    if (traceWarnings.length) result.traceWarnings = traceWarnings;
     writeResult(resolved.configRoot, result);
     return result;
   }

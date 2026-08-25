@@ -27,13 +27,13 @@ Context size is a packing constraint, not a product boundary. Automatic routing 
 
 ## Pipeline
 
-1. Capture committed, staged, unstaged, untracked, renamed, and deleted changes, retaining deleted preimages and all omissions.
+1. Capture staged, unstaged, untracked, renamed, and deleted working-tree changes, retaining deleted preimages and all omissions. An explicit review base additionally opts into the `<base>...HEAD` committed delta; no remote-tracking branch is added implicitly.
 2. Build the Python/TypeScript repository graph and derive changed symbols from hunk overlap.
 3. Construct complete and compact projections with deterministic token estimates and selection audits.
 4. Route a full-fit strong candidate to four specialist prompts; route every other case to generic partitioned or hybrid candidate generation.
 5. Normalize candidates into one versioned internal contract.
-6. Resolve bounded structural evidence from the frozen graph and repository.
-7. Verify every publishable candidate with the configured low-output verifier profile.
+6. Resolve each required evidence request with exact symbol, relationship, path, or literal matching and record a request-level outcome.
+7. Verify every evidence-complete candidate with the configured low-output verifier profile, requiring exact citations and allowing one bounded citation repair.
 8. Publish only verified findings, then deduplicate, rank, retain specialist attribution, and report actual file/symbol/edge/evidence coverage.
 
 An empty partial/error result is `incomplete`, never approval. Findings must anchor to changed hunks; unchanged files can support evidence but cannot become finding locations.
@@ -68,21 +68,20 @@ The four specialist prompt bodies retain the 0.4 architecture, performance, corr
 
 ## Local traces and evals
 
-Tracing is local by default and has no uploader. It retains the newest 20 schema-v3 traces within a
+Tracing is local by default and has no uploader. It retains the newest 20 schema-v5 traces within a
 250 MiB budget under `.quality/traces/agentsmith/`. Set `MATRIXCORE_TRACE=off` to disable it, or
 `MATRIXCORE_TRACE=agentsmith` to mark an explicitly captured run. Traces include projections, work
 items, prompts, raw responses (including structured-output failures), completion metadata, evidence,
-verification outcomes, coverage, and final provenance.
+verification outcomes, request-level evidence coverage, citation repairs, and final provenance.
+Schema v5 also captures tracked and nonignored untracked repository inputs in a deduplicated SHA-256 object store,
+with a manifest for file bytes, executable bits, safe relative symlinks, and deleted paths. The source
+objects participate in the same retention budget. Because source snapshots can contain proprietary code
+or credentials that are not ignored by Git, keep `.quality/` private and review sanitization before
+curating or sharing a case.
 
-Curated eval cases replay the same snapshot through holistic, partitioned-local,
-partitioned-evidence, partitioned-interactions, and hybrid modes. Cases label expected findings L0-L3
-and may declare required file, symbol, and graph-edge inspection targets. Three replay backends isolate
-different questions: `planner` evaluates deterministic selection without an LLM, `recorded` reuses
-exact captured model responses and fails on prompt/model drift, and `live` runs the current provider.
-Reports separate finding quality from coverage and include changed-file/line coverage, inspection
-target recall, candidate adjudication, evidence relevance, reliability, latency, token use, and honesty
-flags. `quality eval compare` reports metric deltas between two run results.
-`quality trace metrics <trace-id>` computes the same operational metrics immediately for any retained
-trace that contains execution data, before the trace is curated as a quality-labeled eval case.
+The MatrixCore source repository contains an unpublished diagnostic lab under
+`tools/agentsmith-evals/`. It evaluates snapshot, graph, planning, candidate, evidence, verification,
+aggregation, and reporting stages through deterministic, recorded, and live tiers. The lab and its
+curated corpus are not exported by AgentSmith or included in npm artifacts.
 
 `quality_fix` accepts only published verified finding IDs and returns a version-bound task for the active host model. The review model never edits code.

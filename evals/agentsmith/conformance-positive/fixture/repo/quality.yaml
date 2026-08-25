@@ -1,0 +1,4 @@
+version: 2
+project: conformance-positive
+review:
+  agentsmith: true

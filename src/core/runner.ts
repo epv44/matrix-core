@@ -5,12 +5,41 @@ import { aggregateMetrics } from "./policy.js";
 import { formatReport } from "./report.js";
 import { getChangedFiles } from "./changed.js";
 import { appendVerboseLog, verboseEnabled } from "./verbose.js";
-import type { EngineResult, PluginResult, ResolvedPolicy, RunCtx } from "./types.js";
+import type {
+  EngineResult,
+  LanguageWorkspace,
+  PluginResult,
+  PolicyCheck,
+  ResolvedPolicy,
+  RunCtx,
+  SqlWorkspaceFacet,
+  ToolEnvironment,
+} from "./types.js";
 import { getPluginByName } from "../packs/registry.js";
 import { resolveWorkspaceSet } from "./workspace.js";
 import { resolvePolicyForConfig } from "./resolved-policy.js";
 import { materializeTypeScriptConfig } from "./typescript-config.js";
 import { describeToolProbe, probeToolVersion } from "./process-env.js";
+
+const FAST_CHECKS = new Set([
+  "python.ruff",
+  "python.ruff-format",
+  "python.mypy",
+  "typescript.tsc",
+  "typescript.eslint",
+]);
+
+interface ExecutionTarget {
+  id: string;
+  pack: LanguageWorkspace["language"] | "sql";
+  executionRoot: string;
+  workspace: LanguageWorkspace;
+  sqlFacet?: SqlWorkspaceFacet;
+  toolEnvironment: ToolEnvironment;
+  checks: PolicyCheck[];
+  missingReason: string;
+  invalidReason: string;
+}
 
 export function toolVersion(binary: string): string | null {
   return probeToolVersion(binary).version;
@@ -18,6 +47,118 @@ export function toolVersion(binary: string): string | null {
 
 export function versionAccepted(version: string, range: string) {
   return version === range;
+}
+
+function executionTargets(workspace: LanguageWorkspace, policy: ResolvedPolicy): ExecutionTarget[] {
+  const checks = policy.checks.filter((candidate) => candidate.language === workspace.language);
+  if (checks.length === 0)
+    throw new Error(`No central quality profile exists for detected ${workspace.language} workspace ${workspace.id}`);
+  return [
+    {
+      id: workspace.id,
+      pack: workspace.language,
+      executionRoot: workspace.executionRoot,
+      workspace,
+      toolEnvironment: workspace.toolEnvironment,
+      checks,
+      missingReason: "required workspace tool missing",
+      invalidReason: "invalid application configuration",
+    },
+    ...workspace.sqlFacets.map((sqlFacet) => ({
+      id: sqlFacet.id,
+      pack: "sql" as const,
+      executionRoot: workspace.executionRoot,
+      workspace,
+      sqlFacet,
+      toolEnvironment: sqlFacet.toolEnvironment,
+      checks: policy.checks.filter((candidate) => candidate.language === "sql"),
+      missingReason: "required SQL tool environment missing",
+      invalidReason: "invalid SQL application configuration",
+    })),
+  ];
+}
+
+function failedCheck(check: PolicyCheck, target: ExecutionTarget, message: string, reason: string): PluginResult {
+  return {
+    plugin: check.id,
+    pack: target.pack,
+    status: "FAIL",
+    observations: [{ message, severity: "error" }],
+    reason,
+  };
+}
+
+async function executeCheck(opts: {
+  resolved: ReturnType<typeof resolveConfig>;
+  target: ExecutionTarget;
+  check: PolicyCheck;
+  binary: string;
+  version: string;
+  changed: string[];
+  run: Parameters<typeof runEngine>[0];
+}): Promise<PluginResult> {
+  const { resolved, target, check, binary, version } = opts;
+  const plugin = getPluginByName(check.id);
+  if (!plugin) throw new Error(`Policy references unknown check: ${check.id}`);
+  const scoped = scopeChangedFiles(opts.changed, resolved.configRoot, target.executionRoot);
+  const ctx: RunCtx = {
+    root: target.executionRoot,
+    configRoot: resolved.configRoot,
+    changedFiles: scoped,
+    full: opts.run.full || !opts.run.changed,
+    baseBranch: opts.run.baseBranch,
+    config: resolved.config,
+    fast: opts.run.fast,
+    workspace: target.workspace,
+    sqlFacet: target.sqlFacet,
+    policyCheck: check,
+  };
+  const capMap = new Map([
+    [
+      check.tool === "tsc" ? "typescript" : check.tool,
+      { name: check.tool, found: true, version, path: binary, required: true },
+    ],
+  ]);
+  let generatedConfig: ReturnType<typeof materializeTypeScriptConfig> | undefined;
+  try {
+    if (check.id === "typescript.tsc") {
+      if (!check.configAsset) throw new Error("Central TypeScript profile is missing its configuration asset");
+      generatedConfig = materializeTypeScriptConfig(target.workspace, check.configAsset);
+      target.workspace.effectiveConfigHash = generatedConfig.hash;
+      ctx.policyCheck = { ...check, args: ["--project", generatedConfig.path] };
+    }
+    if (verboseEnabled()) {
+      const targets = ctx.changedFiles?.length ? ctx.changedFiles.length : "all";
+      appendVerboseLog(resolved.configRoot, `run ${check.id} (ws=${target.id}, targets=${targets})`);
+    }
+    const start = Date.now();
+    const result = await plugin.run(ctx, capMap);
+    if (verboseEnabled()) {
+      appendVerboseLog(
+        resolved.configRoot,
+        `done ${check.id} -> ${result.status} in ${Date.now() - start}ms (score=${result.score ?? "n/a"})`,
+      );
+      if (result.observations?.length)
+        appendVerboseLog(resolved.configRoot, `  obs: ${result.observations.length} items`);
+    }
+    return {
+      ...normalizeObservationPaths(result, resolved.configRoot, target.executionRoot),
+      plugin: check.id,
+      pack: target.pack,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (verboseEnabled()) appendVerboseLog(resolved.configRoot, `error ${check.id}: ${message}`);
+    return {
+      plugin: check.id,
+      pack: target.pack,
+      status: "FAIL",
+      observations: [{ message, severity: "error" }],
+      reason: target.invalidReason,
+    };
+  } finally {
+    generatedConfig?.cleanup();
+  }
 }
 
 async function runPolicyEngine(
@@ -36,227 +177,43 @@ async function runPolicyEngine(
   const capabilities = [] as EngineResult["capabilities"];
 
   for (const workspace of workspaces) {
-    const workspaceChecks = policy.checks.filter((candidate) => candidate.language === workspace.language);
-    if (workspaceChecks.length === 0)
-      throw new Error(`No central quality profile exists for detected ${workspace.language} workspace ${workspace.id}`);
-    for (const check of workspaceChecks) {
-      if (
-        opts.fast &&
-        !["python.ruff", "python.ruff-format", "python.mypy", "typescript.tsc", "typescript.eslint"].includes(check.id)
-      )
-        continue;
-      const binary = workspace.toolEnvironment.binaries[check.tool];
-      const probe = binary ? probeToolVersion(binary) : null;
-      const version = probe?.version ?? null;
-      capabilities.push({
-        name: `${workspace.id}:${check.tool}`,
-        found: !!version,
-        version: version ?? undefined,
-        path: binary,
-        required: true,
-      });
-      if (!binary || !version) {
-        results.push({
-          plugin: check.id,
-          pack: workspace.language,
-          status: "FAIL",
-          observations: [
-            {
-              message:
-                binary && probe
-                  ? `${describeToolProbe(check.tool, probe)}; designated environment=${workspace.id}; global fallbacks are prohibited`
-                  : `${check.tool} is missing from designated ${workspace.id} environment; global fallbacks are prohibited`,
-              severity: "error",
-            },
-          ],
-          reason: "required workspace tool missing",
-        });
-        continue;
-      }
-      if (!versionAccepted(version, check.requiredVersion)) {
-        results.push({
-          plugin: check.id,
-          pack: workspace.language,
-          status: "FAIL",
-          observations: [
-            {
-              message: `${check.tool} ${version} does not satisfy central policy ${check.requiredVersion}`,
-              severity: "error",
-            },
-          ],
-          reason: "incompatible tool version",
-        });
-        continue;
-      }
-      const plugin = getPluginByName(check.id);
-      if (!plugin) throw new Error(`Policy references unknown check: ${check.id}`);
-      const executionRoot = workspace.executionRoot;
-      const scoped = scopeChangedFiles(changed, resolved.configRoot, executionRoot);
-      const ctx: RunCtx = {
-        root: executionRoot,
-        configRoot: resolved.configRoot,
-        changedFiles: scoped,
-        full: opts.full || !opts.changed,
-        baseBranch: opts.baseBranch,
-        config: resolved.config,
-        fast: opts.fast,
-        workspace,
-        policyCheck: check,
-      };
-      const capMap = new Map([
-        [
-          check.tool === "tsc" ? "typescript" : check.tool,
-          { name: check.tool, found: true, version, path: binary, required: true },
-        ],
-      ]);
-      let generatedConfig: ReturnType<typeof materializeTypeScriptConfig> | undefined;
-      try {
-        if (check.id === "typescript.tsc") {
-          if (!check.configAsset) throw new Error("Central TypeScript profile is missing its configuration asset");
-          generatedConfig = materializeTypeScriptConfig(workspace, check.configAsset);
-          workspace.effectiveConfigHash = generatedConfig.hash;
-          ctx.policyCheck = { ...check, args: ["--project", generatedConfig.path] };
-        }
-        if (verboseEnabled()) {
-          const targets = ctx.changedFiles?.length ? ctx.changedFiles.length : "all";
-          appendVerboseLog(resolved.configRoot, `run ${check.id} (ws=${workspace.id}, targets=${targets})`);
-        }
-        const start = Date.now();
-        const result = await plugin.run(ctx, capMap);
-        if (verboseEnabled()) {
-          appendVerboseLog(
-            resolved.configRoot,
-            `done ${check.id} -> ${result.status} in ${Date.now() - start}ms (score=${result.score ?? "n/a"})`,
-          );
-          if (result.observations?.length) {
-            appendVerboseLog(resolved.configRoot, `  obs: ${result.observations.length} items`);
-          }
-        }
-        results.push({
-          ...normalizeObservationPaths(result, resolved.configRoot, executionRoot),
-          plugin: check.id,
-          pack: workspace.language,
-        });
-      } catch (error) {
-        if (verboseEnabled()) {
-          appendVerboseLog(
-            resolved.configRoot,
-            `error ${check.id}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-        results.push({
-          plugin: check.id,
-          pack: workspace.language,
-          status: "FAIL",
-          observations: [{ message: error instanceof Error ? error.message : String(error), severity: "error" }],
-          reason: "invalid application configuration",
-        });
-      } finally {
-        generatedConfig?.cleanup();
-      }
-    }
-    for (const facet of workspace.sqlFacets) {
-      for (const check of policy.checks.filter((candidate) => candidate.language === "sql")) {
-        const binary = facet.toolEnvironment.binaries[check.tool];
+    for (const target of executionTargets(workspace, policy)) {
+      for (const check of target.checks) {
+        if (opts.fast && target.pack !== "sql" && !FAST_CHECKS.has(check.id)) continue;
+        const binary = target.toolEnvironment.binaries[check.tool];
         const probe = binary ? probeToolVersion(binary) : null;
         const version = probe?.version ?? null;
         capabilities.push({
-          name: `${facet.id}:${check.tool}`,
+          name: `${target.id}:${check.tool}`,
           found: !!version,
           version: version ?? undefined,
           path: binary,
           required: true,
         });
         if (!binary || !version) {
-          results.push({
-            plugin: check.id,
-            pack: "sql",
-            status: "FAIL",
-            observations: [
-              {
-                message:
-                  binary && probe
-                    ? `${describeToolProbe(check.tool, probe)}; designated environment=${facet.id}; global fallbacks are prohibited`
-                    : `${check.tool} is missing from designated ${facet.id} environment; global fallbacks are prohibited`,
-                severity: "error",
-              },
-            ],
-            reason: "required SQL tool environment missing",
-          });
+          const message =
+            binary && probe
+              ? `${describeToolProbe(check.tool, probe)}; designated environment=${target.id}; global fallbacks are prohibited`
+              : `${check.tool} is missing from designated ${target.id} environment; global fallbacks are prohibited`;
+          results.push(failedCheck(check, target, message, target.missingReason));
           continue;
         }
         if (!versionAccepted(version, check.requiredVersion)) {
-          results.push({
-            plugin: check.id,
-            pack: "sql",
-            status: "FAIL",
-            observations: [
-              {
-                message: `${check.tool} ${version} does not satisfy central policy ${check.requiredVersion}`,
-                severity: "error",
-              },
-            ],
-            reason: "incompatible tool version",
-          });
+          results.push(
+            failedCheck(
+              check,
+              target,
+              `${check.tool} ${version} does not satisfy central policy ${check.requiredVersion}`,
+              "incompatible tool version",
+            ),
+          );
           continue;
         }
-        const plugin = getPluginByName(check.id);
-        if (!plugin) throw new Error(`Policy references unknown check: ${check.id}`);
-        const scoped = scopeChangedFiles(changed, resolved.configRoot, workspace.executionRoot);
-        const ctx: RunCtx = {
-          root: workspace.executionRoot,
-          configRoot: resolved.configRoot,
-          changedFiles: scoped,
-          full: opts.full || !opts.changed,
-          baseBranch: opts.baseBranch,
-          config: resolved.config,
-          fast: opts.fast,
-          workspace,
-          sqlFacet: facet,
-          policyCheck: check,
-        };
-        const capMap = new Map([
-          [check.tool, { name: check.tool, found: true, version, path: binary, required: true }],
-        ]);
-        try {
-          if (verboseEnabled()) {
-            const targets = ctx.changedFiles?.length ? ctx.changedFiles.length : "all";
-            appendVerboseLog(resolved.configRoot, `run ${check.id} (ws=${facet.id}, targets=${targets})`);
-          }
-          const start = Date.now();
-          const result = await plugin.run(ctx, capMap);
-          if (verboseEnabled()) {
-            appendVerboseLog(
-              resolved.configRoot,
-              `done ${check.id} -> ${result.status} in ${Date.now() - start}ms (score=${result.score ?? "n/a"})`,
-            );
-            if (result.observations?.length) {
-              appendVerboseLog(resolved.configRoot, `  obs: ${result.observations.length} items`);
-            }
-          }
-          results.push({
-            ...normalizeObservationPaths(result, resolved.configRoot, workspace.executionRoot),
-            plugin: check.id,
-            pack: "sql",
-          });
-        } catch (error) {
-          if (verboseEnabled()) {
-            appendVerboseLog(
-              resolved.configRoot,
-              `error ${check.id}: ${error instanceof Error ? error.message : String(error)}`,
-            );
-          }
-          results.push({
-            plugin: check.id,
-            pack: "sql",
-            status: "FAIL",
-            observations: [{ message: error instanceof Error ? error.message : String(error), severity: "error" }],
-            reason: "invalid SQL application configuration",
-          });
-        }
+        results.push(await executeCheck({ resolved, target, check, binary, version, changed, run: opts }));
       }
     }
   }
+
   const metrics = aggregateMetrics(results);
   const failures = results
     .filter((result) => result.status === "FAIL" || result.status === "ERROR")

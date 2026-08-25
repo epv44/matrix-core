@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import type { BaselineData } from "./types.js";
+import { sha256 } from "./hash.js";
 
 export function getBaselinePath(root: string): string {
   return path.join(root, ".quality", "baseline.json");
@@ -34,7 +34,7 @@ export function saveBaseline(root: string, metrics: Record<string, number>, conf
 
 export function hashConfig(config: unknown): string {
   const str = JSON.stringify(config);
-  return crypto.createHash("sha256").update(str).digest("hex").slice(0, 12);
+  return sha256(str, 12);
 }
 
 export function diffBaseline(current: Record<string, number | null>, baseline: BaselineData | null) {

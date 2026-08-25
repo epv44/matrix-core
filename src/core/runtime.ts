@@ -3,8 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ENGINE_VERSION, GATE_STORE_DIR } from "./meta.js";
 import type { EngineRuntimeIdentity } from "./types.js";
-import crypto from "node:crypto";
 import os from "node:os";
+import { atomicWriteFile } from "./filesystem.js";
+import { isProcessAlive } from "./process.js";
 
 const runtimeStartedAt = new Date().toISOString();
 const mcpRuntimeFiles = new Set<string>();
@@ -44,13 +45,10 @@ export function recordEngineRuntime(root: string, adapter: "mcp" | "hook" | "cli
   const runtime = engineRuntimeIdentity();
   const directory = path.join(canonicalRoot, GATE_STORE_DIR);
   const target = path.join(directory, `${adapter}-runtime.json`);
-  const temporary = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  fs.mkdirSync(directory, { recursive: true });
-  fs.writeFileSync(
-    temporary,
+  atomicWriteFile(
+    target,
     `${JSON.stringify({ schemaVersion: 2, adapter, recordedAt: new Date().toISOString(), pid: process.pid, parentPid: process.ppid, ...runtime }, null, 2)}\n`,
   );
-  fs.renameSync(temporary, target);
   if (adapter === "mcp") recordMcpProcessRuntime(canonicalRoot, runtime);
   return runtime;
 }
@@ -58,7 +56,6 @@ export function recordEngineRuntime(root: string, adapter: "mcp" | "hook" | "cli
 function recordMcpProcessRuntime(root: string, runtime: EngineRuntimeIdentity): void {
   const directory = path.join(root, GATE_STORE_DIR, "mcp-runtime");
   const target = path.join(directory, `${process.pid}.json`);
-  const temporary = `${target}.${crypto.randomUUID()}.tmp`;
   const record: McpRuntimeRecord = {
     schemaVersion: 2,
     adapter: "mcp",
@@ -70,9 +67,7 @@ function recordMcpProcessRuntime(root: string, runtime: EngineRuntimeIdentity): 
     root,
     ...runtime,
   };
-  fs.mkdirSync(directory, { recursive: true });
-  fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`);
-  fs.renameSync(temporary, target);
+  atomicWriteFile(target, `${JSON.stringify(record, null, 2)}\n`);
   mcpRuntimeFiles.add(target);
 }
 
@@ -83,15 +78,6 @@ export function cleanupMcpRuntimeRecords(): void {
     } catch {}
   }
   mcpRuntimeFiles.clear();
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
-  }
 }
 
 export function mcpRuntimeWarnings(root: string): string[] {
@@ -112,9 +98,9 @@ export function mcpRuntimeWarnings(root: string): string[] {
     return [];
   }
   const local = records.filter((record) => record.hostname === os.hostname());
-  const stale = local.filter((record) => !pidAlive(record.pid));
+  const stale = local.filter((record) => !isProcessAlive(record.pid));
   const live = local.filter(
-    (record) => pidAlive(record.pid) && record.packageRoot === engineRuntimeIdentity().packageRoot,
+    (record) => isProcessAlive(record.pid) && record.packageRoot === engineRuntimeIdentity().packageRoot,
   );
   const liveByParent = new Map<number, number>();
   for (const record of live) liveByParent.set(record.parentPid, (liveByParent.get(record.parentPid) ?? 0) + 1);

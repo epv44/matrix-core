@@ -75,6 +75,15 @@ describe("runGate", () => {
       fs.writeFileSync(path.join(dir, "quality.yaml"), "version: 2\nproject: gate-test\n");
       fs.writeFileSync(path.join(dir, "one.txt"), "one\n");
       const full = await runGate({ cwd: dir, mode: "full", tool: "test", adapter: "vitest" });
+      const workingTree = await runGate({
+        cwd: dir,
+        mode: "changed",
+        fast: true,
+        changedFiles: ["one.txt"],
+        tool: "test",
+        adapter: "vitest",
+      });
+      expect(workingTree.baseBranch).toBe("working-tree");
       const changed = await runGate({
         cwd: dir,
         mode: "changed",

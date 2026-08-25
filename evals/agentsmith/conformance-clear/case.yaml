@@ -1,0 +1,33 @@
+schemaVersion: 4
+id: conformance-clear
+status: active
+kind: conformance
+source:
+  traceId: conformance-clear-trace
+  traceSchemaVersion: 4
+  repositoryFingerprint: conformance-clear
+  fixture:
+    path: fixture/repo
+    manifestPath: fixture-manifest.json
+    digest: 2eed37e06be67fc503bd82f110d328d90b46d1d951086816cbb89775e96f6355
+  project: synthetic
+sanitization: { reviewed: true, absolutePathsRemoved: true, sensitiveContentReviewed: true, redistributable: true }
+expectations:
+  snapshot:
+    files:
+      - { path: src/calculator.ts, changeKind: modified }
+  planning:
+    route: partitioned
+    files: [src/calculator.ts]
+    symbols: [src/calculator.ts#add]
+    edges: []
+  candidates:
+    items: []
+  aggregation:
+    outcome: clear
+    findings: []
+narrative:
+  summary: Harness-only clean refactor control.
+  trueCodeFlow: add remains a direct numeric addition.
+  references: []
+tags: [conformance, synthetic, clear]

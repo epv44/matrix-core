@@ -34,6 +34,26 @@ function getPolicyHash(root: string): string {
   return policy.policyHash;
 }
 
+function retryLimitResult(opts: {
+  root: string;
+  host: "cline" | "codex" | "claude";
+  turnId?: string;
+  currentHash: string;
+  state: TurnGateState;
+  maxRetries: number;
+}): TurnGateResult | null {
+  const retryCount = opts.state.retryCountByHash[opts.currentHash] || 0;
+  if (retryCount <= opts.maxRetries) return null;
+  turnStore.validationFailed(opts.root, opts.currentHash, opts.host, opts.turnId);
+  return {
+    decision: "error",
+    reason: `Validation failed after ${opts.maxRetries} attempts. Repository hash: ${opts.currentHash.slice(0, 12)}. Manual intervention required.`,
+    currentHash: opts.currentHash,
+    validatedHash: opts.state.validatedHash,
+    retryCount,
+  };
+}
+
 export class TurnGate {
   private root: string;
 
@@ -74,16 +94,8 @@ export class TurnGate {
       if (!status.completionAllowed) {
         const state = turnStore.candidateComplete(this.root, host, currentHash, turnId);
         const retryCount = state.retryCountByHash[currentHash] || 0;
-        if (retryCount > maxRetries) {
-          turnStore.validationFailed(this.root, currentHash, host, turnId);
-          return {
-            decision: "error",
-            reason: `Validation failed after ${maxRetries} attempts. Repository hash: ${currentHash.slice(0, 12)}. Manual intervention required.`,
-            currentHash,
-            validatedHash: state.validatedHash,
-            retryCount,
-          };
-        }
+        const limit = retryLimitResult({ root: this.root, host, turnId, currentHash, state, maxRetries });
+        if (limit) return limit;
         return {
           decision: "block",
           reason: `${status.reason ?? "Completion evidence is not current. Re-run validation."} (policy=${policyHash})`,
@@ -140,16 +152,8 @@ export class TurnGate {
     const state = turnStore.candidateComplete(this.root, host, currentHash, turnId);
     const retryCount = state.retryCountByHash[currentHash] || 0;
 
-    if (retryCount > maxRetries) {
-      turnStore.validationFailed(this.root, currentHash, host, turnId);
-      return {
-        decision: "error",
-        reason: `Validation failed after ${maxRetries} attempts. Repository hash: ${currentHash.slice(0, 12)}. Manual intervention required.`,
-        currentHash,
-        validatedHash: state.validatedHash,
-        retryCount,
-      };
-    }
+    const limit = retryLimitResult({ root: this.root, host, turnId, currentHash, state, maxRetries });
+    if (limit) return limit;
 
     const findings = this.extractFindings(status);
 

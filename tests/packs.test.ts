@@ -27,7 +27,7 @@ function baseCtx(over: Partial<RunCtx> = {}): RunCtx {
     root: "/tmp/matrix-packs",
     configRoot: "/tmp/matrix-packs",
     full: false,
-    config: { version: 1, checks: {}, policies: {} },
+    config: { version: 2, checks: {}, policies: {} },
     ...over,
   };
 }
@@ -112,13 +112,27 @@ describe("python pack plugins", () => {
   });
 
   it("pytest: fast defers, missing required -> FAIL, no relevant changes -> PASS", async () => {
-    await expectStatus(pytestPlugin.run(baseCtx({ fast: true }), new Map()), "SKIPPED", "fast mode");
-    await expectStatus(pytestPlugin.run(baseCtx(), new Map()), "FAIL", "executable not found");
-    await expectStatus(
-      pytestPlugin.run(baseCtx({ changedFiles: ["README.md"] }), capMap("pytest")),
-      "PASS",
-      "no relevant files changed",
-    );
+    const results = [
+      await expectStatus(pytestPlugin.run(baseCtx({ fast: true }), new Map()), "SKIPPED", "fast mode"),
+      await expectStatus(pytestPlugin.run(baseCtx(), new Map()), "FAIL", "executable not found"),
+      await expectStatus(
+        pytestPlugin.run(baseCtx({ changedFiles: ["README.md"] }), capMap("pytest")),
+        "PASS",
+        "no relevant files changed",
+      ),
+    ];
+    const expectedKeys = [
+      "pytest.coverage_percent",
+      "pytest.failed",
+      "pytest.passed",
+      "pytest.test_count",
+      "python.coverage_percent",
+      "python.pytest.coverage_percent",
+      "python.pytest.failed",
+      "python.pytest.passed",
+      "python.pytest.test_count",
+    ];
+    for (const result of results) expect(Object.keys(result.metrics ?? {}).sort()).toEqual(expectedKeys);
   });
 
   it("xenon and deptry fail when their designated tools are absent", async () => {

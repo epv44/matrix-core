@@ -12,6 +12,13 @@ function runGit(args: string[], cwd: string): { ok: boolean; out: string } {
   }
 }
 
+export type ChangedPathSource = "committed-delta" | "index" | "working-tree" | "untracked";
+
+export interface ChangedPathEntry {
+  path: string;
+  sources: ChangedPathSource[];
+}
+
 export function isGitRepo(cwd: string): boolean {
   const r = runGit(["rev-parse", "--is-inside-work-tree"], cwd);
   return r.ok && r.out === "true";
@@ -22,57 +29,48 @@ export function isGitRepo(cwd: string): boolean {
  * the worktree. Review scope needs deleted paths; deterministic tools normally
  * want getChangedFiles(), which retains the historical existing-file contract.
  */
-export function getChangedPaths(opts: { cwd: string; base?: string }): string[] {
+export function getChangedPathEntries(opts: { cwd: string; base?: string }): ChangedPathEntry[] {
   const cwd = path.resolve(opts.cwd);
   if (!isGitRepo(cwd)) return [];
 
   const topRes = runGit(["rev-parse", "--show-toplevel"], cwd);
   const repoRoot = topRes.ok ? topRes.out : cwd;
-  const base = opts.base || "main";
+  const files = new Map<string, Set<ChangedPathSource>>();
+  const add = (output: string, source: ChangedPathSource) => {
+    for (const file of output.split("\n").filter(Boolean)) {
+      const sources = files.get(file) ?? new Set<ChangedPathSource>();
+      sources.add(source);
+      files.set(file, sources);
+    }
+  };
 
-  const files = new Set<string>();
-
-  const diffBase = runGit(["diff", "--name-only", `${base}...HEAD`], cwd);
-  if (diffBase.ok)
-    diffBase.out
-      .split("\n")
-      .filter(Boolean)
-      .forEach((f) => files.add(f));
-
-  const diffMain = runGit(["diff", "--name-only", `origin/${base}...HEAD`], cwd);
-  if (diffMain.ok)
-    diffMain.out
-      .split("\n")
-      .filter(Boolean)
-      .forEach((f) => files.add(f));
+  if (opts.base) {
+    const diffBase = runGit(["diff", "--name-only", `${opts.base}...HEAD`], cwd);
+    if (diffBase.ok) add(diffBase.out, "committed-delta");
+  }
 
   const diffCached = runGit(["diff", "--name-only", "--cached"], cwd);
-  if (diffCached.ok)
-    diffCached.out
-      .split("\n")
-      .filter(Boolean)
-      .forEach((f) => files.add(f));
+  if (diffCached.ok) add(diffCached.out, "index");
 
   const diffUnstaged = runGit(["diff", "--name-only"], cwd);
-  if (diffUnstaged.ok)
-    diffUnstaged.out
-      .split("\n")
-      .filter(Boolean)
-      .forEach((f) => files.add(f));
+  if (diffUnstaged.ok) add(diffUnstaged.out, "working-tree");
 
   const others = runGit(["ls-files", "--others", "--exclude-standard"], cwd);
-  if (others.ok)
-    others.out
-      .split("\n")
-      .filter(Boolean)
-      .forEach((f) => files.add(f));
+  if (others.ok) add(others.out, "untracked");
 
-  return Array.from(files)
-    .filter((f) => {
+  return Array.from(files.entries())
+    .filter(([f]) => {
       const relative = f.replaceAll("\\", "/").replace(/^\.\//, "");
       return relative !== ".quality" && !relative.startsWith(".quality/");
     })
-    .map((f) => (path.isAbsolute(f) ? f : path.join(repoRoot, f)));
+    .map(([file, sources]) => ({
+      path: path.isAbsolute(file) ? file : path.join(repoRoot, file),
+      sources: [...sources].sort(),
+    }));
+}
+
+export function getChangedPaths(opts: { cwd: string; base?: string }): string[] {
+  return getChangedPathEntries(opts).map((entry) => entry.path);
 }
 
 export function getChangedFiles(opts: { cwd: string; base?: string }): string[] {

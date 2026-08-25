@@ -1,9 +1,9 @@
 import { spawnSync } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveConfig } from "./config-resolver.js";
 import { resolvePolicyForConfig } from "./resolved-policy.js";
+import { sha256 } from "./hash.js";
 
 function runGit(args: string[], cwd: string): string {
   try {
@@ -21,7 +21,7 @@ function gitIndexFingerprint(root: string): string {
 }
 
 function hashBytes(buf: Buffer): string {
-  return crypto.createHash("sha256").update(buf).digest("hex");
+  return sha256(buf);
 }
 
 function hashFile(p: string): string {
@@ -37,7 +37,7 @@ function hashConfig(root: string): string {
   if (!fs.existsSync(configPath)) return "";
   try {
     const content = fs.readFileSync(configPath, "utf8");
-    return crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
+    return sha256(content, 16);
   } catch {
     return "";
   }

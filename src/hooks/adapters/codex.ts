@@ -1,17 +1,13 @@
-import { resolveConfig } from "../../core/config-resolver.js";
 import type { VendorAdapter, VendorPayload, AdapterEvent } from "./types.js";
 import fs from "node:fs";
-
-function normalizedMode(value: unknown): string | null {
-  return typeof value === "string" ? value.trim().toLowerCase() : null;
-}
-
-function getPayloadValue(payload: VendorPayload, ...keys: string[]): unknown {
-  for (const key of keys) {
-    if (key in payload) return payload[key];
-  }
-  return undefined;
-}
+import {
+  candidateCompleteEvent,
+  dirtyEvent,
+  getPayloadValue,
+  normalizedMode,
+  payloadReportsPlanMode,
+  resolveRootFromCwd,
+} from "./common.js";
 
 function codexTranscriptReportsPlan(payload: VendorPayload): boolean {
   const transcriptPath = getPayloadValue(payload, "transcriptPath", "transcript_path") as string | undefined;
@@ -46,28 +42,25 @@ export const codexAdapter: VendorAdapter = {
   host: "codex",
 
   isPlanMode(payload: VendorPayload): boolean {
-    if (normalizedMode(getPayloadValue(payload, "permissionMode", "permission_mode")) === "plan") return true;
-    if (normalizedMode(getPayloadValue(payload, "collaborationModeKind", "collaboration_mode_kind")) === "plan")
-      return true;
+    if (payloadReportsPlanMode(payload, "permissionMode", "permission_mode")) return true;
+    if (payloadReportsPlanMode(payload, "collaborationModeKind", "collaboration_mode_kind")) return true;
     return codexTranscriptReportsPlan(payload);
   },
 
   resolveRoot(payload: VendorPayload): string {
-    const cwd = getPayloadValue(payload, "cwd") as string | undefined;
-    if (cwd) return resolveConfig({ cwd }).configRoot;
-    throw new Error("Cannot resolve workspace root from Codex payload");
+    return resolveRootFromCwd(payload, "Codex");
   },
 
   onToolCall(payload: VendorPayload): AdapterEvent | null {
-    return { type: "DIRTY", payload };
+    return dirtyEvent(payload);
   },
 
   onTurnStart(payload: VendorPayload): AdapterEvent | null {
-    return { type: "DIRTY", payload };
+    return dirtyEvent(payload);
   },
 
   onTurnEnd(payload: VendorPayload): AdapterEvent | null {
-    return { type: "CANDIDATE_COMPLETE", payload };
+    return candidateCompleteEvent(payload);
   },
 
   getBackgroundTasks(payload: VendorPayload): string[] | null {

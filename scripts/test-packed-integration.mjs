@@ -59,6 +59,7 @@ try {
     { cwd: consumer, env: npmEnvironment },
   );
   const installedRoot = path.join(consumer, "node_modules", "@epv44", "matrixcore", "dist", "agentsmith");
+  const installedPackageRoot = path.join(consumer, "node_modules", "@epv44", "matrixcore");
   for (const specialist of [
     "architecture-reviewer.md",
     "perf-reviewer.md",
@@ -71,6 +72,10 @@ try {
       `missing live specialist asset ${specialist}`,
     );
   assert.equal(fs.existsSync(path.join(installedRoot, "rules", "registry.yaml")), true);
+  for (const evalArtifact of ["eval.js", "eval-metrics.js", "eval-provider.js"])
+    assert.equal(fs.existsSync(path.join(installedRoot, evalArtifact)), false, `packed eval runtime ${evalArtifact}`);
+  assert.equal(fs.existsSync(path.join(installedPackageRoot, "evals")), false, "packed eval corpus");
+  assert.equal(fs.existsSync(path.join(installedPackageRoot, "tools")), false, "packed eval tools");
   for (const removed of ["agents/agent-smith.md", "agents/security", "rules/languages", "rules/security", "skills"])
     assert.equal(fs.existsSync(path.join(installedRoot, removed)), false, `packed obsolete AgentSmith asset ${removed}`);
   fs.writeFileSync(
@@ -85,6 +90,8 @@ try {
   run("git", ["add", "."], { cwd: consumer });
   run("git", ["commit", "-qm", "fixture"], { cwd: consumer });
   fs.symlinkSync(consumer, symlink, "dir");
+  const cliHelp = run("npx", ["--no-install", "matrix-core", "--help"], { cwd: consumer }).stdout;
+  assert.doesNotMatch(cliHelp, /^\s+eval\b/m);
 
   const transport = new StdioClientTransport({
     command: "npx",

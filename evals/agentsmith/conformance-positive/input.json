@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 4,
+  "traceId": "conformance-positive-trace",
+  "captureMode": "explicit-local",
+  "createdAt": "2026-08-24T00:00:00.000Z",
+  "packageVersion": "0.5.1",
+  "root": "<repo>",
+  "version": "conformance-positive",
+  "scope": {
+    "id": "conformance-positive-scope",
+    "version": "conformance-positive",
+    "root": "<repo>",
+    "base": null,
+    "diff": "diff --git a/src/producer.ts b/src/producer.ts\n--- a/src/producer.ts\n+++ b/src/producer.ts\n@@ -1,3 +1,3 @@\n-export function loadUrl(): string {\n-  return process.env.SERVICE_URL || 'http://localhost';\n+export function loadUrl(): string | undefined {\n+  return process.env.SERVICE_URL || undefined;\n }\n",
+    "changedFiles": ["src/producer.ts"],
+    "fileContents": { "src/producer.ts": "export function loadUrl(): string | undefined {\n  return process.env.SERVICE_URL || undefined;\n}\n" },
+    "deletedFiles": {},
+    "suppliedContext": {},
+    "manifest": [{ "path": "src/producer.ts", "changeKind": "modified", "additions": 2, "deletions": 2, "language": "typescript", "generated": false, "binary": false }],
+    "omissions": [],
+    "languages": ["typescript"],
+    "metadata": { "fileCount": 1, "additions": 2, "deletions": 2, "capturedAt": "2026-08-24T00:00:00.000Z" }
+  },
+  "deterministicReport": "PASS",
+  "result": {
+    "schemaVersion": 3, "version": "conformance-positive", "snapshotId": "conformance-positive-scope",
+    "status": "completed", "outcome": "findings", "mode": "partitioned", "reviewPath": "generic", "findings": [],
+    "coverage": { "changedFiles": 1, "changedFilesReviewed": 1, "changedSymbols": 1, "changedSymbolsReviewed": 1, "localUnitsGenerated": 1, "localUnitsReviewed": 1, "interactionUnitsGenerated": 1, "interactionUnitsReviewed": 1, "dependencyEdgesIdentified": 1, "dependencyEdgesEligible": 1, "dependencyEdgesReviewed": 1, "evidenceRequests": 0, "evidenceResolved": 0, "evidenceGaps": 0, "globalScan": "none", "omissions": [] },
+    "summary": "Synthetic expected finding.", "timestamp": "2026-08-24T00:00:00.000Z", "reviewer": "AgentSmith",
+    "runtime": { "models": { "candidate": "qwen3.5:9b-q4_K_M", "verifier": "qwen3.5:9b-q4_K_M" }, "inputTokens": 0, "outputTokens": 0, "concurrency": 1 }
+  },
+  "decisionProvenance": { "publishedFindingIds": [], "rejectedCandidateIds": [], "likelyCandidateIds": [], "insufficientEvidenceCandidateIds": [], "aggregateRule": "verified only", "errors": [] }
+}

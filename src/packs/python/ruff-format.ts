@@ -2,13 +2,7 @@ import { spawnSync } from "node:child_process";
 import type { QualityPlugin } from "../interface.js";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
 import { verboseEnabled } from "../../core/verbose.js";
-function getCfg(ctx: RunCtx, keys: string[]) {
-  for (const k of keys) {
-    const cfg = ctx.config?.checks?.[k];
-    if (cfg) return cfg;
-  }
-  return undefined;
-}
+import { getCheckConfig } from "../common.js";
 
 function runFormatCheck(
   root: string,
@@ -49,6 +43,15 @@ function runFormatCheck(
   return { files };
 }
 
+function formatObservations(files: string[]): Observation[] {
+  return files.map((file) => ({
+    file,
+    message: "file would be reformatted by ruff format",
+    severity: "warn",
+    ruleId: "ruff-format",
+  }));
+}
+
 export const ruffFormatPlugin: QualityPlugin = {
   name: "python.ruff-format",
   pack: "python",
@@ -74,7 +77,7 @@ export const ruffFormatPlugin: QualityPlugin = {
     }
     const extra =
       ctx.policyCheck?.args ??
-      ((getCfg(ctx, ["python.ruff-format", "ruff-format", "ruff_format"])?.args || []) as string[]);
+      ((getCheckConfig(ctx, ["python.ruff-format", "ruff-format", "ruff_format"])?.args || []) as string[]);
     const binary = ctx.workspace?.toolEnvironment.binaries.ruff ?? "ruff";
     const pyChanged = (ctx.changedFiles || []).filter((f) => f.endsWith(".py"));
 
@@ -103,12 +106,7 @@ export const ruffFormatPlugin: QualityPlugin = {
           reason: "engine/plugin malfunction",
         };
       const count = files.length;
-      const obs: Observation[] = files.map((f) => ({
-        file: f,
-        message: "file would be reformatted by ruff format",
-        severity: "warn",
-        ruleId: "ruff-format",
-      }));
+      const obs = formatObservations(files);
       return {
         plugin: "python.ruff-format",
         status: count > 0 ? "FAIL" : "PASS",
@@ -135,25 +133,12 @@ export const ruffFormatPlugin: QualityPlugin = {
       };
     const total = totalRes.files.length;
     let fresh = 0;
-    let obs: Observation[] = ctx.policyCheck
-      ? totalRes.files.map((f) => ({
-          file: f,
-          message: "file would be reformatted by ruff format",
-          severity: "warn" as const,
-          ruleId: "ruff-format",
-        }))
-      : [];
+    let obs: Observation[] = ctx.policyCheck ? formatObservations(totalRes.files) : [];
     if (pyChanged.length > 0) {
       const freshRes = runFormatCheck(ctx.root, pyChanged, extra, binary);
       if (!freshRes.error) {
         fresh = freshRes.files.length;
-        if (!ctx.policyCheck)
-          obs = freshRes.files.map((f) => ({
-            file: f,
-            message: "file would be reformatted by ruff format",
-            severity: "warn",
-            ruleId: "ruff-format",
-          }));
+        if (!ctx.policyCheck) obs = formatObservations(freshRes.files);
       }
     }
     const failed = ctx.policyCheck ? total > 0 : fresh > 0;

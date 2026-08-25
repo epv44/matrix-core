@@ -4,6 +4,7 @@ import path from "node:path";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
 import { verboseEnabled } from "../../core/verbose.js";
 import { childProcessEnv } from "../../core/process-env.js";
+import { getCheckConfig } from "../common.js";
 
 function tryTsc(
   root: string,
@@ -31,14 +32,6 @@ function tryTsc(
     } catch {}
   }
   return { stdout: "", stderr: "tsc not found", status: null };
-}
-
-function getCfg(ctx: RunCtx, keys: string[]) {
-  for (const k of keys) {
-    const cfg = ctx.config?.checks?.[k];
-    if (cfg) return cfg;
-  }
-  return undefined;
 }
 
 function parseTscOutput(out: string): Observation[] {
@@ -105,7 +98,7 @@ export const tscPlugin: QualityPlugin = {
       }
     }
 
-    const cfg = getCfg(ctx, ["typescript.tsc", "tsc", "typescript"]);
+    const cfg = getCheckConfig(ctx, ["typescript.tsc", "tsc", "typescript"]);
     const extraArgs = ctx.policyCheck?.args ?? ((cfg?.args || ["--noEmit"]) as string[]);
 
     try {

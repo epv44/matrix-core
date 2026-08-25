@@ -14,6 +14,7 @@ import type {
   GraphSymbol,
 } from "./types.js";
 import type { ReviewScope } from "../../agentsmith/scope.js";
+import { parseChangedRanges } from "../diff.js";
 import type { ReviewGraphPolicy } from "../types.js";
 
 function estimate(value: string) {
@@ -78,22 +79,10 @@ function canonicalEdges(edges: GraphContextEdge[]): GraphContextEdge[] {
 }
 function changedRanges(diff: string) {
   const ranges = new Map<string, Array<{ start: number; end: number }>>();
-  let file: string | undefined;
-  for (const line of diff.split("\n")) {
-    const diffHeader = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-    if (diffHeader) file = diffHeader[2];
-    const header = /^\+\+\+ b\/(.+)$/.exec(line);
-    if (header) file = header[1];
-    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
-    if (file && hunk) {
-      const newCount = Number(hunk[4] ?? 1);
-      const useOldSide = newCount === 0;
-      const start = Number(useOldSide ? hunk[1] : hunk[3]);
-      const count = Number(useOldSide ? (hunk[2] ?? 1) : newCount);
-      const current = ranges.get(file) ?? [];
-      current.push({ start, end: Math.max(start, start + count - 1) });
-      ranges.set(file, current);
-    }
+  for (const range of parseChangedRanges(diff)) {
+    const current = ranges.get(range.file) ?? [];
+    current.push({ start: range.start, end: range.end });
+    ranges.set(range.file, current);
   }
   return ranges;
 }

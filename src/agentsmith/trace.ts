@@ -5,14 +5,16 @@ import { spawnSync } from "node:child_process";
 import type { ReviewResult } from "../core/types.js";
 import type { ReviewScope } from "./scope.js";
 import type { EngineExecution } from "./engine-types.js";
+import { atomicWriteFile } from "../core/filesystem.js";
+import { sourceObjectPath, type CapturedSourceSnapshot, type SourceSnapshotManifest } from "./source-snapshot.js";
 
 export const TRACE_ENV = "MATRIXCORE_TRACE";
-export const TRACE_SCHEMA_VERSION = 3;
+export const TRACE_SCHEMA_VERSION = 5;
 export const TRACE_MAX_COUNT = 20;
 export const TRACE_MAX_BYTES = 250 * 1024 * 1024;
 
 export interface AgentSmithTrace {
-  schemaVersion: 2 | 3;
+  schemaVersion: 2 | 3 | 4 | 5;
   traceId: string;
   captureMode: "automatic-local" | "explicit-local";
   createdAt: string;
@@ -22,6 +24,16 @@ export interface AgentSmithTrace {
   profileHash?: string;
   strategyHash?: string;
   graphSnapshotHash?: string | null;
+  sourceSnapshot?: {
+    schemaVersion: 1;
+    manifestHash: string;
+    fileCount: number;
+    totalBytes: number;
+    complete: boolean;
+    portable: boolean;
+    captureDurationMs: number;
+    warnings: string[];
+  };
   scope: ReviewScope;
   deterministicReport: string;
   execution?: EngineExecution;
@@ -49,6 +61,12 @@ export function isAgentSmithTraceEnabled(env: NodeJS.ProcessEnv = process.env): 
 export function tracesRoot(root: string): string {
   return path.join(root, ".quality", "traces", "agentsmith");
 }
+export function traceSourceManifestPath(root: string, traceId: string): string {
+  return path.join(tracesRoot(root), traceId, "source-manifest.json");
+}
+export function readTraceSourceManifest(root: string, traceId: string): SourceSnapshotManifest {
+  return JSON.parse(fs.readFileSync(traceSourceManifestPath(root, traceId), "utf8")) as SourceSnapshotManifest;
+}
 export function createTraceId(now = new Date()): string {
   return `${now.toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID()}`;
 }
@@ -75,7 +93,7 @@ export function pruneAgentSmithTraces(
   try {
     entries = fs
       .readdirSync(directory, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
+      .filter((entry) => entry.isDirectory() && entry.name !== "_objects")
       .map((entry) => {
         const target = path.join(directory, entry.name);
         return { id: entry.name, path: target, modifiedMs: fs.statSync(target).mtimeMs, bytes: directorySize(target) };
@@ -87,11 +105,27 @@ export function pruneAgentSmithTraces(
   const removed: string[] = [];
   let retained = 0;
   let bytes = 0;
+  const referencedObjects = new Set<string>();
   for (const entry of entries) {
+    let sourceManifest: SourceSnapshotManifest | null = null;
+    try {
+      sourceManifest = JSON.parse(fs.readFileSync(path.join(entry.path, "source-manifest.json"), "utf8"));
+    } catch {}
+    const newObjects = (sourceManifest?.entries ?? [])
+      .filter((item) => item.type === "file" && !referencedObjects.has(item.sha256))
+      .map((item) => item.sha256);
+    const objectBytes = newObjects.reduce((total, digest) => {
+      try {
+        return total + fs.statSync(sourceObjectPath(root, digest)).size;
+      } catch {
+        return total;
+      }
+    }, 0);
     // Keep the newest trace even when a single unusually large trace exceeds the byte budget.
-    if (retained === 0 || (retained < maxCount && bytes + entry.bytes <= maxBytes)) {
+    if (retained === 0 || (retained < maxCount && bytes + entry.bytes + objectBytes <= maxBytes)) {
       retained += 1;
-      bytes += entry.bytes;
+      bytes += entry.bytes + objectBytes;
+      newObjects.forEach((digest) => referencedObjects.add(digest));
       continue;
     }
     try {
@@ -101,21 +135,44 @@ export function pruneAgentSmithTraces(
       // Retention failure must not change the review decision.
     }
   }
+  const objectsRoot = path.join(directory, "_objects", "sha256");
+  const pruneObjects = (current: string) => {
+    try {
+      for (const object of fs.readdirSync(current, { withFileTypes: true })) {
+        const target = path.join(current, object.name);
+        if (object.isDirectory()) pruneObjects(target);
+        else {
+          const digest = path.relative(objectsRoot, target).split(path.sep).join("");
+          if (!referencedObjects.has(digest)) fs.unlinkSync(target);
+        }
+      }
+    } catch {}
+  };
+  pruneObjects(objectsRoot);
   return { removed, retained, bytes };
 }
 export function writeAgentSmithTrace(
   root: string,
-  input: Omit<AgentSmithTrace, "schemaVersion" | "traceId" | "captureMode" | "createdAt" | "root">,
+  input: Omit<
+    AgentSmithTrace,
+    "schemaVersion" | "traceId" | "captureMode" | "createdAt" | "root" | "sourceSnapshot"
+  > & {
+    sourceSnapshotCapture?: CapturedSourceSnapshot;
+  },
 ): { traceId?: string; warning?: string } {
   if (!isAgentSmithTraceEnabled()) return {};
   const traceId = createTraceId();
-  const directory = path.join(tracesRoot(root), traceId);
-  const target = path.join(directory, "trace.json");
-  const temporary = `${target}.${process.pid}.tmp`;
+  const target = path.join(tracesRoot(root), traceId, "trace.json");
   try {
-    fs.mkdirSync(directory, { recursive: true });
+    const { sourceSnapshotCapture, ...traceInput } = input;
+    if (sourceSnapshotCapture)
+      atomicWriteFile(
+        path.join(path.dirname(target), "source-manifest.json"),
+        `${JSON.stringify(sourceSnapshotCapture.manifest, null, 2)}\n`,
+        0o600,
+      );
     const trace: AgentSmithTrace = {
-      ...input,
+      ...traceInput,
       schemaVersion: TRACE_SCHEMA_VERSION,
       traceId,
       captureMode: traceTokens(process.env[TRACE_ENV]).some((token) => ["agentsmith", "all"].includes(token))
@@ -123,17 +180,23 @@ export function writeAgentSmithTrace(
         : "automatic-local",
       createdAt: new Date().toISOString(),
       root,
+      sourceSnapshot: sourceSnapshotCapture
+        ? {
+            schemaVersion: 1,
+            manifestHash: sourceSnapshotCapture.manifestHash,
+            fileCount: sourceSnapshotCapture.fileCount,
+            totalBytes: sourceSnapshotCapture.totalBytes,
+            complete: sourceSnapshotCapture.complete,
+            portable: sourceSnapshotCapture.portable,
+            captureDurationMs: sourceSnapshotCapture.captureDurationMs,
+            warnings: sourceSnapshotCapture.warnings,
+          }
+        : undefined,
     };
-    fs.writeFileSync(temporary, `${JSON.stringify(trace, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-    fs.renameSync(temporary, target);
+    atomicWriteFile(target, `${JSON.stringify(trace, null, 2)}\n`, 0o600);
     pruneAgentSmithTraces(root);
     return { traceId };
   } catch (error) {
-    try {
-      fs.unlinkSync(temporary);
-    } catch {
-      /* best effort */
-    }
     return { warning: `AgentSmith trace was not written: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
@@ -142,7 +205,7 @@ export function readAgentSmithTrace(root: string, traceId: string): AgentSmithTr
   const parsed = JSON.parse(
     fs.readFileSync(path.join(tracesRoot(root), traceId, "trace.json"), "utf8"),
   ) as AgentSmithTrace;
-  if (![2, 3].includes(parsed.schemaVersion) || parsed.traceId !== traceId)
+  if (![2, 3, 4, 5].includes(parsed.schemaVersion) || parsed.traceId !== traceId)
     throw new Error(`Unsupported or inconsistent AgentSmith trace: ${traceId}`);
   return parsed;
 }
@@ -150,7 +213,7 @@ export function listAgentSmithTraces(root: string): AgentSmithTrace[] {
   try {
     return fs
       .readdirSync(tracesRoot(root), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
+      .filter((entry) => entry.isDirectory() && entry.name !== "_objects")
       .map((entry) => {
         try {
           return readAgentSmithTrace(root, entry.name);

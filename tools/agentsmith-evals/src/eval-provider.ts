@@ -1,6 +1,6 @@
-import type { AgentSmithConfig, ModelProfile } from "../core/types.js";
-import type { AgentSmithTrace } from "./trace.js";
-import type { ProviderResponse, ReviewOutputKind, ReviewProvider } from "./provider.js";
+import type { AgentSmithConfig, ModelProfile } from "../../../src/core/types.js";
+import type { AgentSmithTrace } from "../../../src/agentsmith/trace.js";
+import type { ProviderResponse, ReviewOutputKind, ReviewProvider } from "../../../src/agentsmith/provider.js";
 
 interface Cassette {
   outputKind: ReviewOutputKind;
@@ -67,10 +67,14 @@ export class RecordedReviewProvider implements ReviewProvider {
     this.cassettes = traceCassettes(trace);
     const rawProfiles = trace.execution?.modelProfiles as unknown;
     const profiles = Array.isArray(rawProfiles) ? rawProfiles : Object.values(trace.execution?.modelProfiles ?? {});
+    const runtimeModels = Object.values(trace.result?.runtime?.models ?? {}).filter(
+      (model): model is string => typeof model === "string",
+    );
     this.models = [
-      ...new Set(
-        profiles.filter((profile): profile is ModelProfile => Boolean(profile)).map((profile) => profile.model),
-      ),
+      ...new Set([
+        ...profiles.filter((profile): profile is ModelProfile => Boolean(profile)).map((profile) => profile.model),
+        ...runtimeModels,
+      ]),
     ];
   }
 

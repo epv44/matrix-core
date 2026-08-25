@@ -3,7 +3,7 @@ import { formatReport, formatDoctorReport, formatVerificationSection } from "../
 import type { PluginResult, Capability, ResolvedConfig, BaselineData } from "../src/core/types.js";
 
 const cfg: ResolvedConfig = {
-  config: { version: 1, checks: {}, policies: {} },
+  config: { version: 2, checks: {}, policies: {} },
   configPath: "/p/quality.yaml",
   configRoot: "/p",
   isDefault: false,

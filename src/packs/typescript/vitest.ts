@@ -4,14 +4,7 @@ import path from "node:path";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
 import { verboseEnabled } from "../../core/verbose.js";
 import { childProcessEnv } from "../../core/process-env.js";
-
-function getCfg(ctx: RunCtx, keys: string[]) {
-  for (const k of keys) {
-    const cfg = ctx.config?.checks?.[k];
-    if (cfg) return cfg;
-  }
-  return undefined;
-}
+import { getCheckConfig } from "../common.js";
 
 function runVitest(root: string, extra: string[]): { stdout: string; stderr: string; status: number | null } {
   const local = path.join(root, "node_modules", ".bin", "vitest");
@@ -81,7 +74,7 @@ export const vitestPlugin: QualityPlugin = {
       }
     }
 
-    const cfg = getCfg(ctx, ["typescript.vitest", "vitest", "jest"]);
+    const cfg = getCheckConfig(ctx, ["typescript.vitest", "vitest", "jest"]);
     const extra = (cfg?.args || []) as string[];
 
     try {

@@ -43,7 +43,7 @@ describe("detectMap", () => {
 describe("detectAll", () => {
   it("only core capabilities when no languages are detected", () => {
     clearCapabilityCache();
-    const caps = detectAll({ version: 1, checks: {}, policies: {} }, "/tmp/matrix-caps-none", {
+    const caps = detectAll({ version: 2, checks: {}, policies: {} }, "/tmp/matrix-caps-none", {
       python: false,
       typescript: false,
       go: false,

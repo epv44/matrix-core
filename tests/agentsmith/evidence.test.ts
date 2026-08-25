@@ -11,11 +11,33 @@ const scope: ReviewScope = {
   base: "main",
   diff: "",
   changedFiles: ["src/a.ts"],
+  changeSources: { "src/a.ts": ["working-tree"] },
   fileContents: { "src/a.ts": "const safe = true;\nreturn null;\n" },
   suppliedContext: {},
 };
 
 describe("candidate evidence resolution", () => {
+  const emptyGraph = (): GraphContext => ({
+    snapshot: {
+      state: "READY",
+      schemaVersion: 1,
+      workspaceHash: "w",
+      snapshotHash: "g",
+      indexedCommit: null,
+      providerVersions: {},
+      completedAt: "now",
+      fileCount: 0,
+    },
+    changedSymbols: [],
+    nodes: [],
+    edges: [],
+    rendered: "",
+    tokenEstimate: 0,
+    budgetTokens: 100,
+    selectedNodeKeys: [],
+    omittedNodeKeys: [],
+  });
+
   it("deduplicates equivalent requests and caps evidence records by code identity", () => {
     const symbol = {
       file: "src/a.ts",
@@ -198,7 +220,7 @@ describe("candidate evidence resolution", () => {
     expect(resolved.records[0]).toMatchObject({ file: "src/a.ts", startLine: 1 });
   });
 
-  it("falls back to the changed anchor when a same-file semantic locator is unusable", () => {
+  it("reports an unusable same-file semantic locator instead of substituting the changed anchor", () => {
     const candidate: CandidateFinding = {
       id: "damaged-locator",
       sourceWorkItemIds: ["local:1"],
@@ -244,8 +266,128 @@ describe("candidate evidence resolution", () => {
       },
       policy: { maxRequestsPerCandidate: 2, maxParallelResolutions: 1, maxSnippetLines: 20 },
     });
-    expect(resolved.gaps).toEqual([]);
-    expect(resolved.records[0]).toMatchObject({ file: "src/a.ts", startLine: 1 });
-    expect(resolved.records[0].snippet).toContain("return null");
+    expect(resolved.records).toEqual([]);
+    expect(resolved.gaps).toEqual([expect.stringContaining("no exact evidence matched")]);
+    expect(resolved.outcomes).toEqual([expect.objectContaining({ status: "unresolved", records: [] })]);
+  });
+
+  it("does not report a missing literal search as resolved", () => {
+    const candidate: CandidateFinding = {
+      id: "missing-search",
+      sourceWorkItemIds: ["local:1"],
+      sourceReviewers: [],
+      file: "src/a.ts",
+      line: 1,
+      severity: "medium",
+      category: "correctness",
+      title: "Candidate",
+      description: "Candidate description",
+      evidenceRequests: [{ kind: "search", query: "not in the repository", reason: "find exact text" }],
+      candidateConfidence: 0.8,
+    };
+    const resolved = resolveEvidenceRequests({
+      candidate,
+      scope,
+      graph: emptyGraph(),
+      policy: { maxRequestsPerCandidate: 2, maxParallelResolutions: 1, maxSnippetLines: 20 },
+    });
+    expect(resolved.records).toEqual([]);
+    expect(resolved.outcomes[0]).toMatchObject({ status: "unresolved" });
+  });
+
+  it("marks an unqualified symbol shared by multiple files as ambiguous", () => {
+    const symbols = ["src/one.ts", "src/two.ts"].map((file) => ({
+      file,
+      provider: "typescript-compiler",
+      kind: "function" as const,
+      name: "resolve",
+      qualifiedName: "resolve",
+      startLine: 1,
+      endLine: 1,
+      contentHash: file,
+    }));
+    const graph = emptyGraph();
+    graph.nodes = symbols.map((symbol) => ({ symbol, score: 80, distance: 1 }));
+    const candidate: CandidateFinding = {
+      id: "ambiguous",
+      sourceWorkItemIds: ["local:1"],
+      sourceReviewers: [],
+      file: "src/a.ts",
+      line: 1,
+      severity: "medium",
+      category: "contract",
+      title: "Candidate",
+      description: "Candidate description",
+      evidenceRequests: [{ kind: "implementation", symbol: "resolve", reason: "inspect implementation" }],
+      candidateConfidence: 0.8,
+    };
+    const resolved = resolveEvidenceRequests({
+      candidate,
+      scope: {
+        ...scope,
+        suppliedContext: { "src/one.ts": "function resolve() {}", "src/two.ts": "function resolve() {}" },
+      },
+      graph,
+      policy: { maxRequestsPerCandidate: 2, maxParallelResolutions: 1, maxSnippetLines: 20 },
+    });
+    expect(resolved.records).toEqual([]);
+    expect(resolved.outcomes[0]).toMatchObject({ status: "unresolved", reason: expect.stringContaining("ambiguous") });
+  });
+
+  it("resolves callers in the incoming graph-edge direction", () => {
+    const producer = {
+      file: "src/a.ts",
+      provider: "typescript-compiler",
+      kind: "function" as const,
+      name: "produce",
+      qualifiedName: "produce",
+      startLine: 1,
+      endLine: 1,
+      contentHash: "producer",
+    };
+    const caller = {
+      ...producer,
+      file: "src/caller.ts",
+      name: "consume",
+      qualifiedName: "consume",
+      contentHash: "caller",
+    };
+    const graph = emptyGraph();
+    graph.nodes = [producer, caller].map((symbol) => ({ symbol, score: 100, distance: 0 }));
+    graph.edges = [
+      {
+        source: "src/caller.ts:consume",
+        target: "src/a.ts:produce",
+        targetText: "produce",
+        kind: "calls",
+        confidence: "exact",
+        provider: "typescript-compiler",
+        sourceSymbol: caller,
+        targetSymbol: producer,
+      },
+    ];
+    const candidate: CandidateFinding = {
+      id: "callers",
+      sourceWorkItemIds: ["interaction:1"],
+      sourceReviewers: [],
+      file: "src/a.ts",
+      line: 1,
+      severity: "high",
+      category: "contract",
+      title: "Producer mismatch",
+      description: "Callers expect a different value.",
+      evidenceRequests: [
+        { kind: "callers", symbol: "produce", pathHint: "src/a.ts", reason: "inspect actual callers" },
+      ],
+      candidateConfidence: 0.9,
+    };
+    const resolved = resolveEvidenceRequests({
+      candidate,
+      scope: { ...scope, suppliedContext: { "src/caller.ts": "function consume() { return produce(); }" } },
+      graph,
+      policy: { maxRequestsPerCandidate: 2, maxParallelResolutions: 1, maxSnippetLines: 20 },
+    });
+    expect(resolved.outcomes[0]).toMatchObject({ status: "satisfied" });
+    expect(resolved.records[0]).toMatchObject({ file: "src/caller.ts", symbol: "consume", relation: "callers" });
   });
 });

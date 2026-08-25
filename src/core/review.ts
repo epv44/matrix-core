@@ -9,39 +9,10 @@ import { getQualityStatus } from "./status.js";
 import { formatAgentSmithReview, REVIEW_MARKDOWN_ARTIFACT } from "../agentsmith/report.js";
 import { turnStore } from "./turn-store.js";
 import { coordinateQualityCompletion } from "./completion-coordinator.js";
+import { noReviewResult } from "./reviewer.js";
 export { runReview } from "../agentsmith/scripts/run-review.js";
 function unavailableReview(version: string, message: string): ReviewResult {
-  return {
-    schemaVersion: 3,
-    version,
-    status: "error",
-    outcome: "incomplete",
-    mode: "partitioned",
-    reviewPath: "generic",
-    findings: [],
-    coverage: {
-      changedFiles: 0,
-      changedFilesReviewed: 0,
-      changedSymbols: 0,
-      changedSymbolsReviewed: 0,
-      localUnitsGenerated: 0,
-      localUnitsReviewed: 0,
-      interactionUnitsGenerated: 0,
-      interactionUnitsReviewed: 0,
-      dependencyEdgesIdentified: 0,
-      dependencyEdgesEligible: 0,
-      dependencyEdgesReviewed: 0,
-      evidenceRequests: 0,
-      evidenceResolved: 0,
-      evidenceGaps: 0,
-      globalScan: "none",
-      omissions: [],
-    },
-    summary: message,
-    timestamp: new Date().toISOString(),
-    reviewer: "AgentSmith",
-    errors: [message],
-  };
+  return noReviewResult(version, "error", { message, errors: [message] });
 }
 export async function runQualityReview(
   opts: RunGateOptions & { configFlag?: string; signal?: AbortSignal; provider?: ReviewProvider },

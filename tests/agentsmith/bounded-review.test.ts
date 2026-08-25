@@ -86,8 +86,13 @@ function makeProvider(opts: {
           if (opts.verificationDelayMs) await delay(opts.verificationDelayMs);
           if (opts.blockVerification) await waitForAbort(input.signal);
           if (opts.firstVerificationVerified && verificationCall++ > 0) await waitForAbort(input.signal);
+          const evidenceId = /\[([0-9a-f]{16})\]/.exec(input.prompt)?.[1];
           return {
-            raw: '{"verdict":"verified","confidence":1,"supportingEvidenceIds":[]}',
+            raw: JSON.stringify({
+              verdict: "verified",
+              confidence: 1,
+              supportingEvidenceIds: evidenceId ? [evidenceId] : [],
+            }),
             usage: { inputTokens: 10, outputTokens: 5 },
           };
         }

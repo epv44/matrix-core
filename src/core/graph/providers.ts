@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -7,9 +6,10 @@ import { createRequire } from "node:module";
 import { Language, Parser } from "web-tree-sitter";
 import type { LanguageWorkspace } from "../types.js";
 import type { GraphEdge, GraphFacts, GraphFile, GraphProvider, GraphSymbol } from "./types.js";
+import { sha256 } from "../hash.js";
 
 function sha(value: string) {
-  return crypto.createHash("sha256").update(value).digest("hex");
+  return sha256(value);
 }
 function lineAt(source: string, offset: number) {
   return source.slice(0, offset).split("\n").length;

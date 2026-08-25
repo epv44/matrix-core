@@ -121,7 +121,7 @@ describe("AgentSmith Markdown report", () => {
 | Local units | 3 | 3 |
 | Interaction units | 2 | 2 |
 | Dependency edges | 3 | 3/4 eligible/identified |
-| Evidence | 1 | 1 requests; 0 gaps |
+| Evidence | 1/1 requests satisfied | 0 partial; 0 unresolved; 0 skipped; 1 records packed |
 | Global scan | compact | — |
 
 AgentSmith is advisory. Select verified finding IDs explicitly before running \`quality_fix\`; MatrixCore does not apply fixes automatically.`);

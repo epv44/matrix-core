@@ -3,15 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import yaml from "js-yaml";
 import {
   compareEvalReports,
-  curateTrace,
-  readEvalCase,
   runEvalCases,
   scoreFindings,
   scoreInspectionTargets,
-} from "../../src/agentsmith/eval.js";
+} from "../../tools/agentsmith-evals/src/eval.js";
+import { curateTrace, readEvalCase, validateCaseFixture } from "../../tools/agentsmith-evals/src/case.js";
 import { captureReviewScope } from "../../src/agentsmith/scope.js";
+import { captureSourceSnapshot } from "../../src/agentsmith/source-snapshot.js";
 import { writeAgentSmithTrace } from "../../src/agentsmith/trace.js";
 import type { ReviewProvider } from "../../src/agentsmith/provider.js";
 import type { ReviewResult } from "../../src/core/types.js";
@@ -80,20 +81,36 @@ function fixture() {
       aggregateRule: "verified only",
       errors: [],
     },
+    sourceSnapshotCapture: captureSourceSnapshot(root, scope.version),
   });
   return { root, traceId: written.traceId! };
 }
 
+function activate(root: string, slug: string) {
+  const target = path.join(root, "evals", "agentsmith", slug, "case.yaml");
+  const definition = yaml.load(fs.readFileSync(target, "utf8")) as any;
+  definition.status = "active";
+  definition.sanitization = {
+    reviewed: true,
+    absolutePathsRemoved: true,
+    sensitiveContentReviewed: true,
+    redistributable: true,
+  };
+  definition.expectations = { aggregation: { outcome: "clear", findings: [] } };
+  fs.writeFileSync(target, yaml.dump(definition));
+}
+
 afterEach(() => vi.unstubAllEnvs());
 
-describe("AgentSmith v2 eval cases", () => {
-  it("curates L0-L3 labels from a local trace", () => {
+describe("AgentSmith v4 eval cases", () => {
+  it("curates an unlabeled sanitized draft from a local trace", () => {
     const { root, traceId } = fixture();
     try {
-      curateTrace(root, traceId, "case-one");
+      curateTrace({ root, traceId, slug: "case-one" });
       const { definition } = readEvalCase(root, "case-one");
-      expect(definition).toMatchObject({ schemaVersion: 2, expectedOutcome: "clear" });
-      expect(() => curateTrace(root, traceId, "case-one")).toThrow(/already exists/);
+      expect(definition).toMatchObject({ schemaVersion: 4, status: "draft", expectations: {} });
+      expect(definition.source.fixture).toBeTruthy();
+      expect(() => curateTrace({ root, traceId, slug: "case-one" })).toThrow(/already exists/);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -143,7 +160,11 @@ describe("AgentSmith v2 eval cases", () => {
       }),
     };
     try {
-      curateTrace(root, traceId, "case-run");
+      curateTrace({ root, traceId, slug: "case-run" });
+      await expect(runEvalCases({ root, slugs: ["case-run"], provider })).rejects.toThrow(/draft/);
+      activate(root, "case-run");
+      const canonical = path.join(root, "evals", "agentsmith", "case-run", "fixture", "repo");
+      const before = fs.readFileSync(path.join(canonical, "a.ts"), "utf8");
       const result = await runEvalCases({
         root,
         slugs: ["case-run"],
@@ -162,8 +183,42 @@ describe("AgentSmith v2 eval cases", () => {
         verification: [],
         providerFailures: [],
       });
+      expect(result.cases[0].results[0].provenance.fixtureDigest).toMatch(/^[a-f0-9]{64}$/);
+      expect(fs.readFileSync(path.join(canonical, "a.ts"), "utf8")).toBe(before);
+      expect(fs.existsSync(path.join(canonical, ".quality"))).toBe(false);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects fixture drift before replay", () => {
+    const { root, traceId } = fixture();
+    try {
+      curateTrace({ root, traceId, slug: "case-drift" });
+      const target = path.join(root, "evals", "agentsmith", "case-drift", "fixture", "repo", "a.ts");
+      fs.appendFileSync(target, "// drift\n");
+      expect(() => validateCaseFixture(root, "case-drift")).toThrow(/content mismatch/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("replays a curated case after the producer repository is removed", async () => {
+    const { root: producer, traceId } = fixture();
+    const lab = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-eval-lab-"));
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen3.5:9b-q4_K_M"] }),
+      invoke: async () => ({ raw: '{"c":[]}', usage: { inputTokens: 1, outputTokens: 1 } }),
+    };
+    try {
+      curateTrace({ root: lab, traceRoot: producer, traceId, slug: "detached" });
+      activate(lab, "detached");
+      fs.rmSync(producer, { recursive: true, force: true });
+      const report = await runEvalCases({ root: lab, slugs: ["detached"], provider });
+      expect(report.cases[0].results[0]).toMatchObject({ outcome: "clear", errors: [] });
+    } finally {
+      fs.rmSync(producer, { recursive: true, force: true });
+      fs.rmSync(lab, { recursive: true, force: true });
     }
   });
 

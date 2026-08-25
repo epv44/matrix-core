@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { sha256Json } from "../../core/hash.js";
 
 export interface HashDiffOptions {
   diff: string;
@@ -6,8 +6,5 @@ export interface HashDiffOptions {
 }
 
 export function hashDiff(opts: HashDiffOptions): string {
-  return crypto
-    .createHash("sha256")
-    .update(JSON.stringify({ diff: opts.diff, config: opts.config ?? "" }))
-    .digest("hex");
+  return sha256Json({ diff: opts.diff, config: opts.config ?? "" });
 }

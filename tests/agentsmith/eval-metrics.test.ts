@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectEvalMetrics, collectTraceMetrics } from "../../src/agentsmith/eval-metrics.js";
+import { collectEvalMetrics, collectTraceMetrics } from "../../tools/agentsmith-evals/src/eval-metrics.js";
 
 describe("AgentSmith eval benchmark metrics", () => {
   it("measures inspected changed lines, candidate omissions, evidence relevance, and honesty", () => {

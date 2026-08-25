@@ -2,14 +2,7 @@ import { spawnSync } from "node:child_process";
 import type { QualityPlugin } from "../interface.js";
 import type { PluginResult, Capability, RunCtx, Observation } from "../../core/types.js";
 import { verboseEnabled } from "../../core/verbose.js";
-
-function getCfg(ctx: RunCtx, keys: string[]) {
-  for (const k of keys) {
-    const cfg = ctx.config?.checks?.[k];
-    if (cfg) return cfg;
-  }
-  return undefined;
-}
+import { getCheckConfig } from "../common.js";
 
 function runRuff(
   root: string,
@@ -64,6 +57,16 @@ function baseMetrics(total: number, fresh: number): Record<string, number | null
   };
 }
 
+function ruffError(message: string, reason: string): PluginResult {
+  return {
+    plugin: "python.ruff",
+    status: "ERROR",
+    observations: [{ message, severity: "error" }],
+    metrics: { "python.ruff.violation_count": null, "ruff.violation_count": null },
+    reason,
+  };
+}
+
 export const ruffPlugin: QualityPlugin = {
   name: "python.ruff",
   pack: "python",
@@ -87,7 +90,7 @@ export const ruffPlugin: QualityPlugin = {
         reason: req ? "executable not found but required=true" : "executable not found, required=false",
       };
     }
-    const extraArgs = ctx.policyCheck?.args ?? getCfg(ctx, ["python.ruff", "ruff"])?.args ?? [];
+    const extraArgs = ctx.policyCheck?.args ?? getCheckConfig(ctx, ["python.ruff", "ruff"])?.args ?? [];
     const binary = ctx.workspace?.toolEnvironment.binaries.ruff ?? "ruff";
     const pyChanged = (ctx.changedFiles || []).filter((f) => f.endsWith(".py"));
 
@@ -103,14 +106,7 @@ export const ruffPlugin: QualityPlugin = {
         };
       try {
         const { violations, error } = runRuff(ctx.root, pyChanged, extraArgs, binary);
-        if (error)
-          return {
-            plugin: "python.ruff",
-            status: "ERROR",
-            observations: [{ message: error, severity: "error" }],
-            metrics: { "python.ruff.violation_count": null, "ruff.violation_count": null },
-            reason: "engine/plugin malfunction",
-          };
+        if (error) return ruffError(error, "engine/plugin malfunction");
         const obs = toObs(violations);
         const count = violations.length;
         return {
@@ -122,26 +118,13 @@ export const ruffPlugin: QualityPlugin = {
           reason: count > 0 ? `${count} violations in changed files` : undefined,
         };
       } catch (e: any) {
-        return {
-          plugin: "python.ruff",
-          status: "ERROR",
-          observations: [{ message: e.message, severity: "error" }],
-          metrics: { "python.ruff.violation_count": null, "ruff.violation_count": null },
-          reason: "exception",
-        };
+        return ruffError(e.message, "exception");
       }
     }
 
     try {
       const totalRes = runRuff(ctx.root, undefined, extraArgs, binary);
-      if (totalRes.error)
-        return {
-          plugin: "python.ruff",
-          status: "ERROR",
-          observations: [{ message: totalRes.error, severity: "error" }],
-          metrics: { "python.ruff.violation_count": null, "ruff.violation_count": null },
-          reason: "engine/plugin malfunction",
-        };
+      if (totalRes.error) return ruffError(totalRes.error, "engine/plugin malfunction");
       const total = totalRes.violations.length;
       let fresh = 0;
       let obs: Observation[] = ctx.policyCheck ? toObs(totalRes.violations) : [];
@@ -168,13 +151,7 @@ export const ruffPlugin: QualityPlugin = {
             : undefined,
       };
     } catch (e: any) {
-      return {
-        plugin: "python.ruff",
-        status: "ERROR",
-        observations: [{ message: e.message, severity: "error" }],
-        metrics: { "python.ruff.violation_count": null, "ruff.violation_count": null },
-        reason: "exception",
-      };
+      return ruffError(e.message, "exception");
     }
   },
 };

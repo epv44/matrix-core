@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { evaluatePolicy } from "../src/core/policy.js";
 import type { QualityConfig, BaselineData } from "../src/core/types.js";
 const cfg: QualityConfig = {
-  version: 1,
+  version: 2,
   checks: {
     ruff: { enabled: true, required: true },
     mypy: { enabled: true, required: false },
@@ -76,7 +76,7 @@ describe("policy", () => {
   });
   it("new_violation policy blocks new but allows pre-existing", () => {
     const cfg2: QualityConfig = {
-      version: 1,
+      version: 2,
       checks: { ruff: { enabled: true, required: true } },
       policies: { ruff: { metric: "ruff.new_violation_count", max: 0 } },
     };

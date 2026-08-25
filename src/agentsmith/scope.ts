@@ -1,18 +1,19 @@
 import { spawnSync } from "node:child_process";
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { getChangedPaths } from "../core/changed.js";
+import { getChangedPathEntries, type ChangedPathSource } from "../core/changed.js";
 import { computeWorkspaceVersion } from "../core/version.js";
 import type { FileEntry, ReviewOmission } from "./engine-types.js";
+import { sha256Json } from "../core/hash.js";
 
 export interface ReviewScope {
   id: string;
   version: string;
   root: string;
-  base: string;
+  base: string | null;
   diff: string;
   changedFiles: string[];
+  changeSources: Record<string, ChangedPathSource[]>;
   /** Paths whose fileContents value is the frozen pre-deletion content. */
   deletedFiles?: string[];
   fileContents: Record<string, string>;
@@ -65,9 +66,9 @@ function safeRead(root: string, relative: string): string {
   }
 }
 
-function deletedPreimage(root: string, relative: string, base: string): string {
+function deletedPreimage(root: string, relative: string, base?: string): string {
   const candidates = ["HEAD"];
-  for (const ref of [base, `origin/${base}`]) {
+  for (const ref of base ? [base] : []) {
     const mergeBase = git(root, ["merge-base", ref, "HEAD"]).trim();
     if (mergeBase) candidates.push(mergeBase);
     candidates.push(ref);
@@ -81,18 +82,27 @@ function deletedPreimage(root: string, relative: string, base: string): string {
 
 export function captureReviewScope(opts: { root: string; base?: string; contextFiles?: string[] }): ReviewScope {
   const root = fs.realpathSync(path.resolve(opts.root));
-  const base = opts.base ?? "main";
+  const base = opts.base ?? null;
   const version = computeWorkspaceVersion(root);
-  const changedFiles = getChangedPaths({ cwd: root, base })
-    .map((file) => path.relative(root, file))
-    .sort();
+  const changedEntries = getChangedPathEntries({ cwd: root, ...(opts.base ? { base: opts.base } : {}) });
+  const changeSources = Object.fromEntries(
+    changedEntries.map((entry) => [path.relative(root, entry.path), entry.sources]),
+  );
+  const changedFiles = Object.keys(changeSources).sort();
   const deletedFiles = changedFiles.filter((file) => !fs.existsSync(path.resolve(root, file)));
   const deleted = new Set(deletedFiles);
   const fileContents = Object.fromEntries(
-    changedFiles.map((file) => [file, deleted.has(file) ? deletedPreimage(root, file, base) : safeRead(root, file)]),
+    changedFiles.map((file) => [
+      file,
+      deleted.has(file) ? deletedPreimage(root, file, base ?? undefined) : safeRead(root, file),
+    ]),
   );
   const suppliedContext = Object.fromEntries((opts.contextFiles ?? []).map((file) => [file, safeRead(root, file)]));
-  const sections = [git(root, ["diff", `${base}...HEAD`]), git(root, ["diff", "--cached"]), git(root, ["diff"])];
+  const sections = [
+    ...(base ? [git(root, ["diff", `${base}...HEAD`])] : []),
+    git(root, ["diff", "--cached"]),
+    git(root, ["diff"]),
+  ];
   const tracked = new Set(git(root, ["ls-files"]).split("\n").filter(Boolean));
   for (const file of changedFiles)
     if (!tracked.has(file))
@@ -138,10 +148,17 @@ export function captureReviewScope(opts: { root: string; base?: string; contextF
     deletions: manifest.reduce((sum, file) => sum + file.deletions, 0),
     capturedAt,
   };
-  const id = crypto
-    .createHash("sha256")
-    .update(JSON.stringify({ version, base, diff, deletedFiles, fileContents, suppliedContext, manifest, omissions }))
-    .digest("hex");
+  const id = sha256Json({
+    version,
+    base,
+    diff,
+    deletedFiles,
+    changeSources,
+    fileContents,
+    suppliedContext,
+    manifest,
+    omissions,
+  });
   return {
     id,
     version,
@@ -149,6 +166,7 @@ export function captureReviewScope(opts: { root: string; base?: string; contextF
     base,
     diff,
     changedFiles,
+    changeSources,
     deletedFiles,
     fileContents,
     suppliedContext,

@@ -25,7 +25,13 @@ describe("ReviewScope", () => {
       git(root, "commit", "-m", "add deleted fixture");
       fs.unlinkSync(path.join(root, "deleted.md"));
       const scope = captureReviewScope({ root });
+      expect(scope.base).toBeNull();
       expect(scope.changedFiles).toEqual(["deleted.md", "new.rs", "tracked.ts"]);
+      expect(scope.changeSources).toMatchObject({
+        "deleted.md": ["working-tree"],
+        "new.rs": ["untracked"],
+        "tracked.ts": ["working-tree"],
+      });
       expect(scope.deletedFiles).toEqual(["deleted.md"]);
       expect(scope.diff).toContain("new file mode");
       expect(scope.diff).toContain("deleted file mode");
@@ -34,6 +40,29 @@ describe("ReviewScope", () => {
       const frozen = scope.fileContents["tracked.ts"];
       fs.writeFileSync(path.join(root, "tracked.ts"), "changed later\n");
       expect(scope.fileContents["tracked.ts"]).toBe(frozen);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes committed branch changes only when a base is explicit", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-scope-explicit-base-"));
+    try {
+      git(root, "init", "-b", "main");
+      git(root, "config", "user.email", "test@example.com");
+      git(root, "config", "user.name", "Test");
+      fs.writeFileSync(path.join(root, "base.ts"), "export const base = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-m", "base");
+      git(root, "switch", "-c", "feature");
+      fs.writeFileSync(path.join(root, "feature.ts"), "export const feature = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-m", "feature");
+
+      expect(captureReviewScope({ root }).changedFiles).toEqual([]);
+      const explicit = captureReviewScope({ root, base: "main" });
+      expect(explicit.changedFiles).toEqual(["feature.ts"]);
+      expect(explicit.changeSources["feature.ts"]).toEqual(["committed-delta"]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

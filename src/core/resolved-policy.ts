@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,13 +6,14 @@ import { loadSpecialists } from "../agentsmith/registry.js";
 import { loadStructuredRules } from "../agentsmith/rules.js";
 import { resolveCachedGitHubPolicy } from "./github-policy.js";
 import { AGENTSMITH_STRATEGY_HASH, AGENTSMITH_STRATEGY_VERSION } from "../agentsmith/strategy.js";
+import { sha256 } from "./hash.js";
 
 export interface PolicyProvider {
   resolve(): ResolvedPolicy;
 }
 
 function sha(value: string | Buffer) {
-  return crypto.createHash("sha256").update(value).digest("hex");
+  return sha256(value);
 }
 
 function asset(name: string) {

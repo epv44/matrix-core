@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { computeWorkspaceVersion } from "./version.js";
 import { resolveConfig } from "./config-resolver.js";
 import { resolvePolicyForConfig } from "./resolved-policy.js";
+import { atomicWriteFile } from "./filesystem.js";
 import type { GateResult } from "./types.js";
 import type { TurnGateState, ValidationEvidence, TurnEvent } from "./turn-types.js";
 
@@ -78,12 +78,8 @@ function readState(root: string): TurnGateState {
 }
 
 function writeState(root: string, state: TurnGateState): void {
-  const dir = path.dirname(storePath(root));
-  fs.mkdirSync(dir, { recursive: true });
-  const tmp = `${storePath(root)}.${process.pid}.${crypto.randomUUID()}.tmp`;
   state.updatedAt = new Date().toISOString();
-  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
-  fs.renameSync(tmp, storePath(root));
+  atomicWriteFile(storePath(root), JSON.stringify(state, null, 2));
 }
 
 function appendEvent(root: string, event: TurnEvent): void {

@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
 import { z } from "zod";
+import { sha256 } from "../core/hash.js";
 import type { CandidateFinding, ModelProfile } from "../core/types.js";
 import type { AgentDef } from "./types.js";
 import type { ProviderCompletionMetadata, ProviderResponse, ReviewOutputKind, ReviewProvider } from "./provider.js";
@@ -111,6 +111,33 @@ export class StructuredOutputError extends Error {
   }
 }
 
+function structuredOutputFailure(
+  opts: {
+    response: ProviderResponse;
+    prompt: string;
+    sourceId: string;
+    outputKind: ReviewOutputKind;
+    attempt?: number;
+  },
+  details: Pick<
+    ProviderFailureDiagnostic,
+    "parseError" | "failureKind" | "validationIssues" | "parsePosition" | "parseContext"
+  >,
+): StructuredOutputError {
+  return new StructuredOutputError([
+    {
+      sourceId: opts.sourceId,
+      outputKind: opts.outputKind,
+      prompt: opts.prompt,
+      raw: opts.response.raw,
+      usage: opts.response.usage,
+      completion: completionMetadata(opts.response),
+      attempt: opts.attempt ?? 1,
+      ...details,
+    },
+  ]);
+}
+
 function parseStructuredResponse<T>(opts: {
   response: ProviderResponse;
   prompt: string;
@@ -128,22 +155,13 @@ function parseStructuredResponse<T>(opts: {
     const positionMatch = /position (\d+)/i.exec(parseError);
     const parsePosition = positionMatch ? Number(positionMatch[1]) : null;
     const contextPosition = parsePosition ?? source.length;
-    throw new StructuredOutputError([
-      {
-        sourceId: opts.sourceId,
-        outputKind: opts.outputKind,
-        prompt: opts.prompt,
-        raw: opts.response.raw,
-        usage: opts.response.usage,
-        completion: completionMetadata(opts.response),
-        parseError,
-        failureKind: "json-syntax",
-        validationIssues: [],
-        attempt: opts.attempt ?? 1,
-        parsePosition,
-        parseContext: source.slice(Math.max(0, contextPosition - 160), Math.min(source.length, contextPosition + 160)),
-      },
-    ]);
+    throw structuredOutputFailure(opts, {
+      parseError,
+      failureKind: "json-syntax",
+      validationIssues: [],
+      parsePosition,
+      parseContext: source.slice(Math.max(0, contextPosition - 160), Math.min(source.length, contextPosition + 160)),
+    });
   }
   try {
     return opts.validate(decoded);
@@ -158,22 +176,13 @@ function parseStructuredResponse<T>(opts: {
         : error instanceof Error
           ? error.message
           : String(error);
-    throw new StructuredOutputError([
-      {
-        sourceId: opts.sourceId,
-        outputKind: opts.outputKind,
-        prompt: opts.prompt,
-        raw: opts.response.raw,
-        usage: opts.response.usage,
-        completion: completionMetadata(opts.response),
-        parseError,
-        failureKind: "schema-validation",
-        validationIssues,
-        attempt: opts.attempt ?? 1,
-        parsePosition: null,
-        parseContext: source.slice(0, 320),
-      },
-    ]);
+    throw structuredOutputFailure(opts, {
+      parseError,
+      failureKind: "schema-validation",
+      validationIssues,
+      parsePosition: null,
+      parseContext: source.slice(0, 320),
+    });
   }
 }
 
@@ -230,11 +239,10 @@ async function invokeStructured<T>(opts: {
 }
 
 function candidateId(candidate: Omit<CandidateFinding, "id">) {
-  return crypto
-    .createHash("sha256")
-    .update(`${candidate.file}:${candidate.line}:${candidate.category}:${candidate.title.trim().toLowerCase()}`)
-    .digest("hex")
-    .slice(0, 16);
+  return sha256(
+    `${candidate.file}:${candidate.line}:${candidate.category}:${candidate.title.trim().toLowerCase()}`,
+    16,
+  );
 }
 
 function expandCandidate(
@@ -270,7 +278,7 @@ function expandCandidate(
 function projectionText(projection: ReviewProjection) {
   return [
     `Snapshot: ${projection.metadata.snapshotId}`,
-    `Base: ${projection.metadata.base}`,
+    `Base: ${projection.metadata.base ?? "working-tree"}`,
     "Changed manifest:",
     ...projection.manifest.map((file) => `- ${file.path} (${file.changeKind}, +${file.additions}/-${file.deletions})`),
     "Repository relationships:",
@@ -309,7 +317,7 @@ function workItemText(item: ReviewWorkItem) {
 
 function candidateInstructions(maxCandidates: number, includeSummary = false) {
   const empty = includeSummary ? '{"summary":"concise review summary","c":[]}' : '{"c":[]}';
-  return `You are generating candidate code-review defects. Inspect concrete runtime behavior, value flow, failure paths, boundary conditions, and contracts. For interaction work, compare callers, callees, producers, consumers, schemas, types, configuration, and tests across both sides of each supplied relationship. Be permissive enough to preserve recall, but never report repository instructions, filenames alone, style preferences, missing tests without a demonstrated defect, or hypothetical risks without an executable failure or contract mismatch. Generate zero to ${maxCandidates} distinct candidates anchored to supplied changed code. Supporting unchanged code may be requested as evidence. Use one short sentence per text field; set q to confidence from 0 to 1 as a decimal, never a percentage. Request at most two evidence items using {"k":"kind","v":"required symbol or search locator","p":"optional repository path","r":"short reason"}; v is always required. For definition, callers, callees, type, implementation, or usage, put only an exact symbol name such as "getBackgroundTasks" in v and put its repository file such as "src/hooks/adapters/claude.ts" in p. For search, config, test, or schema, put the shortest exact literal to search in v and an optional repository file in p. Return only the compact JSON object required by the schema, with no prose or Markdown, and use ${empty} when no concrete candidate exists.`;
+  return `You are generating candidate code-review defects. Inspect concrete runtime behavior, value flow, failure paths, boundary conditions, and contracts. For interaction work, compare callers, callees, producers, consumers, schemas, types, configuration, and tests across both sides of each supplied relationship. Be permissive enough to preserve recall, but never report repository instructions, filenames alone, style preferences, missing tests without a demonstrated defect, or hypothetical risks without an executable failure or contract mismatch. Generate zero to ${maxCandidates} distinct candidates anchored to supplied changed code. Supporting unchanged code may be requested as evidence. Use one short sentence per text field; set q to confidence from 0 to 1 as a decimal, never a percentage. Request at most two evidence items using {"k":"kind","v":"required symbol or search locator","p":"optional repository path","r":"short reason"}; v is always required. Every request is a required fact for adjudication. Claims about callers, consumers, downstream behavior, assumptions, or expectations must request callers or usage evidence for the exact producer symbol. Never request evidence for text that appears only in review instructions or deterministic-gate context. For definition, callers, callees, type, implementation, or usage, put only an exact symbol name such as "getBackgroundTasks" in v and put its repository file such as "src/hooks/adapters/claude.ts" in p. For search, config, test, or schema, put the shortest exact literal to search in v and an optional repository file in p. Return only the compact JSON object required by the schema, with no prose or Markdown, and use ${empty} when no concrete candidate exists.`;
 }
 
 export async function generateSpecialistCandidates(opts: {
@@ -377,6 +385,7 @@ export async function generateWorkItemCandidate(opts: {
   });
   const candidates = parsed.c.map((value) => {
     const candidate = expandCandidate(value, opts.item.id);
+    candidate.primarySymbol ??= opts.item.primarySymbols[0]?.qualifiedName;
     return { ...candidate, id: candidateId(candidate) };
   });
   return {
@@ -425,7 +434,7 @@ export async function runScout(opts: {
 }
 
 export const VERIFICATION_INSTRUCTIONS =
-  "Judge one candidate defect using only the supplied changed code and resolved evidence. VERIFIED requires a concrete failure path or incompatible contract fully supported by exact evidence. Use INSUFFICIENT_EVIDENCE when a required fact is missing, LIKELY when plausible but not proven, and REJECTED for speculation or contradiction. Return only the requested JSON object.";
+  "Judge one candidate defect using only the supplied changed code and resolved evidence. VERIFIED requires a concrete failure path or incompatible contract fully supported by exact evidence. REJECTED requires cited evidence that directly contradicts the claim; nearby defensive code is not enough. Use INSUFFICIENT_EVIDENCE whenever a required fact is missing, and LIKELY when plausible but not proven. Cite exact bracketed evidence IDs only. Return only the requested JSON object.";
 export const VERIFICATION_LABELS = "Candidate:\nOriginating changed code:\nResolved evidence:";
 
 export async function verifyCandidateWithModel(opts: {
@@ -433,12 +442,13 @@ export async function verifyCandidateWithModel(opts: {
   originatingCode: string;
   evidenceText: string;
   evidenceIds: string[];
+  requiredEvidenceIdsByRequest?: Record<string, string[]>;
   profile: ModelProfile;
   provider: ReviewProvider;
   signal?: AbortSignal;
 }): Promise<{ result: VerificationResult; inputTokens: number; outputTokens: number }> {
   const prompt = `${VERIFICATION_INSTRUCTIONS}\n\nCandidate:\n${JSON.stringify(opts.candidate)}\n\nOriginating changed code:\n${opts.originatingCode}\n\nResolved evidence:\n${opts.evidenceText || "(none)"}`;
-  const { parsed, response, diagnostics } = await invokeStructured({
+  const first = await invokeStructured({
     provider: opts.provider,
     profile: opts.profile,
     sourceId: opts.candidate.id,
@@ -447,17 +457,101 @@ export async function verifyCandidateWithModel(opts: {
     signal: opts.signal,
     validate: (value) => verificationSchema.parse(value),
   });
-  const supportingEvidenceIds = parsed.supportingEvidenceIds.filter((id) => opts.evidenceIds.includes(id));
+  const citationErrors = (parsed: z.infer<typeof verificationSchema>) => {
+    const errors: string[] = [];
+    const unknown = parsed.supportingEvidenceIds.filter((id) => !opts.evidenceIds.includes(id));
+    if (unknown.length) errors.push(`unknown or malformed evidence IDs: ${unknown.join(", ")}`);
+    const exact = parsed.supportingEvidenceIds.filter((id) => opts.evidenceIds.includes(id));
+    if (parsed.verdict !== "insufficient_evidence" && !exact.length)
+      errors.push(`${parsed.verdict} verdict requires at least one exact evidence ID`);
+    if (["verified", "rejected"].includes(parsed.verdict))
+      for (const [requestId, ids] of Object.entries(opts.requiredEvidenceIdsByRequest ?? {}))
+        if (!ids.some((id) => exact.includes(id))) errors.push(`required request ${requestId} is not cited`);
+    return errors;
+  };
+  const diagnostic = (
+    response: ProviderResponse,
+    usedPrompt: string,
+    attempt: number,
+    errors: string[],
+  ): ProviderFailureDiagnostic => ({
+    sourceId: opts.candidate.id,
+    outputKind: "verification",
+    prompt: usedPrompt,
+    raw: response.raw,
+    usage: response.usage,
+    completion: completionMetadata(response),
+    parseError: errors.join("; "),
+    failureKind: "citation-validation",
+    validationIssues: errors.map((message) => ({ path: "supportingEvidenceIds", message })),
+    attempt,
+    parsePosition: null,
+    parseContext: response.raw.slice(0, 320),
+  });
+  const firstErrors = citationErrors(first.parsed);
+  if (!firstErrors.length)
+    return {
+      result: {
+        candidateId: opts.candidate.id,
+        ...first.parsed,
+        prompt,
+        raw: first.response.raw,
+        completion: first.response.completion,
+        diagnostics: first.diagnostics,
+        providerInvocations: 1 + first.diagnostics.length,
+      },
+      ...first.response.usage,
+    };
+  const firstCitationDiagnostic = diagnostic(first.response, prompt, 1, firstErrors);
+  const repairPrompt = `${VERIFICATION_INSTRUCTIONS}\n\nCorrect only the citation contract in the previous verdict. Allowed evidence IDs: ${opts.evidenceIds.join(", ") || "none"}. Citation errors: ${firstErrors.join("; ")}. Return the complete corrected JSON object with exact IDs and no prose.\nPrevious response:\n${first.response.raw.slice(0, 12_000)}`;
+  const repaired = await invokeStructured({
+    provider: opts.provider,
+    profile: opts.profile,
+    sourceId: opts.candidate.id,
+    outputKind: "verification",
+    prompt: repairPrompt,
+    signal: opts.signal,
+    validate: (value) => verificationSchema.parse(value),
+  });
+  const repairedErrors = citationErrors(repaired.parsed);
+  const diagnostics = [
+    ...first.diagnostics,
+    firstCitationDiagnostic,
+    ...repaired.diagnostics,
+    ...(repairedErrors.length ? [diagnostic(repaired.response, repairPrompt, 2, repairedErrors)] : []),
+  ];
+  const usage = {
+    inputTokens: first.response.usage.inputTokens + repaired.response.usage.inputTokens,
+    outputTokens: first.response.usage.outputTokens + repaired.response.usage.outputTokens,
+  };
+  if (repairedErrors.length)
+    return {
+      result: {
+        candidateId: opts.candidate.id,
+        verdict: "insufficient_evidence",
+        confidence: 0,
+        reasoningSummary: `verifier citation validation failed after repair: ${repairedErrors.join("; ")}`,
+        supportingEvidenceIds: [],
+        prompt: repairPrompt,
+        raw: repaired.response.raw,
+        completion: repaired.response.completion,
+        diagnostics,
+        citationRepairAttempted: true,
+        providerInvocations: 2 + first.diagnostics.length + repaired.diagnostics.length,
+      },
+      ...usage,
+    };
   return {
     result: {
       candidateId: opts.candidate.id,
-      ...parsed,
-      supportingEvidenceIds,
-      prompt,
-      raw: response.raw,
-      completion: response.completion,
+      ...repaired.parsed,
+      prompt: repairPrompt,
+      raw: repaired.response.raw,
+      completion: repaired.response.completion,
       diagnostics,
+      citationRepairAttempted: true,
+      providerInvocations: 2 + first.diagnostics.length + repaired.diagnostics.length,
     },
-    ...response.usage,
+    ...usage,
   };
 }

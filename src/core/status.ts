@@ -159,89 +159,46 @@ export function getQualityStatus(cwd: string): QualityStatus {
     enginePackageRoot: runtime.packageRoot,
   };
   const identity = compareCompletionIdentity(gate, currentIdentity);
+  const statusBase = {
+    schemaVersion: 1 as const,
+    configured: true as const,
+    root,
+    version,
+    gate,
+    changedGate,
+    review,
+    ...reviewPresentation(review, gate?.status),
+    reviewRequired,
+    workspaces,
+    workspaceHash: workspaceSet.workspaceHash,
+    policy,
+    runtime,
+    identity,
+  };
+  const blocked = (reason: string, overrides: Record<string, unknown> = {}): QualityStatus => ({
+    ...statusBase,
+    ...overrides,
+    completionAllowed: false,
+    reason,
+  });
   if (!gate)
-    return {
-      schemaVersion: 1,
-      configured: true,
-      root,
-      version,
-      gate: null,
-      changedGate,
-      review,
-      ...reviewPresentation(review),
-      reviewRequired,
-      reviewEnabled: reviewRequired,
-      reviewAdvisory,
-      completionAllowed: false,
-      reason: readLegacyGateResult(root)
+    return blocked(
+      readLegacyGateResult(root)
         ? "Legacy gate evidence has no execution scope and cannot authorize completion. Run quality_run with mode=completion."
         : "Quality gate has not been run. Run quality_run with mode=completion before finishing.",
-      workspaces,
-      workspaceHash: workspaceSet.workspaceHash,
-      policy,
-      runtime,
-      identity,
-    };
+      { reviewEnabled: reviewRequired, reviewAdvisory },
+    );
   if (gate.status !== "PASS")
-    return {
-      schemaVersion: 1,
-      configured: true,
-      root,
-      version,
-      gate,
-      changedGate,
-      review,
-      ...reviewPresentation(review, gate.status),
-      reviewRequired,
-      completionAllowed: false,
-      reason: `Quality gate is ${gate.status}. Fix deterministic failures and run quality_run with mode=completion.`,
-      workspaces,
-      workspaceHash: workspaceSet.workspaceHash,
-      policy,
-      runtime,
-      identity,
-    };
+    return blocked(
+      `Quality gate is ${gate.status}. Fix deterministic failures and run quality_run with mode=completion.`,
+    );
   if (gate.schemaVersion !== 2 || gate.mode !== "full" || gate.fast)
-    return {
-      schemaVersion: 1,
-      configured: true,
-      root,
-      version,
-      gate,
-      changedGate,
-      review,
-      ...reviewPresentation(review, gate.status),
-      reviewRequired,
-      completionAllowed: false,
-      reason: "Completion requires a full, non-fast deterministic gate. Run quality_run with mode=completion.",
-      workspaces,
-      workspaceHash: workspaceSet.workspaceHash,
-      policy,
-      runtime,
-      identity,
-    };
+    return blocked("Completion requires a full, non-fast deterministic gate. Run quality_run with mode=completion.");
   if (
     !gateMatchesIdentity(gate, { version, workspaceHash: workspaceSet.workspaceHash, policyHash: policy.policyHash }) ||
     identity.mismatches.length > 0
   )
-    return {
-      schemaVersion: 1,
-      configured: true,
-      root,
-      version,
-      gate,
-      changedGate,
-      review,
-      ...reviewPresentation(review, gate.status),
-      reviewRequired,
-      completionAllowed: false,
-      reason: mismatchReason(identity),
-      workspaces,
-      workspaceHash: workspaceSet.workspaceHash,
-      policy,
-      runtime,
-      identity,
-    };
+    return blocked(mismatchReason(identity));
   if (
     reviewBlocksCompletion &&
     (!review ||
@@ -249,66 +206,20 @@ export function getQualityStatus(cwd: string): QualityStatus {
       review.profileHash !== policy.agentSmith.hash ||
       review.status === "stale")
   )
-    return {
-      schemaVersion: 1,
-      configured: true,
-      root,
-      version,
-      gate,
-      changedGate,
-      review,
-      ...reviewPresentation(review, gate.status),
-      reviewRequired,
+    return blocked("AgentSmith review is missing or stale. Run quality_run with mode=completion before finishing.", {
       reviewEnabled: reviewRequired,
       reviewAdvisory,
-      completionAllowed: false,
-      reason: "AgentSmith review is missing or stale. Run quality_run with mode=completion before finishing.",
-      workspaces,
-      workspaceHash: workspaceSet.workspaceHash,
-      policy,
-      runtime,
-      identity,
-    };
+    });
   if (reviewBlocksCompletion && (!review || review.status !== "completed" || Boolean(review.errors?.length)))
-    return {
-      schemaVersion: 1,
-      configured: true,
-      root,
-      version,
-      gate,
-      changedGate,
-      review,
-      ...reviewPresentation(review, gate.status),
-      reviewRequired,
-      reviewEnabled: reviewRequired,
-      reviewAdvisory,
-      completionAllowed: false,
-      reason:
-        "AgentSmith review did not complete successfully. Resolve provider/review errors and run quality_run with mode=completion.",
-      workspaces,
-      workspaceHash: workspaceSet.workspaceHash,
-      policy,
-      runtime,
-      identity,
-    };
+    return blocked(
+      "AgentSmith review did not complete successfully. Resolve provider/review errors and run quality_run with mode=completion.",
+      { reviewEnabled: reviewRequired, reviewAdvisory },
+    );
   return {
-    schemaVersion: 1,
-    configured: true,
-    root,
-    version,
-    gate,
-    changedGate,
-    review,
-    ...reviewPresentation(review, gate.status),
-    reviewRequired,
+    ...statusBase,
     reviewEnabled: reviewRequired,
     reviewAdvisory,
     completionAllowed: true,
-    workspaces,
-    workspaceHash: workspaceSet.workspaceHash,
-    policy,
-    runtime,
-    identity,
   };
 }
 

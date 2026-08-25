@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { generateWorkItemCandidate } from "../../src/agentsmith/candidate-generation.js";
+import { generateWorkItemCandidate, verifyCandidateWithModel } from "../../src/agentsmith/candidate-generation.js";
 import type { ReviewProvider } from "../../src/agentsmith/provider.js";
 import type { ModelProfile } from "../../src/core/types.js";
 import type { ReviewWorkItem } from "../../src/agentsmith/engine-types.js";
@@ -91,5 +91,93 @@ describe("candidate structured output", () => {
         reason: "confirm return",
       },
     ]);
+  });
+
+  it("repairs malformed verifier citations once", async () => {
+    let calls = 0;
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async () => ({
+        raw: JSON.stringify({
+          verdict: "rejected",
+          confidence: 0.9,
+          supportingEvidenceIds: [calls++ === 0 ? "[e-1]" : "e-1"],
+        }),
+        usage: { inputTokens: 2, outputTokens: 1 },
+      }),
+    };
+    const judged = await verifyCandidateWithModel({
+      candidate: {
+        id: "candidate",
+        sourceWorkItemIds: ["local:1"],
+        sourceReviewers: [],
+        file: "src/a.ts",
+        line: 1,
+        severity: "medium",
+        category: "correctness",
+        title: "Candidate",
+        description: "Candidate description",
+        evidenceRequests: [],
+        candidateConfidence: 0.8,
+      },
+      originatingCode: "return true;",
+      evidenceText: "[e-1] src/a.ts:1-1\nreturn true;",
+      evidenceIds: ["e-1"],
+      profile,
+      provider,
+    });
+    expect(calls).toBe(2);
+    expect(judged.result).toMatchObject({
+      verdict: "rejected",
+      supportingEvidenceIds: ["e-1"],
+      citationRepairAttempted: true,
+      providerInvocations: 2,
+    });
+    expect(judged.result.diagnostics).toEqual([
+      expect.objectContaining({ failureKind: "citation-validation", attempt: 1 }),
+    ]);
+    expect(judged).toMatchObject({ inputTokens: 4, outputTokens: 2 });
+  });
+
+  it("downgrades a verifier result when citation repair remains invalid", async () => {
+    let calls = 0;
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async () => {
+        calls++;
+        return {
+          raw: '{"verdict":"verified","confidence":1,"supportingEvidenceIds":["invented"]}',
+          usage: { inputTokens: 2, outputTokens: 1 },
+        };
+      },
+    };
+    const judged = await verifyCandidateWithModel({
+      candidate: {
+        id: "candidate",
+        sourceWorkItemIds: ["local:1"],
+        sourceReviewers: [],
+        file: "src/a.ts",
+        line: 1,
+        severity: "medium",
+        category: "correctness",
+        title: "Candidate",
+        description: "Candidate description",
+        evidenceRequests: [],
+        candidateConfidence: 0.8,
+      },
+      originatingCode: "return true;",
+      evidenceText: "[e-1] src/a.ts:1-1\nreturn true;",
+      evidenceIds: ["e-1"],
+      profile,
+      provider,
+    });
+    expect(calls).toBe(2);
+    expect(judged.result).toMatchObject({
+      verdict: "insufficient_evidence",
+      confidence: 0,
+      supportingEvidenceIds: [],
+      citationRepairAttempted: true,
+    });
+    expect(judged.result.diagnostics?.filter((item) => item.failureKind === "citation-validation")).toHaveLength(2);
   });
 });

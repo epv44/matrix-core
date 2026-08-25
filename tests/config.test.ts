@@ -39,7 +39,12 @@ describe("v2 project manifest", () => {
 
   it("leaves repositories without a manifest unconfigured", () => {
     const root = temp();
-    expect(resolveConfig({ cwd: root }).isDefault).toBe(true);
+    const resolved = resolveConfig({ cwd: root });
+    expect(resolved.isDefault).toBe(true);
+    expect(resolved.config).toMatchObject({ version: 2, agentsmith: { enabled: false } });
+    expect(resolved.config.agentsmith?.model_profiles.map((profile) => profile.id)).toEqual(
+      expect.arrayContaining(["qwen35-9b-local", "qwen35-122b-local"]),
+    );
     fs.rmSync(root, { recursive: true, force: true });
   });
 

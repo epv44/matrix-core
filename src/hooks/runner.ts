@@ -7,11 +7,9 @@ import {
   resolveRoot as resolveHookRoot,
   getBackgroundTasks,
 } from "./adapters/index.js";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { recordEngineRuntime } from "../core/runtime.js";
 import { turnStore } from "../core/turn-store.js";
+import { isMainModule } from "../core/process.js";
 
 export type HookHost = "cline" | "codex" | "claude";
 
@@ -108,16 +106,7 @@ function getTurnId(payload: Record<string, unknown>): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function isMainModule(): boolean {
-  if (!process.argv[1]) return false;
-  try {
-    return fs.realpathSync(fileURLToPath(import.meta.url)) === fs.realpathSync(path.resolve(process.argv[1]));
-  } catch {
-    return false;
-  }
-}
-
-if (isMainModule()) {
+if (isMainModule(import.meta.url)) {
   main().catch((error) => {
     const host = process.argv[2] as HookHost;
     const reason = `MatrixCore hook error: ${error instanceof Error ? error.message : String(error)}`;
