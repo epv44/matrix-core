@@ -1,0 +1,4 @@
+[tool.deptry]
+# Starlette selects httpx2 dynamically for its TestClient compatibility layer;
+# there is intentionally no application import to replace that runtime lookup.
+per_rule_ignores = { DEP002 = ["httpx2"] }

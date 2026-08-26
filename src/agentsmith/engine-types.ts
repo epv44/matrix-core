@@ -64,7 +64,7 @@ export interface ProjectedSnippet {
 }
 
 export interface ProjectionAuditItem {
-  kind: "instructions" | "rules" | "manifest" | "code" | "graph" | "report";
+  kind: "instructions" | "rules" | "manifest" | "code" | "graph" | "report" | "dependency-summary" | "context-summary";
   id: string;
   estimatedTokens: number;
   score: number;
@@ -82,6 +82,8 @@ export interface ReviewProjection {
   graphEdges: GraphContextEdge[];
   graphSummary: string;
   deterministicReport?: string;
+  dependencySummary: string[];
+  contextSummary: string[];
   metadata: { base: string | null; snapshotId: string; languages: string[] };
   audit: ProjectionAuditItem[];
   omissions: ReviewOmission[];
@@ -97,6 +99,7 @@ export interface ReviewWorkItem {
   graphEdges: GraphContextEdge[];
   rules: RenderedRule[];
   deterministicReport?: string;
+  contextSummaries?: string[];
   estimatedTokens: number;
   rankFactors?: {
     edgeRisk: number;
@@ -200,6 +203,13 @@ export interface RouteDecision {
 
 export interface EngineExecution {
   graphSnapshot: GraphSnapshot;
+  graphManifest?: {
+    changedSymbols: GraphSymbol[];
+    nodes: GraphSymbol[];
+    edges: GraphContextEdge[];
+    selectedNodeKeys: string[];
+    omittedNodeKeys: string[];
+  };
   mode: ReviewMode;
   reviewPath: ReviewPath;
   route: RouteDecision;
@@ -233,6 +243,7 @@ export interface EngineExecution {
       | "snapshot"
       | "providerHealth"
       | "graph"
+      | "projection"
       | "planning"
       | "candidateGeneration"
       | "evidence"

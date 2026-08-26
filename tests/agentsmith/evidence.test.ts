@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resolveEvidenceRequests } from "../../src/agentsmith/evidence.js";
 import type { ReviewScope } from "../../src/agentsmith/scope.js";
 import type { CandidateFinding } from "../../src/core/types.js";
@@ -269,6 +273,67 @@ describe("candidate evidence resolution", () => {
     expect(resolved.records).toEqual([]);
     expect(resolved.gaps).toEqual([expect.stringContaining("no exact evidence matched")]);
     expect(resolved.outcomes).toEqual([expect.objectContaining({ status: "unresolved", records: [] })]);
+  });
+
+  it("falls back to repository-wide, role-aware search when the graph has no match", () => {
+    const root = mkdtempSync(join(tmpdir(), "matrixcore-evidence-"));
+    mkdirSync(join(root, "finance/services"), { recursive: true });
+    mkdirSync(join(root, "tests/unit"), { recursive: true });
+    writeFileSync(
+      join(root, "finance/services/portfolio.py"),
+      'from finance.storage import cash_snapshot\n\ndef _latest_cash_balances():\n    return "cash_snapshot"\n',
+    );
+    writeFileSync(
+      join(root, "tests/unit/test_portfolio.py"),
+      'def _cash_snapshot():\n    return "cash_snapshot"\n\ndef test_cash_snapshot_contract():\n    assert "cash_snapshot"\n',
+    );
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    execFileSync("git", ["add", "."], { cwd: root });
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-qm", "fixture"], {
+      cwd: root,
+    });
+    const fixtureScope: ReviewScope = {
+      ...scope,
+      root,
+      fileContents: { "src/a.ts": "const safe = true;\n" },
+    };
+    const graph = emptyGraph();
+    const makeCandidate = (kind: "implementation" | "test") => ({
+      id: kind,
+      sourceWorkItemIds: ["local:1"],
+      sourceReviewers: [],
+      file: "src/a.ts",
+      line: 1,
+      severity: "medium" as const,
+      category: "correctness" as const,
+      title: "Candidate",
+      description: "Candidate description",
+      evidenceRequests: [
+        { kind, locatorMode: "literal" as const, query: "cash_snapshot", reason: "locate supporting code" },
+      ],
+      candidateConfidence: 0.8,
+    });
+    const implementation = resolveEvidenceRequests({
+      candidate: makeCandidate("implementation"),
+      scope: fixtureScope,
+      graph,
+      policy: { maxRequestsPerCandidate: 2, maxParallelResolutions: 1, maxSnippetLines: 20, maxRecordsPerRequest: 1 },
+    });
+    const test = resolveEvidenceRequests({
+      candidate: makeCandidate("test"),
+      scope: fixtureScope,
+      graph,
+      policy: { maxRequestsPerCandidate: 2, maxParallelResolutions: 1, maxSnippetLines: 20, maxRecordsPerRequest: 1 },
+    });
+    expect(implementation.records[0]?.file).toBe("finance/services/portfolio.py");
+    expect(implementation.records[0]?.symbol).toBe("_latest_cash_balances");
+    expect(implementation.records[0]?.snippet).toContain('return "cash_snapshot"');
+    expect(implementation.outcomes[0]).toMatchObject({
+      resolverRoute: "repository-literal",
+      consideredRecords: 6,
+    });
+    expect(test.records[0]?.file).toBe("tests/unit/test_portfolio.py");
+    expect(test.records[0]?.symbol).toBe("test_cash_snapshot_contract");
   });
 
   it("does not report a missing literal search as resolved", () => {

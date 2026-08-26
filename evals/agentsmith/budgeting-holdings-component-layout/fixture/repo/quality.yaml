@@ -1,0 +1,10 @@
+version: 2
+project: budgeting-tool
+application:
+  sql:
+    - root: finance
+      dialect: sqlite
+      templater: raw
+      sources: [files, python]
+review:
+  agentsmith: true

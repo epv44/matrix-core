@@ -1,7 +1,8 @@
-schemaVersion: 4
+schemaVersion: 5
 id: conformance-positive
 status: active
 kind: conformance
+suite: conformance
 source:
   traceId: conformance-positive-trace
   traceSchemaVersion: 4

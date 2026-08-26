@@ -36,6 +36,25 @@ export function readJsonFile<T>(file: string): T | null {
   }
 }
 
+export function isWithinMatrixCoreIgnore(rootInput: string, targetInput: string): boolean {
+  const root = path.resolve(rootInput);
+  const target = path.resolve(targetInput);
+  const relative = path.relative(root, target);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+  let current = (() => {
+    try {
+      return fs.statSync(target).isDirectory() ? target : path.dirname(target);
+    } catch {
+      return path.dirname(target);
+    }
+  })();
+  while (current !== root && current.startsWith(`${root}${path.sep}`)) {
+    if (fs.existsSync(path.join(current, ".matrixcore-ignore"))) return true;
+    current = path.dirname(current);
+  }
+  return false;
+}
+
 export function walkFiles(
   root: string,
   visit: (file: string) => void,

@@ -1,0 +1,186 @@
+schemaVersion: 6
+id: budgeting-holdings-table-source-label
+status: active
+kind: benchmark
+suite: component
+source:
+  traceId: 2026-08-25T15-51-30-456Z-bb6298e8-b8fd-41d6-b59d-e027a84382fc
+  traceSchemaVersion: 5
+  repositoryFingerprint: 8864425e6c1535e684f2088a433268d3aba83529e6f0f8a5aca0908cf003172c
+  fixture:
+    path: fixture/repo
+    manifestPath: fixture-manifest.json
+    digest: ff27664f3e1ed952694f3a162f2b4e4b23c2eeb770a3c6db64001a9bf3976b1d
+  project: budgeting-tool
+sanitization:
+  reviewed: true
+  absolutePathsRemoved: true
+  sensitiveContentReviewed: true
+  redistributable: true
+  sensitiveContentExemptions:
+    - path: fixture/repo/finance/plaid_client/auth.py
+      patternId: credential-assignment
+      sha256: 4eb93fe2e85aa392ae378a0c6a15f77e5508cc46888d7f65eaf5b949b50adbf9
+      rationale: Local Plaid development fallback uses an explicit fake password value.
+    - path: fixture/repo/finance/plaid_client/link.py
+      patternId: credential-assignment
+      sha256: 2d060b53c665f1fcb8a59433e4729719469acf87a4c979d14708440d911bce05
+      rationale: Link-token placeholder is static application scaffolding, not a credential.
+    - path: fixture/repo/frontend/e2e/auth.spec.ts
+      patternId: credential-assignment
+      sha256: edf46f3cf567bff816aaa035c7cb8b1a81cb11d8e84d7149d70606aa07cc64bf
+      rationale: Browser test contains only deterministic fake authentication values.
+    - path: fixture/repo/frontend/e2e/fixtures/stub.ts
+      patternId: credential-assignment
+      sha256: 32a248144a3bb31c6342dcadac735d680ca04c2a5895cd1ff47b7d54a15763db
+      rationale: Stub API returns deterministic CSRF and invitation tokens for tests.
+    - path: fixture/repo/frontend/e2e/link-sync.spec.ts
+      patternId: credential-assignment
+      sha256: 7b3f777c2f27fa3594834c7479d6e8b59bdb488f82846b0640133a482703c9b4
+      rationale: Browser test uses a deterministic fake relink token.
+    - path: fixture/repo/tests/unit/test_link_api.py
+      patternId: credential-assignment
+      sha256: 1b5fecf86460c25ed7666d9ff4ad0a8411780ebb1b34951e4719cc27a1a8ba71
+      rationale: Unit test uses explicit fake Plaid tokens and secrets.
+    - path: fixture/repo/tests/unit/test_sanitize.py
+      patternId: credential-assignment
+      sha256: 655fdcea0845434aa0739ee03ab18ecf5da45b2764f35ca3b6b1a3adc18a99c3
+      rationale: Sanitizer unit test intentionally contains credential-shaped sample text.
+groundTruth:
+  reviewed: true
+  reviewedBy: product-owner
+  reviewedAt: "2026-08-26T00:00:00.000Z"
+  contractFamily: cash-snapshot-source-label
+  exhaustiveCandidates: true
+stageReplay:
+  path: stage-replay.json
+  sha256: d18a50b6baff78ead99cc9e47545367c37cc7c303b8e7f663cdc2dce31b1e303
+  reviewed: true
+expectations:
+  snapshot:
+    files:
+      - { path: frontend/e2e/dashboard.spec.ts, changeKind: modified }
+      - { path: frontend/src/components/InvestmentView.tsx, changeKind: modified }
+      - { path: package-lock.json, changeKind: modified }
+      - { path: package.json, changeKind: modified }
+  graph:
+    files: [frontend/src/components/InvestmentView.tsx, frontend/src/lib/api.ts]
+    symbols:
+      - frontend/src/components/InvestmentView.tsx#HoldingsCard
+      - frontend/src/lib/api.ts#InvestmentDashboard
+    edges:
+      - frontend/src/components/InvestmentView.tsx:HoldingsCard->frontend/src/lib/api.ts:InvestmentDashboard:reads-type
+    paths:
+      - from: frontend/src/components/InvestmentView.tsx:HoldingsCard
+        to: frontend/src/lib/api.ts:InvestmentDashboard
+        maxHops: 1
+        edgeKinds: [reads-type]
+  projection:
+    requiredSnippets:
+      - file: frontend/src/components/InvestmentView.tsx
+        lineStart: 949
+        lineEnd: 949
+        contains: [value_source, holdings, Account balance]
+      - file: frontend/src/lib/api.ts
+        lineStart: 487
+        lineEnd: 652
+        contains: [InvestmentDashboard, cash_snapshot]
+    forbiddenFiles: [package-lock.json]
+    forbiddenContent: []
+  planning:
+    route: partitioned
+    files: [frontend/src/components/InvestmentView.tsx, frontend/src/lib/api.ts]
+    symbols:
+      - frontend/src/components/InvestmentView.tsx#HoldingsCard
+      - frontend/src/components/InvestmentView.tsx#source
+      - frontend/src/lib/api.ts#InvestmentDashboard
+    edges:
+      - frontend/src/components/InvestmentView.tsx:HoldingsCard->frontend/src/lib/api.ts:InvestmentDashboard:reads-type
+    forbiddenFiles: [package-lock.json]
+  candidates:
+    items: &expected_candidates
+      - id: cash-snapshot-source-label
+        file: frontend/src/components/InvestmentView.tsx
+        lineStart: 949
+        lineEnd: 949
+        category: contract
+        severity: low
+        titleContains: cash snapshot
+        expectedPresence: true
+        expectedVerdict: verified
+        requiredEvidenceKinds: [implementation, test]
+        requiredReasoningTerms: [cash_snapshot, Account balance]
+        forbiddenReasoningTerms: [runtime error]
+        rationale: The human-reviewed UI contract requires cash_snapshot to display as Cash snapshot, but the third source value is collapsed into the account-balance label.
+      - id: line-height-false-positive
+        file: frontend/e2e/dashboard.spec.ts
+        lineStart: 156
+        lineEnd: 156
+        category: contract
+        titleContains: lineHeight
+        expectedPresence: false
+        expectedVerdict: rejected
+        requiredEvidenceKinds: []
+        requiredReasoningTerms: []
+        forbiddenReasoningTerms: []
+        rationale: The rendered text-xs style produces a numeric line height and the targeted browser test passes.
+      - id: generic-runtime-error-false-positive
+        file: frontend/src/components/InvestmentView.tsx
+        lineStart: 949
+        lineEnd: 949
+        category: contract
+        titleContains: string literal mapping
+        expectedPresence: false
+        expectedVerdict: rejected
+        requiredEvidenceKinds: []
+        requiredReasoningTerms: []
+        forbiddenReasoningTerms: []
+        rationale: The ternary cannot cause the claimed runtime error; the actual defect is incorrect provenance text.
+  evidence:
+    requests:
+      - candidate: cash-snapshot-source-label
+        kind: implementation
+        status: satisfied
+        expectedFiles: [finance/services/portfolio.py]
+        forbiddenFiles: [package-lock.json, frontend/e2e/fixtures/stub.ts]
+        expectedSymbols: [_latest_cash_balances]
+        requiredContent: [cash_snapshot]
+        forbiddenContent: []
+      - candidate: cash-snapshot-source-label
+        kind: test
+        status: satisfied
+        expectedFiles: [tests/unit/test_portfolio.py]
+        forbiddenFiles: [package-lock.json, frontend/e2e/fixtures/stub.ts]
+        expectedSymbols: [test_529_balance_is_visible_as_other_not_cash]
+        requiredContent: [cash_snapshot]
+        forbiddenContent: []
+  verification:
+    candidates: *expected_candidates
+  aggregation:
+    status: completed
+    outcome: findings
+    findings:
+      - id: cash-snapshot-source-label
+        file: frontend/src/components/InvestmentView.tsx
+        lineStart: 949
+        lineEnd: 949
+        severity: low
+        category: contract
+        titleContains: cash snapshot
+        discoveryClass: L2
+        requiredEvidence: [cash_snapshot]
+        symbols: [source, InvestmentDashboard, _latest_cash_balances, test_529_balance_is_visible_as_other_not_cash]
+        graphDistance: 1
+        description: cash_snapshot holdings are displayed as Account balance in the Source column.
+        rationale: The frontend contract and backend test establish three source states, but the changed binary mapping preserves only two labels.
+  reporting:
+    requiredSections: [cash_snapshot, frontend/src/components/InvestmentView.tsx]
+narrative:
+  summary: Human-reviewed positive case in the cash-snapshot-source-label contract family with two exhaustive recorded negative controls.
+  trueCodeFlow: The approved UI contract requires cash_snapshot to display as Cash snapshot. The backend emits cash_snapshot for cash-only holdings, InvestmentDashboard carries that value, and HoldingsCard incorrectly maps every non-holdings value to Account balance.
+  references:
+    - frontend/src/components/InvestmentView.tsx:949
+    - frontend/src/lib/api.ts:487
+    - finance/services/portfolio.py:_latest_cash_balances
+    - tests/unit/test_portfolio.py:test_529_balance_is_visible_as_other_not_cash
+tags: [component-eval, budgeting-tool, ui-contract, cross-language-evidence, negative-controls, candidate-labels-exhaustive, ground-truth-reviewed, contract-family-cash-snapshot-source-label, finding, L2, package-lock-noise]

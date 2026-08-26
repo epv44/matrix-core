@@ -174,7 +174,7 @@ function candidateKey(candidate: CandidateFinding) {
 }
 
 function evidenceRequestKey(request: CandidateFinding["evidenceRequests"][number]) {
-  return `${request.kind}:${request.symbol ?? ""}:${request.pathHint ?? ""}:${request.query ?? ""}`;
+  return `${request.kind}:${request.locatorMode ?? ""}:${request.symbol ?? ""}:${request.pathHint ?? ""}:${request.query ?? ""}`;
 }
 
 function uniqueEvidenceRequests(requests: CandidateFinding["evidenceRequests"], limit: number) {
@@ -192,6 +192,7 @@ function missingClaimDirectedRequest(candidate: CandidateFinding) {
     return undefined;
   return {
     kind: "callers" as const,
+    locatorMode: "symbol" as const,
     symbol: candidate.primarySymbol,
     pathHint: candidate.file,
     reason: "candidate omitted required evidence from an actual caller or consumer",
@@ -309,7 +310,12 @@ export async function executeReviewEngine(opts: {
   assetRoot?: string;
   deterministicReport?: string;
   signal?: AbortSignal;
-  variant?: { includeInteractions?: boolean; resolveEvidence?: boolean };
+  variant?: {
+    includeInteractions?: boolean;
+    resolveEvidence?: boolean;
+    /** Reviewed candidates used to isolate evidence and later pipeline stages in eval replay. */
+    seedCandidates?: CandidateFinding[];
+  };
   enforceWorkspaceVersion?: boolean;
 }): Promise<{ result: ReviewResult; execution: EngineExecution }> {
   const stageTimingsMs: NonNullable<EngineExecution["stageTimingsMs"]> = {};
@@ -364,6 +370,8 @@ export async function executeReviewEngine(opts: {
   });
   const reviewPath =
     route.mode === "holistic" && candidateProfile.reviewCapability === "strong" ? "specialist" : "generic";
+  stageTimingsMs.projection = Date.now() - stageStarted;
+  stageStarted = Date.now();
   const executionBudget = createExecutionBudget(opts.config.maxDurationMs, opts.signal);
   const effectiveParallelism = Math.min(opts.config.concurrency, opts.config.partitioned.maxParallelUnits);
   const workItemOptions = {
@@ -429,7 +437,17 @@ export async function executeReviewEngine(opts: {
   stageTimingsMs.planning = Date.now() - stageStarted;
   stageStarted = Date.now();
   const candidateBatches: CandidateBatch[] = [];
-  if (reviewPath === "specialist") {
+  if (opts.variant?.seedCandidates) {
+    const sources = selectedWorkItems.length ? selectedWorkItems.map((item) => item.id) : ["holistic"];
+    candidateBatches.push(
+      ...sources.map((sourceId, index) => ({
+        sourceId,
+        candidates: index === 0 ? structuredClone(opts.variant!.seedCandidates!) : [],
+        inputTokens: 0,
+        outputTokens: 0,
+      })),
+    );
+  } else if (reviewPath === "specialist") {
     const specialists = loadSpecialists(opts.assetRoot);
     const maxCandidatesPerSpecialist = Math.max(1, Math.floor(opts.config.holistic.maxCandidates / specialists.length));
     const batches = await mapLimit(specialists, effectiveParallelism, async (specialist): Promise<CandidateBatch> => {
@@ -1135,6 +1153,13 @@ export async function executeReviewEngine(opts: {
     result,
     execution: {
       graphSnapshot: graph.snapshot,
+      graphManifest: {
+        changedSymbols: graph.changedSymbols,
+        nodes: graph.nodes.map((node) => node.symbol),
+        edges: graph.edges,
+        selectedNodeKeys: graph.selectedNodeKeys,
+        omittedNodeKeys: graph.omittedNodeKeys,
+      },
       mode: route.mode,
       reviewPath,
       route,

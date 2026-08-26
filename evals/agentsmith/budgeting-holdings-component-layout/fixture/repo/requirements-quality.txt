@@ -1,0 +1,5 @@
+ruff==0.16.1
+mypy==2.3.0
+xenon==0.9.3
+deptry==0.25.1
+sqlfluff==4.2.2

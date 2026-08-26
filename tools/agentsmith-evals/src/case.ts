@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import yaml from "js-yaml";
 import { z } from "zod";
 import type { AgentSmithTrace } from "../../../src/agentsmith/trace.js";
+import type { CandidateFinding } from "../../../src/core/types.js";
 import { listAgentSmithTraces, readAgentSmithTrace, readTraceSourceManifest } from "../../../src/agentsmith/trace.js";
 import {
   captureSourceSnapshot,
@@ -16,13 +17,33 @@ import {
 import { computeWorkspaceVersion } from "../../../src/core/version.js";
 import { sha256 } from "../../../src/core/hash.js";
 
-export const EVAL_CASE_SCHEMA_VERSION = 4;
+export const EVAL_CASE_SCHEMA_VERSION = 6;
+export const STAGE_REPLAY_SCHEMA_VERSION = 1;
 const slugPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 const discoveryClassSchema = z.enum(["L0", "L1", "L2", "L3"]);
 const categorySchema = z.enum(["correctness", "security", "performance", "contract"]);
 const severitySchema = z.enum(["critical", "high", "medium", "low"]);
 const verdictSchema = z.enum(["verified", "likely", "rejected", "insufficient_evidence"]);
+const suiteSchema = z.enum(["component", "conformance", "draft"]);
+const replayModeSchema = z.enum([
+  "holistic",
+  "partitioned-local",
+  "partitioned-evidence",
+  "partitioned-interactions",
+  "hybrid",
+]);
+const replayStageSchema = z.enum([
+  "snapshot",
+  "graph",
+  "projection",
+  "planning",
+  "candidates",
+  "evidence",
+  "verification",
+  "aggregation",
+  "reporting",
+]);
 const evidenceKindSchema = z.enum([
   "definition",
   "callers",
@@ -36,6 +57,53 @@ const evidenceKindSchema = z.enum([
   "search",
 ]);
 
+const goldenCandidateSchema = z.object({
+  id: z.string().min(1),
+  sourceWorkItemIds: z.array(z.string()).default([]),
+  sourceReviewers: z
+    .array(z.enum(["architecture-reviewer", "perf-reviewer", "bug-hunter", "semantic-reviewer"]))
+    .default([]),
+  file: z.string().min(1),
+  line: z.number().int().positive(),
+  endLine: z.number().int().positive().optional(),
+  severity: severitySchema,
+  category: categorySchema,
+  title: z.string().min(1),
+  description: z.string().min(1),
+  suggestion: z.string().optional(),
+  primarySymbol: z.string().optional(),
+  ruleId: z.string().optional(),
+  evidenceRequests: z.array(
+    z.object({
+      kind: evidenceKindSchema,
+      locatorMode: z.enum(["symbol", "literal"]).optional(),
+      symbol: z.string().optional(),
+      pathHint: z.string().optional(),
+      query: z.string().optional(),
+      reason: z.string().min(1),
+    }),
+  ),
+  candidateConfidence: z.number().min(0).max(1),
+});
+
+const stageReplayArtifactSchema = z.object({
+  schemaVersion: z.literal(STAGE_REPLAY_SCHEMA_VERSION),
+  caseId: z.string().min(1),
+  fixtureDigest: z.string().regex(/^[a-f0-9]{64}$/),
+  reviewed: z.literal(true),
+  contractEvidence: z.array(z.object({ path: z.string().min(1), content: z.string().min(1) })).default([]),
+  goldenCandidates: z.array(goldenCandidateSchema).min(1),
+});
+
+export interface StageReplayArtifact {
+  schemaVersion: 1;
+  caseId: string;
+  fixtureDigest: string;
+  reviewed: true;
+  contractEvidence: Array<{ path: string; content: string }>;
+  goldenCandidates: CandidateFinding[];
+}
+
 export const expectedFindingSchema = z.object({
   id: z.string().min(1),
   file: z.string().min(1),
@@ -43,6 +111,7 @@ export const expectedFindingSchema = z.object({
   lineEnd: z.number().int().positive(),
   severity: severitySchema.optional(),
   category: categorySchema.optional(),
+  titleContains: z.string().optional(),
   discoveryClass: discoveryClassSchema,
   requiredEvidence: z.array(z.string()).default([]),
   symbols: z.array(z.string()).default([]),
@@ -57,10 +126,13 @@ const expectedCandidateSchema = z.object({
   lineStart: z.number().int().positive(),
   lineEnd: z.number().int().positive(),
   category: categorySchema.optional(),
+  severity: severitySchema.optional(),
   titleContains: z.string().optional(),
   expectedPresence: z.boolean().default(true),
   expectedVerdict: verdictSchema,
   requiredEvidenceKinds: z.array(evidenceKindSchema).default([]),
+  requiredReasoningTerms: z.array(z.string().min(1)).default([]),
+  forbiddenReasoningTerms: z.array(z.string().min(1)).default([]),
   rationale: z.string().min(1),
 });
 
@@ -68,6 +140,32 @@ const targetSchema = z.object({
   files: z.array(z.string()).default([]),
   symbols: z.array(z.string()).default([]),
   edges: z.array(z.string()).default([]),
+  forbiddenFiles: z.array(z.string()).default([]),
+  forbiddenSymbols: z.array(z.string()).default([]),
+  forbiddenEdges: z.array(z.string()).default([]),
+  paths: z
+    .array(
+      z.object({
+        from: z.string().min(1),
+        to: z.string().min(1),
+        maxHops: z.number().int().positive().max(6),
+        edgeKinds: z.array(z.string().min(1)).default([]),
+      }),
+    )
+    .default([]),
+});
+
+const optionalTargetSchema = z.object({
+  files: z.array(z.string()).default([]),
+  symbols: z.array(z.string()).default([]),
+  edges: z.array(z.string()).default([]),
+});
+
+const snippetExpectationSchema = z.object({
+  file: z.string().min(1),
+  lineStart: z.number().int().positive().optional(),
+  lineEnd: z.number().int().positive().optional(),
+  contains: z.array(z.string().min(1)).default([]),
 });
 
 const evidenceExpectationSchema = z.object({
@@ -76,14 +174,26 @@ const evidenceExpectationSchema = z.object({
   status: z.enum(["satisfied", "partial", "unresolved", "skipped"]),
   expectedFiles: z.array(z.string()).default([]),
   forbiddenFiles: z.array(z.string()).default([]),
+  expectedSymbols: z.array(z.string()).default([]),
+  requiredContent: z.array(z.string()).default([]),
+  forbiddenContent: z.array(z.string()).default([]),
+});
+
+const sensitivePatternIdSchema = z.enum(["aws-access-key", "private-key", "credential-assignment"]);
+const sensitiveContentExemptionSchema = z.object({
+  path: z.string().min(1),
+  patternId: sensitivePatternIdSchema,
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  rationale: z.string().min(1),
 });
 
 export const evalCaseSchema = z
   .object({
-    schemaVersion: z.literal(EVAL_CASE_SCHEMA_VERSION),
+    schemaVersion: z.union([z.literal(5), z.literal(EVAL_CASE_SCHEMA_VERSION)]),
     id: z.string().min(1),
     status: z.enum(["draft", "active"]),
     kind: z.enum(["benchmark", "conformance"]).default("benchmark"),
+    suite: suiteSchema.default("component"),
     source: z.object({
       traceId: z.string().min(1),
       traceSchemaVersion: z.number().int().min(2).max(5),
@@ -103,7 +213,24 @@ export const evalCaseSchema = z
       absolutePathsRemoved: z.boolean(),
       sensitiveContentReviewed: z.boolean(),
       redistributable: z.boolean(),
+      sensitiveContentExemptions: z.array(sensitiveContentExemptionSchema).default([]),
     }),
+    groundTruth: z
+      .object({
+        reviewed: z.boolean(),
+        reviewedBy: z.string().min(1),
+        reviewedAt: z.string().datetime(),
+        contractFamily: z.string().min(1),
+        exhaustiveCandidates: z.boolean(),
+      })
+      .optional(),
+    stageReplay: z
+      .object({
+        path: z.string().min(1),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/),
+        reviewed: z.literal(true),
+      })
+      .optional(),
     expectations: z
       .object({
         snapshot: z
@@ -112,7 +239,19 @@ export const evalCaseSchema = z
           })
           .optional(),
         graph: targetSchema.optional(),
-        planning: targetSchema.extend({ route: z.enum(["holistic", "partitioned", "hybrid"]).optional() }).optional(),
+        projection: z
+          .object({
+            requiredSnippets: z.array(snippetExpectationSchema).default([]),
+            forbiddenFiles: z.array(z.string()).default([]),
+            forbiddenContent: z.array(z.string()).default([]),
+          })
+          .optional(),
+        planning: targetSchema
+          .extend({
+            route: z.enum(["holistic", "partitioned", "hybrid"]).optional(),
+            optionalTargets: optionalTargetSchema.default({ files: [], symbols: [], edges: [] }),
+          })
+          .optional(),
         candidates: z.object({ items: z.array(expectedCandidateSchema).default([]) }).optional(),
         evidence: z.object({ requests: z.array(evidenceExpectationSchema).default([]) }).optional(),
         verification: z.object({ candidates: z.array(expectedCandidateSchema).default([]) }).optional(),
@@ -149,10 +288,41 @@ export const evalCaseSchema = z
           message: "lineEnd must be >= lineStart",
         });
     });
+    value.expectations.projection?.requiredSnippets.forEach((item, index) => {
+      if (item.lineStart && item.lineEnd && item.lineEnd < item.lineStart)
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["expectations", "projection", "requiredSnippets", index, "lineEnd"],
+          message: "lineEnd must be >= lineStart",
+        });
+    });
+    const exemptionKeys = new Set<string>();
+    value.sanitization.sensitiveContentExemptions.forEach((item, index) => {
+      const normalized = item.path.replaceAll("\\", "/").replace(/^\.\//, "");
+      if (normalized !== item.path || path.isAbsolute(item.path) || normalized.split("/").includes(".."))
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["sanitization", "sensitiveContentExemptions", index, "path"],
+          message: "exemption path must be a normalized case-relative path",
+        });
+      const key = `${item.path}:${item.patternId}`;
+      if (exemptionKeys.has(key))
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["sanitization", "sensitiveContentExemptions", index],
+          message: "duplicate sensitive-content exemption",
+        });
+      exemptionKeys.add(key);
+    });
     if (value.status === "active") {
       if (!Object.keys(value.expectations).length)
         context.addIssue({ code: z.ZodIssueCode.custom, path: ["expectations"], message: "active case needs labels" });
-      for (const [key, approved] of Object.entries(value.sanitization))
+      for (const [key, approved] of Object.entries({
+        reviewed: value.sanitization.reviewed,
+        absolutePathsRemoved: value.sanitization.absolutePathsRemoved,
+        sensitiveContentReviewed: value.sanitization.sensitiveContentReviewed,
+        redistributable: value.sanitization.redistributable,
+      }))
         if (!approved)
           context.addIssue({
             code: z.ZodIssueCode.custom,
@@ -164,6 +334,12 @@ export const evalCaseSchema = z
           code: z.ZodIssueCode.custom,
           path: ["source", "fixture"],
           message: "active cases require a verified frozen fixture",
+        });
+      if (value.schemaVersion === EVAL_CASE_SCHEMA_VERSION && !value.groundTruth?.reviewed)
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["groundTruth", "reviewed"],
+          message: "active schema-v6 cases require reviewed ground truth",
         });
     }
   });
@@ -193,6 +369,7 @@ export function initialCase(trace: AgentSmithTrace, slug: string, project = ""):
     id: slug,
     status: "draft",
     kind: "benchmark",
+    suite: "component",
     source: {
       traceId: trace.traceId,
       traceSchemaVersion: trace.schemaVersion,
@@ -205,7 +382,10 @@ export function initialCase(trace: AgentSmithTrace, slug: string, project = ""):
       absolutePathsRemoved: true,
       sensitiveContentReviewed: false,
       redistributable: false,
+      sensitiveContentExemptions: [],
     },
+    groundTruth: undefined,
+    stageReplay: undefined,
     expectations: {},
     narrative: { summary: "", trueCodeFlow: "", references: [] },
     tags: [],
@@ -293,6 +473,7 @@ function fixtureTreeEntries(root: string): string[] {
     for (const item of fs.readdirSync(directory, { withFileTypes: true })) {
       const absolute = path.join(directory, item.name);
       const relative = path.relative(root, absolute).split(path.sep).join("/");
+      if ([".venv", "node_modules", ".mypy_cache", ".ruff_cache"].includes(item.name)) continue;
       if (
         relative === ".git" ||
         relative.startsWith(".git/") ||
@@ -527,6 +708,22 @@ export function readEvalCase(
   return { definition, trace, fixtureRoot };
 }
 
+export function readStageReplay(root: string, slug: string, definitionInput?: EvalCase): StageReplayArtifact {
+  const directory = caseDirectory(root, slug);
+  const definition =
+    definitionInput ?? evalCaseSchema.parse(yaml.load(fs.readFileSync(path.join(directory, "case.yaml"), "utf8")));
+  if (!definition.stageReplay) throw new Error(`Eval case ${slug} has no isolated stage replay artifact`);
+  const artifactPath = containedPath(directory, definition.stageReplay.path, "Stage replay path");
+  const bytes = fs.readFileSync(artifactPath);
+  if (sha256(bytes) !== definition.stageReplay.sha256)
+    throw new Error(`Eval case ${slug} stage replay digest mismatch`);
+  const artifact = stageReplayArtifactSchema.parse(JSON.parse(bytes.toString("utf8"))) as StageReplayArtifact;
+  if (artifact.caseId !== slug) throw new Error(`Eval case ${slug} stage replay case id mismatch`);
+  if (artifact.fixtureDigest !== definition.source.fixture?.digest)
+    throw new Error(`Eval case ${slug} stage replay fixture digest mismatch`);
+  return artifact;
+}
+
 export function listEvalCases(root: string, includeDrafts = false): string[] {
   try {
     return fs
@@ -547,10 +744,10 @@ export function listEvalCases(root: string, includeDrafts = false): string[] {
 }
 
 const sensitivePatterns = [
-  /AKIA[0-9A-Z]{16}/,
-  /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/,
-  /(?:token|password|secret|api[_-]?key)\s*[:=]\s*["'][^"']{8,}/i,
-];
+  { id: "aws-access-key", regex: /AKIA[0-9A-Z]{16}/ },
+  { id: "private-key", regex: /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/ },
+  { id: "credential-assignment", regex: /(?:token|password|secret|api[_-]?key)\s*[:=]\s*["'][^"']{8,}/i },
+] as const;
 
 export function validateEvalCases(root: string, includeDrafts = true) {
   const cases = listEvalCases(root, includeDrafts);
@@ -559,14 +756,32 @@ export function validateEvalCases(root: string, includeDrafts = true) {
       const { definition } = readEvalCase(root, slug);
       if (definition.source.fixture) validateCaseFixture(root, slug);
       else if (definition.status === "active") throw new Error(`Active eval case ${slug} has no frozen fixture`);
+      if (definition.stageReplay) readStageReplay(root, slug, definition);
       const directory = caseDirectory(root, slug);
       const files = repositoryFilesForScan(directory);
+      const exemptions = new Map(
+        definition.sanitization.sensitiveContentExemptions.map((item) => [`${item.path}:${item.patternId}`, item]),
+      );
+      const usedExemptions = new Set<string>();
       const findings = files.flatMap((file) => {
         const text = fs.readFileSync(file, "utf8");
+        const relative = path.relative(directory, file).split(path.sep).join("/");
+        const digest = sha256(fs.readFileSync(file));
         return sensitivePatterns
-          .filter((pattern) => pattern.test(text))
-          .map((pattern) => `${path.relative(root, file)} matched ${pattern.source}`);
+          .filter((pattern) => pattern.regex.test(text))
+          .flatMap((pattern) => {
+            const key = `${relative}:${pattern.id}`;
+            const exemption = exemptions.get(key);
+            if (exemption?.sha256 === digest) {
+              usedExemptions.add(key);
+              return [];
+            }
+            return [`${path.relative(root, file)} matched ${pattern.id}`];
+          });
       });
+      for (const [key, exemption] of exemptions)
+        if (!usedExemptions.has(key))
+          findings.push(`${path.join("evals", "agentsmith", slug, exemption.path)} has a stale or unused exemption`);
       return { id: slug, status: definition.status, valid: findings.length === 0, findings };
     } catch (error) {
       return {
@@ -585,6 +800,7 @@ function repositoryFilesForScan(directory: string): string[] {
   const visit = (current: string) => {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const target = path.join(current, entry.name);
+      if ([".venv", "node_modules", ".mypy_cache", ".ruff_cache"].includes(entry.name)) continue;
       if (entry.isDirectory()) visit(target);
       else if (entry.isFile() && fs.statSync(target).size <= 10 * 1024 * 1024) files.push(target);
     }
@@ -600,6 +816,9 @@ export function corpusHash(root: string, slugs: string[]): string {
     hash.update(slug);
     hash.update(fs.readFileSync(path.join(directory, "case.yaml")));
     hash.update(fs.readFileSync(path.join(directory, "input.json")));
+    const { definition } = readEvalCase(root, slug);
+    if (definition.stageReplay)
+      hash.update(fs.readFileSync(containedPath(directory, definition.stageReplay.path, "Stage replay path")));
     const fixture = validateCaseFixture(root, slug);
     hash.update(fs.readFileSync(path.join(directory, "fixture-manifest.json")));
     hash.update(fixture.digest);
@@ -614,6 +833,7 @@ export function inventory(root: string) {
       id: slug,
       status: definition.status,
       kind: definition.kind,
+      suite: definition.suite,
       traceId: trace.traceId,
       traceSchemaVersion: trace.schemaVersion,
       fixture: Boolean(definition.source.fixture),
@@ -652,6 +872,13 @@ export function inventory(root: string) {
       draft: cases.filter((item) => item.status === "draft").length,
       benchmark: cases.filter((item) => item.kind === "benchmark").length,
       conformance: cases.filter((item) => item.kind === "conformance").length,
+      component: cases.filter((item) => item.suite === "component").length,
+      suites: Object.fromEntries(
+        ["component", "conformance", "draft"].map((suite) => [
+          suite,
+          cases.filter((item) => item.suite === suite).length,
+        ]),
+      ),
       retainedTraces: traces.length,
       uncuratedTraces: traces.filter((item) => !item.curated).length,
     },

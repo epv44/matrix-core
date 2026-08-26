@@ -47,6 +47,21 @@ describe("isGitRepo / getChangedFiles", () => {
     }
   });
 
+  it.runIf(hasGit)("excludes files beneath a MatrixCore ignore boundary", () => {
+    const dir = tmpDir();
+    try {
+      gitInit(dir);
+      const fixture = path.join(dir, "evals", "case", "fixture");
+      fs.mkdirSync(fixture, { recursive: true });
+      fs.writeFileSync(path.join(fixture, ".matrixcore-ignore"), "");
+      fs.writeFileSync(path.join(fixture, "producer.py"), "token = 'fake-token'\n");
+      fs.writeFileSync(path.join(dir, "case.yaml"), "status: active\n");
+      expect(getChangedPaths({ cwd: dir })).toEqual([path.join(fs.realpathSync(dir), "case.yaml")]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it.runIf(hasGit)("reports modified committed files", () => {
     const dir = tmpDir();
     try {

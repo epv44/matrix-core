@@ -1,0 +1,7 @@
+version = 1
+exceptions = [
+  { path = "finance/api/routers/dashboard.py", rule = "BLE001", symbol = "refresh_investment_benchmark", reason = "The API boundary must sanitize any provider failure from the optional yfinance integration." },
+  { path = "finance/plaid_client/investments.py", rule = "BLE001", symbol = "_refresh_portfolio_derivatives", reason = "Derived portfolio refresh is best effort after a successful provider sync and must not discard persisted provider data." },
+  { path = "finance/security/sanitize.py", rule = "BLE001", symbol = "wrap_plaid_call", reason = "This boundary intentionally catches every provider exception so credentials and payloads are redacted consistently." },
+  { path = "finance/services/plaid_sync.py", rule = "BLE001", symbol = "sync_all", reason = "A durable multi-institution sync records one institution failure and continues processing the remaining institutions." },
+]

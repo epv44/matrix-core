@@ -17,6 +17,7 @@ npm run eval:agentsmith -- validate
 npm run eval:agentsmith -- coverage
 npm run eval:agentsmith -- run --tier stage --label before
 npm run eval:agentsmith -- run --tier recorded
+npm run eval:agentsmith -- run --tier isolated
 npm run eval:agentsmith -- run --tier live --repeat 3
 npm run eval:agentsmith -- compare <baseline-result.json> <current-result.json>
 ```
@@ -38,3 +39,21 @@ the case active. Missing stage labels remain `N/A`. Replay freezes repository in
 uses the current MatrixCore engine, policy assets, prompts, graph providers, and model profiles. Reports
 record their versions and hashes alongside the fixture digest. Recorded prompt drift is reported as
 incompatible, not as a quality regression. Result files are written beneath `.quality/evals/runs/`.
+
+Schema-v6 cases add explicit human-review provenance, optional planning targets, and an optional
+digest-bound `stage-replay.json`. The `isolated` tier measures candidate generation from the ordinary
+pipeline while replaying evidence, verification, aggregation, and reporting from reviewed golden
+candidates. This prevents an upstream candidate miss from being counted as a downstream failure.
+Blocked downstream metrics remain visible on individual runs but are excluded from aggregate stage
+means.
+
+Cases score nine independently labeled stages: snapshot, raw graph construction, source
+projection, work-item planning, candidate generation, evidence resolution, verification, aggregation,
+and reporting. Graph labels are evaluated against the graph manifest before planning; planning labels
+are evaluated against selected work items. Projection labels can require exact source anchors and mark
+lockfiles or other generated context as forbidden noise. Candidate and verifier labels can require or
+forbid reasoning terms, while final findings match severity, category, title, location, and evidence.
+
+Sensitive-content exemptions are intentionally narrow. Each exemption names the scanner pattern and a
+case-relative file whose exact SHA-256 was reviewed. Validation rejects changed, duplicate, unused, or
+unsafe exemptions and continues to reject every unrecognized match.

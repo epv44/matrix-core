@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
+import { isWithinMatrixCoreIgnore } from "./filesystem.js";
 
 function runGit(args: string[], cwd: string): { ok: boolean; out: string } {
   try {
@@ -66,7 +67,8 @@ export function getChangedPathEntries(opts: { cwd: string; base?: string }): Cha
     .map(([file, sources]) => ({
       path: path.isAbsolute(file) ? file : path.join(repoRoot, file),
       sources: [...sources].sort(),
-    }));
+    }))
+    .filter((entry) => !isWithinMatrixCoreIgnore(repoRoot, entry.path));
 }
 
 export function getChangedPaths(opts: { cwd: string; base?: string }): string[] {

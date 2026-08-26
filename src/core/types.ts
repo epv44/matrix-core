@@ -386,6 +386,7 @@ export type EvidenceRequestKind =
 
 export interface EvidenceRequest {
   kind: EvidenceRequestKind;
+  locatorMode?: "symbol" | "literal";
   symbol?: string;
   pathHint?: string;
   query?: string;
@@ -412,6 +413,8 @@ export interface EvidenceResolutionOutcome {
   status: "satisfied" | "partial" | "unresolved" | "skipped";
   records: EvidenceRecord[];
   packedRecordIds?: string[];
+  resolverRoute?: "graph-symbol" | "path-search" | "repository-literal";
+  consideredRecords?: number;
   reason?: string;
 }
 

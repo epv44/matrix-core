@@ -7,6 +7,7 @@ import { Language, Parser } from "web-tree-sitter";
 import type { LanguageWorkspace } from "../types.js";
 import type { GraphEdge, GraphFacts, GraphFile, GraphProvider, GraphSymbol } from "./types.js";
 import { sha256 } from "../hash.js";
+import { isWithinMatrixCoreIgnore } from "../filesystem.js";
 
 function sha(value: string) {
   return sha256(value);
@@ -22,7 +23,12 @@ function language(file: string): "python" | "typescript" | null {
 function gitFiles(root: string): string[] {
   const result = spawnSync("git", ["ls-files", "-co", "--exclude-standard", "-z"], { cwd: root, encoding: "buffer" });
   if (result.status !== 0) return [];
-  return result.stdout.toString("utf8").split("\0").filter(Boolean).sort();
+  return result.stdout
+    .toString("utf8")
+    .split("\0")
+    .filter(Boolean)
+    .filter((file) => !isWithinMatrixCoreIgnore(root, path.join(root, file)))
+    .sort();
 }
 
 export function scanFile(
@@ -200,14 +206,115 @@ function scanWasmFile(root: string, file: GraphFile, language: Language) {
 
 export class TypeScriptCompilerProvider implements GraphProvider {
   readonly id = "typescript-compiler";
-  readonly version = `${ts.version}-v2`;
+  readonly version = `${ts.version}-v5-workspace-symbol-resolution`;
   supports(workspace: LanguageWorkspace) {
     return workspace.language === "typescript";
   }
   async indexFiles(root: string, files: GraphFile[]): Promise<GraphFacts> {
     const selected = files.filter((file) => file.language === "typescript");
+    const allTypeScriptFiles = gitFiles(root).filter((file) => language(file) === "typescript");
+    const configPath =
+      selected
+        .map((file) => ts.findConfigFile(path.dirname(path.join(root, file.path)), ts.sys.fileExists, "tsconfig.json"))
+        .find((value): value is string => Boolean(value)) ??
+      ts.findConfigFile(root, ts.sys.fileExists, "tsconfig.json");
+    let compilerOptions: ts.CompilerOptions = {
+      target: ts.ScriptTarget.Latest,
+      moduleResolution: ts.ModuleResolutionKind.NodeJs,
+      jsx: ts.JsxEmit.Preserve,
+      allowJs: true,
+      baseUrl: root,
+    };
+    if (configPath) {
+      const config = ts.readConfigFile(configPath, ts.sys.readFile);
+      if (!config.error)
+        compilerOptions = {
+          ...compilerOptions,
+          ...ts.parseJsonConfigFileContent(config.config, ts.sys, path.dirname(configPath)).options,
+        };
+    }
+    const program = ts.createProgram(
+      allTypeScriptFiles.map((file) => path.join(root, file)),
+      compilerOptions,
+    );
+    const checker = program.getTypeChecker();
+    const relativeSourceFile = (sourceFile: ts.SourceFile) =>
+      path.relative(root, sourceFile.fileName).replaceAll("\\", "/");
     const symbols: GraphSymbol[] = [];
     const edges: GraphEdge[] = [];
+
+    const declarationName = (node: ts.Node): string | undefined => {
+      if (!("name" in node)) return undefined;
+      const name = (node as ts.NamedDeclaration).name;
+      return name && ts.isIdentifier(name) ? name.text : name?.getText();
+    };
+    const symbolKind = (node: ts.Node): GraphSymbol["kind"] | undefined => {
+      if (ts.isFunctionDeclaration(node)) return "function";
+      if (ts.isMethodDeclaration(node)) return "method";
+      if (ts.isClassDeclaration(node)) return "class";
+      if (ts.isInterfaceDeclaration(node)) return "interface";
+      if (ts.isTypeAliasDeclaration(node)) return "type";
+      if (ts.isEnumDeclaration(node)) return "enum";
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) return "variable";
+      return undefined;
+    };
+    const qualifiedName = (node: ts.Node, name: string) => {
+      const parent = node.parent;
+      if ((ts.isClassDeclaration(parent) || ts.isInterfaceDeclaration(parent)) && parent.name)
+        return `${parent.name.text}.${name}`;
+      return name;
+    };
+    const symbolForDeclaration = (node: ts.Node, sourceFile: ts.SourceFile): GraphSymbol | undefined => {
+      const name = declarationName(node);
+      const kind = symbolKind(node);
+      if (!name || !kind) return undefined;
+      return {
+        file: relativeSourceFile(sourceFile),
+        provider: this.id,
+        kind,
+        name,
+        qualifiedName: qualifiedName(node, name),
+        startLine: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+        endLine: sourceFile.getLineAndCharacterOfPosition(node.getEnd()).line + 1,
+        contentHash:
+          selected.find((file) => file.path === relativeSourceFile(sourceFile))?.contentHash ?? sha(sourceFile.text),
+      };
+    };
+    const key = (symbol: GraphSymbol) => `${symbol.file}:${symbol.qualifiedName}`;
+    const declarationKey = (node: ts.Node): string | undefined => {
+      const sourceFile = node.getSourceFile();
+      const symbol = symbolForDeclaration(node, sourceFile);
+      return symbol ? key(symbol) : undefined;
+    };
+    const declarationsByName = new Map<string, string[]>();
+    for (const sourceFile of program.getSourceFiles()) {
+      if (!sourceFile.fileName.startsWith(root)) continue;
+      for (const statement of sourceFile.statements) {
+        const declaration = symbolForDeclaration(statement, sourceFile);
+        if (!declaration) continue;
+        const values = declarationsByName.get(declaration.name) ?? [];
+        values.push(key(declaration));
+        declarationsByName.set(declaration.name, values);
+      }
+    }
+    const resolvedTarget = (node: ts.Node): string | undefined => {
+      let symbol = checker.getSymbolAtLocation(node as ts.Node);
+      if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol);
+      const declaration = symbol?.declarations?.find((candidate) =>
+        candidate.getSourceFile().fileName.startsWith(root),
+      );
+      const direct = declaration ? declarationKey(declaration) : undefined;
+      if (direct) return direct;
+      const names = [symbol?.getName(), node.getText().split(".").at(-1)].filter(
+        (name): name is string => Boolean(name) && name !== "unknown",
+      );
+      for (const name of names) {
+        const local = [...new Set(declarationsByName.get(name) ?? [])];
+        if (local.length === 1) return local[0];
+      }
+      return undefined;
+    };
+
     for (const file of selected) {
       let source: string;
       try {
@@ -215,82 +322,77 @@ export class TypeScriptCompilerProvider implements GraphProvider {
       } catch {
         continue;
       }
-      const ast = ts.createSourceFile(file.path, source, ts.ScriptTarget.Latest, true);
+      const ast =
+        program.getSourceFile(path.join(root, file.path)) ??
+        ts.createSourceFile(file.path, source, ts.ScriptTarget.Latest, true);
       const local: GraphSymbol[] = [];
+      const owners = new Map<ts.Node, GraphSymbol | undefined>();
+      const collect = (node: ts.Node, owner?: GraphSymbol) => {
+        const symbol = symbolForDeclaration(node, ast);
+        const currentOwner = symbol ?? owner;
+        owners.set(node, currentOwner);
+        if (symbol) local.push(symbol);
+        ts.forEachChild(node, (child) => collect(child, currentOwner));
+      };
+      collect(ast);
       const visit = (node: ts.Node) => {
-        let name: string | undefined;
-        let kind: GraphSymbol["kind"] = "variable";
-        if (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node)) {
-          name = node.name?.getText(ast);
-          kind = ts.isMethodDeclaration(node) ? "method" : "function";
-        } else if (ts.isClassDeclaration(node)) {
-          name = node.name?.getText(ast);
-          kind = "class";
-        } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) name = node.name.text;
-        if (name) {
-          const owner = node.parent && ts.isClassDeclaration(node.parent) ? node.parent.name?.getText(ast) : undefined;
-          const symbol = {
-            file: file.path,
-            provider: this.id,
-            kind,
-            name,
-            qualifiedName: owner ? `${owner}.${name}` : name,
-            startLine: ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1,
-            endLine: ast.getLineAndCharacterOfPosition(node.getEnd()).line + 1,
-            contentHash: file.contentHash,
-          } satisfies GraphSymbol;
-          local.push(symbol);
-          if (node.parent && ts.isSourceFile(node.parent))
+        const owner = owners.get(node);
+        if (symbolKind(node) && node.parent && ts.isSourceFile(node.parent)) {
+          const symbol = symbolForDeclaration(node, ast);
+          if (symbol)
             edges.push({
-              source: `${file.path}:${name}`,
+              source: key(symbol),
               target: null,
-              targetText: name,
+              targetText: symbol.name,
               kind: "exports",
               confidence: "exact",
               provider: this.id,
             });
         }
-        if (ts.isImportDeclaration(node))
+        if (ts.isImportDeclaration(node) && owner)
           edges.push({
-            source: `${file.path}:${local[0]?.name ?? "module"}`,
-            target: null,
+            source: key(owner),
+            target: resolvedTarget(node.moduleSpecifier) ?? null,
             targetText: node.moduleSpecifier.getText(ast).slice(1, -1),
             kind: "imports",
             confidence: "exact",
             provider: this.id,
           });
-        if (ts.isCallExpression(node) && local.length) {
+        if (ts.isCallExpression(node) && owner) {
           const expression = node.expression.getText(ast);
           edges.push({
-            source: `${file.path}:${local.at(-1)!.qualifiedName}`,
-            target: null,
+            source: key(owner),
+            target: resolvedTarget(node.expression) ?? null,
             targetText: expression.split(".").at(-1) ?? expression,
             kind: "calls",
-            confidence: "syntactic",
+            confidence: resolvedTarget(node.expression) ? "exact" : "syntactic",
             provider: this.id,
           });
         }
-        if (ts.isTypeReferenceNode(node) && local.length) {
+        if (ts.isTypeReferenceNode(node) && owner) {
+          const target = resolvedTarget(node.typeName);
           edges.push({
-            source: `${file.path}:${local.at(-1)!.qualifiedName}`,
-            target: null,
+            source: key(owner),
+            target: target ?? null,
             targetText: node.typeName.getText(ast),
             kind: "reads-type",
-            confidence: "syntactic",
+            confidence: target ? "exact" : "syntactic",
             provider: this.id,
           });
         }
         if ((ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) && node.name)
           for (const clause of node.heritageClauses ?? [])
-            for (const type of clause.types)
+            for (const type of clause.types) {
+              const target = resolvedTarget(type.expression);
               edges.push({
                 source: `${file.path}:${node.name.getText(ast)}`,
-                target: null,
+                target: target ?? null,
                 targetText: type.expression.getText(ast),
                 kind: clause.token === ts.SyntaxKind.ImplementsKeyword ? "implements" : "extends",
-                confidence: "exact",
+                confidence: target ? "exact" : "syntactic",
                 provider: this.id,
               });
+            }
         ts.forEachChild(node, visit);
       };
       visit(ast);

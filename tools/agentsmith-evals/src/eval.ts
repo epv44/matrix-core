@@ -7,25 +7,18 @@ import { resolvePolicyForConfig } from "../../../src/core/resolved-policy.js";
 import { ENGINE_VERSION } from "../../../src/core/meta.js";
 import { OllamaProvider, type ReviewProvider } from "../../../src/agentsmith/provider.js";
 import { executeReviewEngine } from "../../../src/agentsmith/engine.js";
+import { formatAgentSmithReview } from "../../../src/agentsmith/report.js";
 import { AGENTSMITH_STRATEGY_HASH } from "../../../src/agentsmith/strategy.js";
 import { collectEvalMetrics } from "./eval-metrics.js";
 import { PlannerReviewProvider, RecordedReviewProvider } from "./eval-provider.js";
-import { corpusHash, listEvalCases, materializeEvalRun, readEvalCase, type EvalCase } from "./case.js";
+import { corpusHash, listEvalCases, materializeEvalRun, readEvalCase, readStageReplay } from "./case.js";
 import { evaluateStages, formatStageScorecard, type EvalStage } from "./stage-score.js";
+import { findingMatches, type ExpectedFinding } from "./matching.js";
 
 export type EvalMode =
   "holistic" | "partitioned-local" | "partitioned-evidence" | "partitioned-interactions" | "hybrid";
-export type EvalReplayMode = "live" | "recorded" | "stage";
-type ExpectedFinding = NonNullable<EvalCase["expectations"]["aggregation"]>["findings"][number];
+export type EvalReplayMode = "live" | "recorded" | "stage" | "isolated";
 type InspectionTargets = { files: string[]; symbols: string[]; edges: string[] };
-
-function findingMatches(actual: ReviewFinding, expected: ExpectedFinding) {
-  if (actual.file !== expected.file || actual.line < expected.lineStart || actual.line > expected.lineEnd) return false;
-  if (expected.category && actual.category !== expected.category) return false;
-  return expected.requiredEvidence.every((anchor) =>
-    actual.evidence.some((record) => record.id === anchor || record.snippet.includes(anchor)),
-  );
-}
 export function scoreFindings(actual: ReviewFinding[], expected: ExpectedFinding[]) {
   const unmatched = new Set(actual.map((_, index) => index));
   const matched: Array<{ expectedId: string; actualFindingId: string; discoveryClass: string }> = [];
@@ -108,6 +101,13 @@ function modeConfig(mode: EvalMode, config: NonNullable<ReturnType<typeof resolv
 
 function evaluationDiagnostics(execution: Awaited<ReturnType<typeof executeReviewEngine>>) {
   return {
+    graphManifest: execution.execution.graphManifest,
+    projection: {
+      code: execution.execution.projection.code,
+      audit: execution.execution.projection.audit,
+      omissions: execution.execution.projection.omissions,
+      dependencySummary: execution.execution.projection.dependencySummary,
+    },
     candidates: execution.execution.candidates,
     candidateCalls: execution.execution.candidateBatches.map((batch) => ({
       sourceId: batch.sourceId,
@@ -130,6 +130,8 @@ function evaluationDiagnostics(execution: Awaited<ReturnType<typeof executeRevie
       diagnostics: item.diagnostics,
     })),
     evidence: execution.execution.evidence,
+    evidenceOutcomes: execution.execution.evidenceOutcomes,
+    plannerManifest: execution.execution.plannerManifest ?? [],
     providerFailures: execution.execution.providerFailures ?? [],
     providerDiagnostics: execution.execution.providerDiagnostics ?? [],
     incompleteReasons: execution.result.incompleteReasons ?? [],
@@ -172,6 +174,15 @@ export async function runEvalCases(opts: {
           const resolved = resolveConfig({ cwd: replayWorkspace.root });
           const policy = resolvePolicyForConfig(resolved);
           const config = modeConfig(mode, resolved.config.agentsmith!);
+          const stageReplay = replay === "isolated" ? readStageReplay(opts.root, slug, definition) : undefined;
+          const replayScope = {
+            ...trace.scope,
+            root: replayWorkspace.root,
+            suppliedContext: {
+              ...trace.scope.suppliedContext,
+              ...Object.fromEntries((stageReplay?.contractEvidence ?? []).map((item) => [item.path, item.content])),
+            },
+          };
           const provider =
             opts.provider ??
             (replay === "recorded"
@@ -179,21 +190,25 @@ export async function runEvalCases(opts: {
               : replay === "stage"
                 ? new PlannerReviewProvider(config)
                 : new OllamaProvider(config));
-          const execution = await executeReviewEngine({
-            root: replayWorkspace.root,
-            version: trace.version,
-            scope: { ...trace.scope, root: replayWorkspace.root },
-            config,
-            provider,
-            profileHash: policy.agentSmith.hash,
-            assetRoot: policy.agentSmith.assetRoot,
-            deterministicReport: trace.deterministicReport,
-            enforceWorkspaceVersion: false,
-            variant: {
-              includeInteractions: !["partitioned-local", "partitioned-evidence"].includes(mode),
-              resolveEvidence: mode !== "partitioned-local",
-            },
-          });
+          const execute = (seedCandidates?: ReturnType<typeof readStageReplay>["goldenCandidates"]) =>
+            executeReviewEngine({
+              root: replayWorkspace.root,
+              version: trace.version,
+              scope: replayScope,
+              config,
+              provider,
+              profileHash: policy.agentSmith.hash,
+              assetRoot: policy.agentSmith.assetRoot,
+              deterministicReport: trace.deterministicReport,
+              enforceWorkspaceVersion: false,
+              variant: {
+                includeInteractions: !["partitioned-local", "partitioned-evidence"].includes(mode),
+                resolveEvidence: mode !== "partitioned-local",
+                ...(seedCandidates ? { seedCandidates } : {}),
+              },
+            });
+          const candidateExecution = replay === "isolated" ? await execute() : undefined;
+          const execution = await execute(stageReplay?.goldenCandidates);
           const promotedRejectedCandidates = rejectedCandidates
             .filter((candidate) =>
               execution.result.findings.some(
@@ -225,6 +240,8 @@ export async function runEvalCases(opts: {
             tier: replay,
             hermetic: true,
             selected: opts.stages,
+            candidateExecution: candidateExecution?.execution,
+            reportMarkdown: formatAgentSmithReview(execution.result),
           });
           const recordedMisses =
             replay === "recorded"
@@ -277,6 +294,7 @@ export async function runEvalCases(opts: {
               strategyHash: AGENTSMITH_STRATEGY_HASH,
               graphSchemaVersion: execution.execution.graphSnapshot.schemaVersion,
               graphProviderVersions: execution.execution.graphSnapshot.providerVersions,
+              stageReplaySha256: definition.stageReplay?.sha256 ?? null,
               models: config.model_profiles.map((profile) => ({ id: profile.id, model: profile.model })),
             },
           });
@@ -295,6 +313,7 @@ export async function runEvalCases(opts: {
               opts.stages ?? [
                 "snapshot",
                 "graph",
+                "projection",
                 "planning",
                 "candidates",
                 "evidence",
@@ -329,7 +348,7 @@ export async function runEvalCases(opts: {
   }
   const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID()}`;
   const reportBase = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     runId,
     label: opts.label ?? null,
     createdAt: new Date().toISOString(),
@@ -394,7 +413,7 @@ function summarizeStages(results: any[]) {
       const values = numeric(
         results.flatMap((result) =>
           (result.stages ?? [])
-            .filter((stage: any) => stage.stage === stageName)
+            .filter((stage: any) => stage.stage === stageName && stage.causalStatus !== "downstream-blocked")
             .flatMap((stage: any) =>
               stage.metrics.filter((metric: any) => metric.name === metricName).map((metric: any) => metric.value),
             ),

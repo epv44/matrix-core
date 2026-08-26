@@ -85,6 +85,7 @@ describe("candidate structured output", () => {
     expect(result.candidates[0].evidenceRequests).toEqual([
       {
         kind: "implementation",
+        locatorMode: "symbol",
         symbol: "value",
         pathHint: "src/a.ts",
         query: undefined,
@@ -95,16 +96,20 @@ describe("candidate structured output", () => {
 
   it("repairs malformed verifier citations once", async () => {
     let calls = 0;
+    const prompts: string[] = [];
     const provider: ReviewProvider = {
       health: async () => ({ ok: true, models: ["qwen"] }),
-      invoke: async () => ({
-        raw: JSON.stringify({
-          verdict: "rejected",
-          confidence: 0.9,
-          supportingEvidenceIds: [calls++ === 0 ? "[e-1]" : "e-1"],
-        }),
-        usage: { inputTokens: 2, outputTokens: 1 },
-      }),
+      invoke: async (input) => {
+        prompts.push(input.prompt);
+        return {
+          raw: JSON.stringify({
+            verdict: "rejected",
+            confidence: 0.9,
+            supportingEvidenceIds: [calls++ === 0 ? "[e-1]" : "e-1"],
+          }),
+          usage: { inputTokens: 2, outputTokens: 1 },
+        };
+      },
     };
     const judged = await verifyCandidateWithModel({
       candidate: {
@@ -123,6 +128,7 @@ describe("candidate structured output", () => {
       originatingCode: "return true;",
       evidenceText: "[e-1] src/a.ts:1-1\nreturn true;",
       evidenceIds: ["e-1"],
+      requiredEvidenceIdsByRequest: { "request-1": ["e-1"] },
       profile,
       provider,
     });
@@ -137,6 +143,7 @@ describe("candidate structured output", () => {
       expect.objectContaining({ failureKind: "citation-validation", attempt: 1 }),
     ]);
     expect(judged).toMatchObject({ inputTokens: 4, outputTokens: 2 });
+    expect(prompts[1]).toContain("request request-1: include at least one of e-1");
   });
 
   it("downgrades a verifier result when citation repair remains invalid", async () => {

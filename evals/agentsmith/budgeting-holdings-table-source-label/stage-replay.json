@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "caseId": "budgeting-holdings-table-source-label",
+  "fixtureDigest": "ff27664f3e1ed952694f3a162f2b4e4b23c2eeb770a3c6db64001a9bf3976b1d",
+  "reviewed": true,
+  "contractEvidence": [
+    {
+      "path": "eval-contracts/cash-snapshot-source-label.md",
+      "content": "Approved product contract: when value_source is cash_snapshot, the Source column must display \"Cash snapshot\" and must not display \"Account balance\"."
+    }
+  ],
+  "goldenCandidates": [
+    {
+      "id": "golden-cash-snapshot-source-label",
+      "sourceWorkItemIds": ["golden:cash-snapshot-source-label"],
+      "sourceReviewers": [],
+      "file": "frontend/src/components/InvestmentView.tsx",
+      "line": 949,
+      "severity": "low",
+      "category": "contract",
+      "title": "Cash snapshot is labeled as account balance",
+      "description": "The cash_snapshot source is a distinct contract value, but HoldingsCard renders it as Account balance instead of Cash snapshot.",
+      "suggestion": "Render a distinct Cash snapshot label for the cash_snapshot value_source.",
+      "primarySymbol": "HoldingsCard",
+      "evidenceRequests": [
+        {
+          "kind": "implementation",
+          "locatorMode": "literal",
+          "query": "cash_snapshot",
+          "pathHint": "finance/services/portfolio.py",
+          "reason": "Confirm where the backend emits the distinct cash_snapshot source value."
+        },
+        {
+          "kind": "test",
+          "locatorMode": "literal",
+          "query": "cash_snapshot",
+          "pathHint": "tests/unit/test_portfolio.py",
+          "reason": "Confirm the contract is covered by a backend test."
+        },
+        {
+          "kind": "config",
+          "locatorMode": "literal",
+          "query": "cash_snapshot",
+          "pathHint": "eval-contracts/cash-snapshot-source-label.md",
+          "reason": "Confirm the approved product label for the cash_snapshot source value."
+        }
+      ],
+      "candidateConfidence": 1
+    }
+  ]
+}

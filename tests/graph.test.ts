@@ -18,6 +18,10 @@ describe("repository graph", () => {
     fs.writeFileSync(path.join(root, "main.ts"), "export function calculate() { return helper(); }\n");
     fs.writeFileSync(path.join(root, "helper.ts"), "export function helper() { return 1; }\n");
     fs.writeFileSync(path.join(root, "worker.py"), "def worker():\n    return 1\n");
+    const fixture = path.join(root, "evals", "fixture");
+    fs.mkdirSync(fixture, { recursive: true });
+    fs.writeFileSync(path.join(fixture, ".matrixcore-ignore"), "");
+    fs.writeFileSync(path.join(fixture, "ignored.ts"), "export const ignored = true;\n");
     git(root, "init", "-q");
     git(root, "config", "user.email", "matrix@example.invalid");
     git(root, "config", "user.name", "Matrix");
@@ -42,6 +46,83 @@ describe("repository graph", () => {
     expect(changed.changedSymbols.find((symbol) => symbol.qualifiedName === "calculate")?.provider).toBe(
       "typescript-compiler",
     );
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("resolves exported interfaces and exact reads-type edges through imports", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrix graph types "));
+    fs.writeFileSync(path.join(root, "package.json"), '{"name":"graph-types-fixture"}\n');
+    fs.writeFileSync(path.join(root, "tsconfig.json"), '{"compilerOptions":{"strict":true}}\n');
+    fs.writeFileSync(path.join(root, "api.ts"), "export interface InvestmentDashboard { accounts: string[]; }\n");
+    fs.writeFileSync(
+      path.join(root, "view.ts"),
+      'import type { InvestmentDashboard } from "./api";\nexport function HoldingsCard(data: InvestmentDashboard) { return data.accounts.length; }\n',
+    );
+    git(root, "init", "-q");
+    git(root, "config", "user.email", "matrix@example.invalid");
+    git(root, "config", "user.name", "Matrix");
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "fixture");
+    fs.writeFileSync(
+      path.join(root, "view.ts"),
+      'import type { InvestmentDashboard } from "./api";\nexport function HoldingsCard(data: InvestmentDashboard) { return data.accounts.length + 1; }\n',
+    );
+    const scope = captureReviewScope({ root, base: "HEAD" });
+    const context = await repositoryGraph(root).getContext(scope, 1000);
+    const interfaceSymbol = context.nodes.find(
+      (node) => node.symbol.file === "api.ts" && node.symbol.qualifiedName === "InvestmentDashboard",
+    );
+    expect(interfaceSymbol?.symbol.kind).toBe("interface");
+    expect(
+      context.edges.some(
+        (edge) =>
+          edge.kind === "reads-type" &&
+          edge.source === "view.ts:HoldingsCard" &&
+          edge.target === "api.ts:InvestmentDashboard" &&
+          edge.confidence === "exact",
+      ),
+    ).toBe(true);
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("uses the nearest nested tsconfig to resolve aliased type imports", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrix graph alias "));
+    fs.writeFileSync(path.join(root, "package.json"), '{"name":"graph-alias-fixture"}\n');
+    fs.mkdirSync(path.join(root, "frontend", "src", "components"), { recursive: true });
+    fs.mkdirSync(path.join(root, "frontend", "src", "lib"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "frontend", "tsconfig.json"),
+      '{"compilerOptions":{"module":"esnext","moduleResolution":"bundler","baseUrl":".","paths":{"@/*":["./src/*"]}}}\n',
+    );
+    fs.writeFileSync(
+      path.join(root, "frontend", "src", "lib", "api.ts"),
+      "export interface InvestmentDashboard { accounts: string[]; }\n",
+    );
+    const view = path.join(root, "frontend", "src", "components", "view.ts");
+    fs.writeFileSync(
+      view,
+      'import type { InvestmentDashboard } from "@/lib/api";\nexport function HoldingsCard(data: InvestmentDashboard) { return data.accounts.length; }\n',
+    );
+    git(root, "init", "-q");
+    git(root, "config", "user.email", "matrix@example.invalid");
+    git(root, "config", "user.name", "Matrix");
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "fixture");
+    fs.writeFileSync(
+      view,
+      'import type { InvestmentDashboard } from "@/lib/api";\nexport function HoldingsCard(data: InvestmentDashboard) { return data.accounts.length + 1; }\n',
+    );
+    const scope = captureReviewScope({ root, base: "HEAD" });
+    const context = await repositoryGraph(root).getContext(scope, 1000);
+    expect(
+      context.edges.some(
+        (edge) =>
+          edge.source === "frontend/src/components/view.ts:HoldingsCard" &&
+          edge.target === "frontend/src/lib/api.ts:InvestmentDashboard" &&
+          edge.kind === "reads-type" &&
+          edge.confidence === "exact",
+      ),
+    ).toBe(true);
     fs.rmSync(root, { recursive: true, force: true });
   });
 });

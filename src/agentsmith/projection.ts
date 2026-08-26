@@ -88,14 +88,54 @@ function symbolSnippet(
   return undefined;
 }
 
-function fallbackSnippets(scope: ReviewScope, profile: ModelProfile, symbolFiles: Set<string>): ProjectedSnippet[] {
+function dependencySummary(scope: ReviewScope): string[] {
+  const packageEntry = scope.manifest?.find((entry) => entry.path === "package.json");
+  const packageContent = scope.fileContents["package.json"];
+  if (!packageEntry || !packageContent) return [];
+  try {
+    const parsed = JSON.parse(packageContent) as Record<string, unknown>;
+    const sections = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+    const values = sections.flatMap((section) => {
+      const dependencies = parsed[section];
+      if (!dependencies || typeof dependencies !== "object") return [];
+      return Object.entries(dependencies as Record<string, unknown>).map(
+        ([name, version]) => `${section}: ${name}=${String(version)}`,
+      );
+    });
+    const lockfiles = (scope.manifest ?? [])
+      .filter((entry) => /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/.test(entry.path))
+      .map((entry) => `lockfile changed: ${entry.path}; raw lockfile content omitted from code context`);
+    return [...values.slice(0, 80), ...lockfiles];
+  } catch {
+    return ["package.json changed; dependency manifest could not be parsed"];
+  }
+}
+
+function suppliedContextSummary(scope: ReviewScope): string[] {
+  return Object.entries(scope.suppliedContext)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([file, content]) => `supplied context ${file}:\n${content.slice(0, 8_000)}`);
+}
+
+function fallbackSnippets(
+  scope: ReviewScope,
+  profile: ModelProfile,
+  semanticSnippets: ProjectedSnippet[],
+): ProjectedSnippet[] {
   const ranges = changedRanges(scope.diff);
   const snippets: ProjectedSnippet[] = [];
   for (const entry of scope.manifest ?? []) {
-    if (entry.binary || entry.generated || (entry.sizeBytes ?? 0) > 300_000 || symbolFiles.has(entry.path)) continue;
+    if (
+      entry.binary ||
+      entry.generated ||
+      /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/.test(entry.path) ||
+      (entry.sizeBytes ?? 0) > 300_000
+    )
+      continue;
     const content = scope.fileContents[entry.path] ?? "";
     const fileRanges = ranges.filter((range) => range.file === entry.path);
-    if (!fileRanges.length && content)
+    const semanticForFile = semanticSnippets.filter((item) => item.file === entry.path && item.changed);
+    if (!fileRanges.length && content && !semanticForFile.length)
       snippets.push(
         snippet(entry.path, content, 1, content.split("\n").length, profile, {
           changed: true,
@@ -103,7 +143,8 @@ function fallbackSnippets(scope: ReviewScope, profile: ModelProfile, symbolFiles
           reason: "changed file without semantic symbol boundary",
         }),
       );
-    for (const range of fileRanges)
+    for (const range of fileRanges) {
+      if (semanticForFile.some((item) => item.startLine <= range.start && item.endLine >= range.end)) continue;
       snippets.push(
         snippet(entry.path, content, Math.max(1, range.start - 12), range.end + 12, profile, {
           changed: true,
@@ -111,6 +152,7 @@ function fallbackSnippets(scope: ReviewScope, profile: ModelProfile, symbolFiles
           reason: "changed hunk fallback with surrounding context",
         }),
       );
+    }
   }
   return snippets;
 }
@@ -153,14 +195,14 @@ export function buildProjection(opts: {
       } satisfies ProjectedSnippet;
     })
     .filter((value): value is ProjectedSnippet => Boolean(value));
-  code.push(
-    ...fallbackSnippets(opts.scope, opts.profile, new Set(opts.graph.changedSymbols.map((symbol) => symbol.file))),
-  );
+  code.push(...fallbackSnippets(opts.scope, opts.profile, code));
   const unique = [...new Map(code.map((item) => [item.id, item])).values()].sort(
     (left, right) =>
       right.score - left.score || left.file.localeCompare(right.file) || left.startLine - right.startLine,
   );
   const projectedCode = opts.kind === "compact" ? unique.map((item) => compactSnippet(item, opts.profile)) : unique;
+  const summarizedDependencies = dependencySummary(opts.scope);
+  const summarizedContext = suppliedContextSummary(opts.scope);
   const graphSummary = opts.graph.edges
     .map((edge) => `${edge.kind}: ${edge.source} -> ${edge.target ?? edge.targetText} (${edge.confidence})`)
     .join("\n");
@@ -174,10 +216,20 @@ export function buildProjection(opts: {
     graphEdges: opts.graph.edges,
     graphSummary,
     deterministicReport: opts.deterministicReport,
+    dependencySummary: summarizedDependencies,
+    contextSummary: summarizedContext,
     metadata: { base: opts.scope.base, snapshotId: opts.scope.id, languages: opts.scope.languages ?? [] },
     audit: [],
     omissions: [
       ...(opts.scope.omissions ?? []),
+      ...(opts.scope.manifest ?? [])
+        .filter((entry) => /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/.test(entry.path))
+        .map((entry) => ({
+          kind: "file" as const,
+          id: entry.path,
+          reason: "unsupported-artifact" as const,
+          details: "lockfile retained in the manifest and dependency summary but excluded from raw code context",
+        })),
       ...(opts.scope.manifest ?? [])
         .filter(
           (entry) =>
@@ -199,6 +251,8 @@ export function buildProjection(opts: {
     estimateTokens(manifestText, opts.profile, false) +
     estimateTokens(graphSummary, opts.profile, false) +
     estimateTokens(opts.deterministicReport ?? "", opts.profile, false) +
+    summarizedDependencies.reduce((sum, summary) => sum + estimateTokens(summary, opts.profile, false), 0) +
+    summarizedContext.reduce((sum, summary) => sum + estimateTokens(summary, opts.profile, false), 0) +
     700;
   base.estimatedTokens =
     fixed +
@@ -224,6 +278,20 @@ export function buildProjection(opts: {
           },
         ]
       : []),
+    ...summarizedDependencies.map((summary) => ({
+      kind: "dependency-summary" as const,
+      id: sha({ kind: "dependency-summary", summary }),
+      estimatedTokens: estimateTokens(summary, opts.profile, false),
+      score: 700,
+      status: "selected" as const,
+    })),
+    ...summarizedContext.map((summary) => ({
+      kind: "context-summary" as const,
+      id: sha({ kind: "context-summary", summary }),
+      estimatedTokens: estimateTokens(summary, opts.profile, false),
+      score: 800,
+      status: "selected" as const,
+    })),
     ...base.rules.map((rule) => ({
       kind: "rules" as const,
       id: rule.id,
@@ -246,6 +314,8 @@ export function buildProjection(opts: {
     code: base.code.map((item) => item.id),
     graphSummary,
     deterministicReport: opts.deterministicReport,
+    dependencySummary: summarizedDependencies,
+    contextSummary: summarizedContext,
   });
   return base;
 }
@@ -338,6 +408,13 @@ function symbolKey(symbol: GraphSymbol) {
   return `${symbol.file}:${symbol.qualifiedName}`;
 }
 function interactionPriority(edge: GraphContextEdge, changed: Set<string>, hot: Set<string>) {
+  const sourceFile = edge.source.split(":", 1)[0];
+  const targetFile = edge.target?.split(":", 1)[0];
+  // Cross-file contract edges are the most useful traversal checks: they
+  // exercise whether the planner can follow a changed symbol into its API
+  // surface instead of spending the budget on same-file neighbors.
+  const crossFileContractBonus =
+    targetFile && sourceFile !== targetFile && (edge.kind === "reads-type" || edge.kind === "implements") ? 80 : 0;
   const base =
     edge.kind === "implements" || edge.kind === "extends"
       ? 100
@@ -345,15 +422,18 @@ function interactionPriority(edge: GraphContextEdge, changed: Set<string>, hot: 
         ? 90
         : edge.kind === "calls"
           ? 80
-          : edge.kind === "reads-type" || edge.kind === "references"
-            ? 70
-            : edge.kind === "test-reference"
-              ? 40
-              : edge.kind === "imports"
-                ? 10
-                : 20;
+          : edge.kind === "reads-type"
+            ? 120
+            : edge.kind === "references"
+              ? 100
+              : edge.kind === "test-reference"
+                ? 40
+                : edge.kind === "imports"
+                  ? 10
+                  : 20;
   return (
     base +
+    crossFileContractBonus +
     (edge.target && changed.has(edge.source) && changed.has(edge.target) ? 30 : 0) +
     (edge.confidence === "exact" ? 10 : 0) +
     (hot.has(edge.source) || (edge.target ? hot.has(edge.target) : false) ? 50 : 0)
@@ -535,11 +615,18 @@ export function buildWorkItems(opts: {
         kind: "local",
         priority: filePriority(symbol.file) + symbolPriority(symbol, opts.graph.nodes),
         primarySymbols: [symbol],
-        relatedSymbols: [],
+        relatedSymbols: changedSymbols.filter(
+          (related) =>
+            related !== symbol &&
+            related.file === symbol.file &&
+            related.startLine >= symbol.startLine &&
+            related.endLine <= symbol.endLine,
+        ),
         code: [],
         graphEdges: graphEdges.filter((edge) => edge.source === symbolKey(symbol) || edge.target === symbolKey(symbol)),
         rules: [],
         deterministicReport,
+        contextSummaries: [...opts.projection.dependencySummary, ...opts.projection.contextSummary],
         estimatedTokens: 0,
         rankFactors: {
           edgeRisk: 0,
@@ -565,6 +652,7 @@ export function buildWorkItems(opts: {
       graphEdges: [],
       rules: [],
       deterministicReport,
+      contextSummaries: [...opts.projection.dependencySummary, ...opts.projection.contextSummary],
       estimatedTokens: 0,
       rankFactors: {
         edgeRisk: 0,
@@ -628,6 +716,7 @@ export function buildWorkItems(opts: {
       graphEdges: [edge],
       rules: [],
       deterministicReport,
+      contextSummaries: [...opts.projection.dependencySummary, ...opts.projection.contextSummary],
       estimatedTokens: 0,
       rankFactors: {
         edgeRisk: interactionPriority(edge, changed, hotspotSymbols),

@@ -26,6 +26,7 @@ const compactRequestSchema = z.object({
     "search",
   ]),
   v: z.string().min(1).max(240),
+  m: z.enum(["symbol", "literal"]).optional(),
   p: z.string().max(240).optional(),
   r: z.string().min(1).max(120),
 });
@@ -265,13 +266,17 @@ function expandCandidate(
     primarySymbol: value.p,
     ruleId: value.r,
     candidateConfidence: value.q,
-    evidenceRequests: value.e.map((request) => ({
-      kind: request.k,
-      symbol: symbolRequestKinds.has(request.k) ? request.v : undefined,
-      pathHint: request.p,
-      query: symbolRequestKinds.has(request.k) ? undefined : request.v,
-      reason: request.r,
-    })),
+    evidenceRequests: value.e.map((request) => {
+      const locatorMode = request.m ?? (symbolRequestKinds.has(request.k) ? "symbol" : "literal");
+      return {
+        kind: request.k,
+        locatorMode,
+        symbol: locatorMode === "symbol" ? request.v : undefined,
+        pathHint: request.p,
+        query: locatorMode === "literal" ? request.v : undefined,
+        reason: request.r,
+      };
+    }),
   };
 }
 
@@ -285,6 +290,12 @@ function projectionText(projection: ReviewProjection) {
     projection.graphSummary || "(none)",
     "Deterministic gate context:",
     projection.deterministicReport || "(none supplied)",
+    "Dependency context:",
+    ...(projection.dependencySummary.length
+      ? projection.dependencySummary.map((summary) => `- ${summary}`)
+      : ["(none)"]),
+    "Supplied review context:",
+    ...(projection.contextSummary.length ? projection.contextSummary.map((summary) => `- ${summary}`) : ["(none)"]),
     "Review rules:",
     ...projection.rules.map((rule) => `- ${rule.id}: ${rule.text}`),
     "Projected code:",
@@ -305,6 +316,8 @@ function workItemText(item: ReviewWorkItem) {
     ...item.graphEdges.map((edge) => `- ${edge.kind}: ${edge.source} -> ${edge.target ?? edge.targetText}`),
     "Deterministic gate context:",
     item.deterministicReport || "(none supplied)",
+    "Dependency context:",
+    ...(item.contextSummaries?.length ? item.contextSummaries.map((summary) => `- ${summary}`) : ["(none)"]),
     "Rules:",
     ...item.rules.map((rule) => `- ${rule.id}: ${rule.text}`),
     "Code:",
@@ -317,7 +330,7 @@ function workItemText(item: ReviewWorkItem) {
 
 function candidateInstructions(maxCandidates: number, includeSummary = false) {
   const empty = includeSummary ? '{"summary":"concise review summary","c":[]}' : '{"c":[]}';
-  return `You are generating candidate code-review defects. Inspect concrete runtime behavior, value flow, failure paths, boundary conditions, and contracts. For interaction work, compare callers, callees, producers, consumers, schemas, types, configuration, and tests across both sides of each supplied relationship. Be permissive enough to preserve recall, but never report repository instructions, filenames alone, style preferences, missing tests without a demonstrated defect, or hypothetical risks without an executable failure or contract mismatch. Generate zero to ${maxCandidates} distinct candidates anchored to supplied changed code. Supporting unchanged code may be requested as evidence. Use one short sentence per text field; set q to confidence from 0 to 1 as a decimal, never a percentage. Request at most two evidence items using {"k":"kind","v":"required symbol or search locator","p":"optional repository path","r":"short reason"}; v is always required. Every request is a required fact for adjudication. Claims about callers, consumers, downstream behavior, assumptions, or expectations must request callers or usage evidence for the exact producer symbol. Never request evidence for text that appears only in review instructions or deterministic-gate context. For definition, callers, callees, type, implementation, or usage, put only an exact symbol name such as "getBackgroundTasks" in v and put its repository file such as "src/hooks/adapters/claude.ts" in p. For search, config, test, or schema, put the shortest exact literal to search in v and an optional repository file in p. Return only the compact JSON object required by the schema, with no prose or Markdown, and use ${empty} when no concrete candidate exists.`;
+  return `You are generating candidate code-review defects. Inspect concrete runtime behavior, value flow, failure paths, boundary conditions, and contracts. For interaction work, compare callers, callees, producers, consumers, schemas, types, configuration, and tests across both sides of each supplied relationship. For finite or discriminated contract values, enumerate the supplied values and check whether changed branching preserves each value's observable meaning. Every candidate must identify the triggering input or value, the violated contract or invariant, and the observable outcome. A partial string-label mapping is not by itself a runtime exception. Be permissive enough to preserve recall, but never report repository instructions, filenames alone, style preferences, missing tests without a demonstrated defect, or hypothetical risks without an executable failure or contract mismatch. Generate zero to ${maxCandidates} distinct candidates anchored to supplied changed code. Supporting unchanged code may be requested as evidence. Use one short sentence per text field; set q to confidence from 0 to 1 as a decimal, never a percentage. Request at most two evidence items using {"k":"kind","m":"symbol or literal","v":"required symbol or literal","p":"optional repository path","r":"short reason"}; v is always required. Use m=symbol for exact definitions/callers/callees/types/usages and m=literal when implementation or test evidence must locate a concrete value such as an enum member. Every request is a required fact for adjudication. Claims about callers, consumers, downstream behavior, assumptions, or expectations must request callers or usage evidence for the exact producer symbol. Never request evidence for text that appears only in review instructions or deterministic-gate context. Return only the compact JSON object required by the schema, with no prose or Markdown, and use ${empty} when no concrete candidate exists.`;
 }
 
 export async function generateSpecialistCandidates(opts: {
@@ -434,7 +447,7 @@ export async function runScout(opts: {
 }
 
 export const VERIFICATION_INSTRUCTIONS =
-  "Judge one candidate defect using only the supplied changed code and resolved evidence. VERIFIED requires a concrete failure path or incompatible contract fully supported by exact evidence. REJECTED requires cited evidence that directly contradicts the claim; nearby defensive code is not enough. Use INSUFFICIENT_EVIDENCE whenever a required fact is missing, and LIKELY when plausible but not proven. Cite exact bracketed evidence IDs only. Return only the requested JSON object.";
+  "Judge one candidate defect using only the supplied changed code and resolved evidence. VERIFIED requires a concrete failure path or incompatible contract fully supported by exact evidence. REJECTED requires cited evidence that directly contradicts the claim; nearby defensive code is not enough. Use INSUFFICIENT_EVIDENCE whenever a required fact is missing, and LIKELY when plausible but not proven. In supportingEvidenceIds, use the exact raw evidence IDs without brackets or other decoration. Return only the requested JSON object.";
 export const VERIFICATION_LABELS = "Candidate:\nOriginating changed code:\nResolved evidence:";
 
 export async function verifyCandidateWithModel(opts: {
@@ -503,7 +516,10 @@ export async function verifyCandidateWithModel(opts: {
       ...first.response.usage,
     };
   const firstCitationDiagnostic = diagnostic(first.response, prompt, 1, firstErrors);
-  const repairPrompt = `${VERIFICATION_INSTRUCTIONS}\n\nCorrect only the citation contract in the previous verdict. Allowed evidence IDs: ${opts.evidenceIds.join(", ") || "none"}. Citation errors: ${firstErrors.join("; ")}. Return the complete corrected JSON object with exact IDs and no prose.\nPrevious response:\n${first.response.raw.slice(0, 12_000)}`;
+  const requiredCitationGroups = Object.entries(opts.requiredEvidenceIdsByRequest ?? {})
+    .map(([requestId, ids]) => `- request ${requestId}: include at least one of ${ids.join(", ")}`)
+    .join("\n");
+  const repairPrompt = `${VERIFICATION_INSTRUCTIONS}\n\nCorrect only the citation contract in the previous verdict. Preserve its verdict and reasoning. Allowed evidence IDs: ${opts.evidenceIds.join(", ") || "none"}. Required citation groups:\n${requiredCitationGroups || "(none)"}\nCitation errors: ${firstErrors.join("; ")}. Return the complete corrected JSON object with exact raw IDs and no prose.\nPrevious response:\n${first.response.raw.slice(0, 12_000)}`;
   const repaired = await invokeStructured({
     provider: opts.provider,
     profile: opts.profile,

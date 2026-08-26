@@ -11,6 +11,7 @@ import type { GraphContext } from "../core/graph/types.js";
 import type { ReviewScope } from "./scope.js";
 import { changedRanges } from "./projection.js";
 import { sha256Json } from "../core/hash.js";
+import { discoverGraphFiles } from "../core/graph/providers.js";
 
 function safePath(root: string, value: string) {
   const relative = path.normalize(value).replaceAll("\\", "/").replace(/^\.\//, "");
@@ -61,7 +62,13 @@ export function evidenceLocatorParts(request: EvidenceRequest): {
 
 export function evidenceRequestId(request: EvidenceRequest): string {
   return sha256Json(
-    { kind: request.kind, symbol: request.symbol ?? "", pathHint: request.pathHint ?? "", query: request.query ?? "" },
+    {
+      kind: request.kind,
+      locatorMode: request.locatorMode ?? "",
+      symbol: request.symbol ?? "",
+      pathHint: request.pathHint ?? "",
+      query: request.query ?? "",
+    },
     16,
   );
 }
@@ -105,6 +112,61 @@ function readLines(scope: ReviewScope, file: string): string[] {
   }
 }
 
+function evidenceSearchFiles(scope: ReviewScope): string[] {
+  const discovered = discoverGraphFiles(scope.root).map((file) => file.path);
+  return [...new Set([...scope.changedFiles, ...Object.keys(scope.suppliedContext), ...discovered])].filter(
+    (file) =>
+      !/(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|node_modules|dist|build|coverage)\//.test(
+        `${file}/`,
+      ) && !/(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/.test(file),
+  );
+}
+
+function searchRoleScore(file: string, kind: EvidenceRequest["kind"]): number {
+  const test = /(^|\/)(tests?|__tests__)\//.test(file) || /\.(test|spec)\.[^.]+$/.test(file);
+  if (kind === "test") return test ? 100 : 0;
+  if (kind === "implementation" || kind === "definition" || kind === "type") return test ? 0 : 100;
+  return test ? 20 : 50;
+}
+
+function enclosingSymbol(symbols: GraphContext["nodes"][number]["symbol"][], file: string, line: number) {
+  return symbols
+    .filter((symbol) => symbol.file === file && symbol.startLine <= line && symbol.endLine >= line)
+    .sort((left, right) => left.endLine - left.startLine - (right.endLine - right.startLine))[0];
+}
+
+function lexicalOwner(lines: string[], index: number): { name: string; kind: string } | undefined {
+  for (let current = index; current >= 0; current--) {
+    const python = /^\s*(?:async\s+)?(def|class)\s+([A-Za-z_]\w*)/.exec(lines[current]);
+    if (python) return { name: python[2], kind: python[1] === "class" ? "class" : "function" };
+    const typescript = /^\s*(?:export\s+)?(?:async\s+)?(function|class|interface|type)\s+([A-Za-z_$][\w$]*)/.exec(
+      lines[current],
+    );
+    if (typescript) return { name: typescript[2], kind: typescript[1] };
+  }
+  return undefined;
+}
+
+function literalHitScore(opts: {
+  file: string;
+  line: string;
+  query: string;
+  request: EvidenceRequest;
+  pathHint?: string;
+  owner?: { name: string; kind: string };
+}) {
+  const exactLiteral = opts.line.includes(`"${opts.query}"`) || opts.line.includes(`'${opts.query}'`);
+  const executableOwner = Boolean(opts.owner && /^(function|method|constructor|variable)$/.test(opts.owner.kind));
+  const testOwner = Boolean(opts.owner && /(^|\.)test[_A-Z]|^test/i.test(opts.owner.name));
+  return (
+    (opts.pathHint && (opts.file === opts.pathHint || opts.file.endsWith(`/${opts.pathHint}`)) ? 1000 : 0) +
+    searchRoleScore(opts.file, opts.request.kind) +
+    (exactLiteral ? 60 : 0) +
+    (executableOwner ? 30 : 0) +
+    (opts.request.kind === "test" && testOwner ? 50 : 0)
+  );
+}
+
 export function candidateAnchorIssue(candidate: CandidateFinding, scope: ReviewScope): string | undefined {
   if (!scope.changedFiles.includes(candidate.file)) return "finding location is outside the changed review scope";
   const content = scope.fileContents[candidate.file];
@@ -135,7 +197,7 @@ export function resolveEvidenceRequests(opts: {
   const requests = [
     ...new Map(
       opts.candidate.evidenceRequests.map((request) => [
-        `${request.kind}:${request.symbol ?? ""}:${request.pathHint ?? ""}:${request.query ?? ""}`,
+        `${request.kind}:${request.locatorMode ?? ""}:${request.symbol ?? ""}:${request.pathHint ?? ""}:${request.query ?? ""}`,
         request,
       ]),
     ).values(),
@@ -149,23 +211,28 @@ export function resolveEvidenceRequests(opts: {
       continue;
     }
     const requestRecords: EvidenceRecord[] = [];
+    let resolverRoute: EvidenceResolutionOutcome["resolverRoute"];
+    let consideredRecords = 0;
     const locator = evidenceLocatorParts(request);
-    const matchedSymbols = symbols.filter((symbol) => {
-      const symbolFile = normalizedRepositoryPath(symbol.file);
-      if (locator.pathHint && symbolFile !== locator.pathHint && !symbolFile.endsWith(`/${locator.pathHint}`))
-        return false;
-      if (
-        request.symbol &&
-        !locator.symbolCandidates.some(
-          (candidate) =>
-            symbol.name === candidate ||
-            symbol.qualifiedName === candidate ||
-            symbol.qualifiedName.endsWith(`.${candidate}`),
-        )
-      )
-        return false;
-      return Boolean(request.symbol || locator.pathHint);
-    });
+    const literalMode = request.locatorMode === "literal";
+    const matchedSymbols = literalMode
+      ? []
+      : symbols.filter((symbol) => {
+          const symbolFile = normalizedRepositoryPath(symbol.file);
+          if (locator.pathHint && symbolFile !== locator.pathHint && !symbolFile.endsWith(`/${locator.pathHint}`))
+            return false;
+          if (
+            request.symbol &&
+            !locator.symbolCandidates.some(
+              (candidate) =>
+                symbol.name === candidate ||
+                symbol.qualifiedName === candidate ||
+                symbol.qualifiedName.endsWith(`.${candidate}`),
+            )
+          )
+            return false;
+          return Boolean(request.symbol || locator.pathHint);
+        });
     const matchedFiles = new Set(matchedSymbols.map((symbol) => normalizedRepositoryPath(symbol.file)));
     if (!locator.pathHint && matchedFiles.size > 1) {
       const reason = `ambiguous locator matched ${matchedFiles.size} files: ${[...matchedFiles].sort().join(", ")}`;
@@ -215,10 +282,11 @@ export function resolveEvidenceRequests(opts: {
           locator.symbolCandidates[0],
         ),
       );
+      resolverRoute = "graph-symbol";
       if (records.length + requestRecords.length >= maxPerCandidate || requestRecords.length >= maxPerRequest) break;
     }
     const fallbackPath = locator.pathHint ?? opts.candidate.file;
-    if (!requestRecords.length && fallbackPath && records.length < maxPerCandidate) {
+    if (!literalMode && !requestRecords.length && fallbackPath && records.length < maxPerCandidate) {
       const resolved = safePath(opts.scope.root, fallbackPath);
       const lines = resolved ? readLines(opts.scope, resolved.relative) : [];
       if (resolved && lines.length) {
@@ -238,10 +306,12 @@ export function resolveEvidenceRequests(opts: {
               query,
             ),
           );
+          resolverRoute = "path-search";
         }
       }
     }
     if (
+      !literalMode &&
       !requestRecords.length &&
       ["search", "config", "test", "schema"].includes(request.kind) &&
       request.query &&
@@ -266,12 +336,77 @@ export function resolveEvidenceRequests(opts: {
             request.query,
           ),
         );
+        resolverRoute = "path-search";
         if (records.length + requestRecords.length >= maxPerCandidate || requestRecords.length >= maxPerRequest) break;
+      }
+    }
+    if (!requestRecords.length) {
+      const query =
+        request.query?.trim() ||
+        locator.textQueries.find((value) => value.length >= 3) ||
+        locator.symbolCandidates.at(-1)?.trim();
+      if (query && query.length >= 3 && query.length <= 200) {
+        const hits: Array<{ file: string; index: number; score: number; owner?: string }> = [];
+        for (const file of evidenceSearchFiles(opts.scope)) {
+          const lines = readLines(opts.scope, file);
+          for (let index = 0; index < lines.length; index++) {
+            if (!lines[index].includes(query)) continue;
+            const graphOwner = enclosingSymbol(symbols, file, index + 1);
+            const owner = graphOwner ?? lexicalOwner(lines, index);
+            hits.push({
+              file,
+              index,
+              score: literalHitScore({
+                file,
+                line: lines[index],
+                query,
+                request,
+                pathHint: locator.pathHint,
+                owner,
+              }),
+              owner: graphOwner?.qualifiedName ?? owner?.name,
+            });
+          }
+        }
+        consideredRecords = hits.length;
+        hits.sort(
+          (left, right) => right.score - left.score || left.file.localeCompare(right.file) || left.index - right.index,
+        );
+        for (const hit of hits) {
+          const lines = readLines(opts.scope, hit.file);
+          const index = hit.index;
+          const startIndex = Math.max(0, index - (literalMode ? 8 : request.kind === "test" ? 8 : 12));
+          requestRecords.push(
+            record(
+              requestId,
+              request,
+              hit.file,
+              startIndex + 1,
+              lines.slice(startIndex, startIndex + Math.min(literalMode ? 24 : 60, opts.policy.maxSnippetLines)),
+              hit.owner ?? request.symbol,
+              "repository-search",
+              query,
+            ),
+          );
+          resolverRoute = "repository-literal";
+          if (
+            records.length + requestRecords.length >= maxPerCandidate ||
+            requestRecords.length >= (literalMode ? 1 : maxPerRequest)
+          )
+            break;
+        }
       }
     }
     if (requestRecords.length) {
       records.push(...requestRecords);
-      outcomes.push({ requestId, request, status: "satisfied", records: requestRecords });
+      outcomes.push({
+        requestId,
+        request,
+        status: "satisfied",
+        records: requestRecords,
+        resolverRoute,
+        consideredRecords,
+      });
     } else {
       const reason = `no exact evidence matched: ${request.reason}`;
       gaps.push(`${request.kind}: ${reason}`);

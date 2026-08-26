@@ -1,0 +1,68 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.secret
+*.key
+*.pem
+
+# Local data and exports
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+*.csv
+*.xlsx
+*.xls
+*.numbers
+:memory:
+
+# Logs and generated reports
+logs/
+*.log
+coverage/
+coverage.json
+coverage.xml
+.coverage
+test-results/
+playwright-report/
+response.json
+usaa_response.json
+
+# Python
+/.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# JavaScript and quality tooling
+node_modules/
+/.quality/
+/.pm2/
+/frontend/.next/
+
+# Local agent state
+/.codex/
+
+# Local HTTPS certificates
+certs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,1 @@
+"""Domain-focused persistence operations."""

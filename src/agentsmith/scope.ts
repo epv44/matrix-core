@@ -38,14 +38,15 @@ function isBinary(content: string): boolean {
   return content.includes("\0");
 }
 function lineStats(diff: string) {
-  const result = new Map<string, { additions: number; deletions: number; oldPath?: string }>();
+  const result = new Map<string, { additions: number; deletions: number; oldPath?: string; newFile?: boolean }>();
   let file: string | undefined;
   for (const line of diff.split("\n")) {
     const header = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
     if (header) {
       file = header[2];
       result.set(file, { additions: 0, deletions: 0, ...(header[1] !== header[2] ? { oldPath: header[1] } : {}) });
-    } else if (file && line.startsWith("+") && !line.startsWith("+++")) result.get(file)!.additions++;
+    } else if (file && line.startsWith("new file mode ")) result.get(file)!.newFile = true;
+    else if (file && line.startsWith("+") && !line.startsWith("+++")) result.get(file)!.additions++;
     else if (file && line.startsWith("-") && !line.startsWith("---")) result.get(file)!.deletions++;
   }
   return result;
@@ -123,7 +124,7 @@ export function captureReviewScope(opts: { root: string; base?: string; contextF
     const generated = GENERATED_PATH.test(file) || GENERATED_MARKER.test(content.split("\n").slice(0, 10).join("\n"));
     return {
       path: file,
-      changeKind: deletedFile ? "deleted" : item.oldPath ? "renamed" : item.deletions === 0 ? "added" : "modified",
+      changeKind: deletedFile ? "deleted" : item.oldPath ? "renamed" : item.newFile ? "added" : "modified",
       additions: item.additions,
       deletions: item.deletions,
       language: detectedLanguage(file),

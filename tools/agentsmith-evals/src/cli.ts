@@ -79,6 +79,7 @@ const modes: EvalMode[] = [
 const stages: EvalStage[] = [
   "snapshot",
   "graph",
+  "projection",
   "planning",
   "candidates",
   "evidence",
@@ -91,7 +92,7 @@ program
   .command("run")
   .option("--root <path>", "MatrixCore repository root", process.cwd())
   .option("--case <slug...>", "Selected active cases")
-  .option("--tier <tier>", "stage, recorded, live, or all", "stage")
+  .option("--tier <tier>", "stage, recorded, isolated, live, or all", "stage")
   .option("--mode <mode>", "Review mode or all", "partitioned-interactions")
   .option("--stage <stage...>", "Selected pipeline stages")
   .option("--repeat <count>", "Runs per case and mode", "1")
@@ -99,14 +100,15 @@ program
   .option("--json", "Print JSON instead of Markdown", false)
   .action(async (opts) => {
     const repositoryRoot = root(opts.root);
-    if (!["stage", "recorded", "live", "all"].includes(opts.tier)) throw new Error(`Invalid tier: ${opts.tier}`);
+    if (!["stage", "recorded", "isolated", "live", "all"].includes(opts.tier))
+      throw new Error(`Invalid tier: ${opts.tier}`);
     if (![...modes, "all"].includes(opts.mode)) throw new Error(`Invalid mode: ${opts.mode}`);
     const selectedStages = opts.stage as EvalStage[] | undefined;
     if (selectedStages?.some((stage) => !stages.includes(stage))) throw new Error("Invalid pipeline stage");
     const repeat = Number.parseInt(opts.repeat, 10);
     if (!Number.isInteger(repeat) || repeat < 1) throw new Error(`Invalid repeat count: ${opts.repeat}`);
     const selectedModes = opts.mode === "all" ? modes : [opts.mode as EvalMode];
-    const tiers: EvalReplayMode[] = opts.tier === "all" ? ["stage", "recorded", "live"] : [opts.tier];
+    const tiers: EvalReplayMode[] = opts.tier === "all" ? ["stage", "recorded", "isolated", "live"] : [opts.tier];
     const reports = [];
     for (const tier of tiers)
       reports.push(

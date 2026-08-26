@@ -195,6 +195,43 @@ describe("adaptive projection planning", () => {
     expect(selection.omitted).toHaveLength(0);
   });
 
+  it("keeps changed-hunk context when only nested symbols are available", () => {
+    const content = [
+      'test("contract", async () => {',
+      "  await setup();",
+      '  const card = page.getByText("Contribution activity");',
+      "  await expect(card).toBeVisible();",
+      '  await expect(page.getByText("2026-01")).toHaveCount(0);',
+      "});",
+    ].join("\n");
+    const hunkScope: ReviewScope = {
+      ...scope,
+      diff: 'diff --git a/dashboard.spec.ts b/dashboard.spec.ts\n+++ b/dashboard.spec.ts\n@@ -1,1 +1,6 @@\n+test("contract", async () => {\n+  await setup();\n+  const card = page.getByText("Contribution activity");\n+  await expect(card).toBeVisible();\n+  await expect(page.getByText("2026-01")).toHaveCount(0);\n+});',
+      changedFiles: ["dashboard.spec.ts"],
+      changeSources: { "dashboard.spec.ts": ["working-tree"] },
+      fileContents: { "dashboard.spec.ts": content },
+      manifest: [{ ...manifest[0], path: "dashboard.spec.ts", additions: 6, deletions: 0 }],
+    };
+    const nested = {
+      ...changed,
+      file: "dashboard.spec.ts",
+      name: "card",
+      qualifiedName: "card",
+      startLine: 3,
+      endLine: 3,
+    };
+    const hunkGraph: GraphContext = {
+      ...graph,
+      changedSymbols: [nested],
+      nodes: [{ symbol: nested, score: 130, distance: 0 }],
+      edges: [],
+    };
+    const projection = buildProjection({ scope: hunkScope, graph: hunkGraph, profile: small, rules: [], kind: "full" });
+    const fallback = projection.code.find((item) => item.reason === "changed hunk fallback with surrounding context");
+    expect(fallback?.content).toContain("Contribution activity");
+    expect(fallback?.content).toContain("toHaveCount");
+  });
+
   it("uses semantic ranking and subsystem diversity instead of hash identifiers", () => {
     const workSymbol = (file: string, name: string) => ({ ...changed, file, name, qualifiedName: name });
     const workItem = (id: string, kind: ReviewWorkItem["kind"], file: string, name: string): ReviewWorkItem => ({

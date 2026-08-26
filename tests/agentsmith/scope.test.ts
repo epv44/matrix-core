@@ -33,6 +33,8 @@ describe("ReviewScope", () => {
         "tracked.ts": ["working-tree"],
       });
       expect(scope.deletedFiles).toEqual(["deleted.md"]);
+      expect(scope.manifest.find((item) => item.path === "new.rs")?.changeKind).toBe("added");
+      expect(scope.manifest.find((item) => item.path === "tracked.ts")?.changeKind).toBe("modified");
       expect(scope.diff).toContain("new file mode");
       expect(scope.diff).toContain("deleted file mode");
       expect(scope.fileContents["deleted.md"]).toContain("Layering rules");
@@ -40,6 +42,26 @@ describe("ReviewScope", () => {
       const frozen = scope.fileContents["tracked.ts"];
       fs.writeFileSync(path.join(root, "tracked.ts"), "changed later\n");
       expect(scope.fileContents["tracked.ts"]).toBe(frozen);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps tracked files with addition-only hunks classified as modified", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-scope-addition-only-"));
+    try {
+      git(root, "init", "-b", "main");
+      git(root, "config", "user.email", "test@example.com");
+      git(root, "config", "user.name", "Test");
+      fs.writeFileSync(path.join(root, "app.ts"), "export const first = true;\n");
+      git(root, "add", ".");
+      git(root, "commit", "-m", "base");
+      fs.appendFileSync(path.join(root, "app.ts"), "export const second = true;\n");
+
+      const scope = captureReviewScope({ root });
+      expect(scope.manifest).toContainEqual(
+        expect.objectContaining({ path: "app.ts", changeKind: "modified", additions: 1, deletions: 0 }),
+      );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -113,6 +135,26 @@ describe("ReviewScope", () => {
         id: "evals/agentsmith/case-one/input.json",
         reason: "generated",
       });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes frozen fixture contents beneath a MatrixCore ignore boundary", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-scope-ignore-"));
+    try {
+      git(root, "init", "-b", "main");
+      git(root, "config", "user.email", "test@example.com");
+      git(root, "config", "user.name", "Test");
+      fs.writeFileSync(path.join(root, "README.md"), "base\n");
+      git(root, "add", ".");
+      git(root, "commit", "-m", "base");
+      const fixture = path.join(root, "evals", "case", "fixture");
+      fs.mkdirSync(fixture, { recursive: true });
+      fs.writeFileSync(path.join(fixture, ".matrixcore-ignore"), "");
+      fs.writeFileSync(path.join(fixture, "source.ts"), "export const frozen = true;\n");
+      fs.writeFileSync(path.join(root, "case.yaml"), "status: active\n");
+      expect(captureReviewScope({ root }).changedFiles).toEqual(["case.yaml"]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

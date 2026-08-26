@@ -1,7 +1,7 @@
 import type { LanguageWorkspace } from "../types.js";
 
 export type GraphLanguage = "python" | "typescript";
-export type GraphSymbolKind = "function" | "class" | "method" | "variable" | "module";
+export type GraphSymbolKind = "function" | "class" | "method" | "variable" | "module" | "interface" | "type" | "enum";
 export type GraphEdgeKind =
   | "defines"
   | "imports"

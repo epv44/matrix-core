@@ -1,0 +1,16 @@
+[Unit]
+Description=Budget App public Plaid webhook tunnel
+After=network-online.target budget-app.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=budget-app
+ExecStart=/usr/local/bin/ngrok start budget-webhook --config /etc/budget-app/ngrok.yml
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

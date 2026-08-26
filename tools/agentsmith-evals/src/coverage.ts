@@ -4,6 +4,7 @@ import type { EvalStage } from "./stage-score.js";
 const stages: EvalStage[] = [
   "snapshot",
   "graph",
+  "projection",
   "planning",
   "candidates",
   "evidence",
@@ -15,6 +16,7 @@ const stages: EvalStage[] = [
 export function corpusCoverage(root: string) {
   const cases = listEvalCases(root, true).map((slug) => readEvalCase(root, slug).definition);
   const activeBenchmarks = cases.filter((item) => item.status === "active" && item.kind === "benchmark");
+  const activeComponents = cases.filter((item) => item.status === "active" && item.suite === "component");
   const discoveryClasses = Object.fromEntries(
     ["L0", "L1", "L2", "L3"].map((level) => [
       level,
@@ -38,11 +40,21 @@ export function corpusCoverage(root: string) {
   return {
     totalCases: cases.length,
     activeBenchmarks: activeBenchmarks.length,
+    activeComponents: activeComponents.length,
     drafts: cases.filter((item) => item.status === "draft").length,
     conformance: cases.filter((item) => item.kind === "conformance").length,
+    suites: Object.fromEntries(
+      ["component", "conformance", "draft"].map((suite) => [
+        suite,
+        cases.filter((item) => item.suite === suite).length,
+      ]),
+    ),
     withFrozenRepository: cases.filter((item) => Boolean(item.source.fixture)).length,
     discoveryClasses,
     outcomes,
     stageCoverage,
+    componentStageCoverage: Object.fromEntries(
+      stages.map((stage) => [stage, activeComponents.filter((item) => Boolean(item.expectations[stage])).length]),
+    ),
   };
 }

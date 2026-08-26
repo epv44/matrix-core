@@ -1,0 +1,19 @@
+{
+  "name": "budgeting-tool-quality",
+  "private": true,
+  "engines": {
+    "node": ">=26 <27"
+  },
+  "packageManager": "npm@11.0.0",
+  "scripts": {
+    "test:backend": "bash scripts/test.sh deterministic",
+    "test:plaid": "bash scripts/test.sh plaid",
+    "test:all": "bash scripts/test.sh all",
+    "quality:policy": "bash scripts/check-policy.sh",
+    "quality:completion": "npm run quality:policy && matrix-core completion"
+  },
+  "devDependencies": {
+    "@epv44/matrixcore": "file:../../MatrixCore",
+    "pm2": "7.0.3"
+  }
+}

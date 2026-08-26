@@ -10,12 +10,18 @@ import {
   scoreFindings,
   scoreInspectionTargets,
 } from "../../tools/agentsmith-evals/src/eval.js";
-import { curateTrace, readEvalCase, validateCaseFixture } from "../../tools/agentsmith-evals/src/case.js";
+import {
+  curateTrace,
+  readEvalCase,
+  validateCaseFixture,
+  validateEvalCases,
+} from "../../tools/agentsmith-evals/src/case.js";
 import { captureReviewScope } from "../../src/agentsmith/scope.js";
 import { captureSourceSnapshot } from "../../src/agentsmith/source-snapshot.js";
 import { writeAgentSmithTrace } from "../../src/agentsmith/trace.js";
 import type { ReviewProvider } from "../../src/agentsmith/provider.js";
 import type { ReviewResult } from "../../src/core/types.js";
+import { sha256 } from "../../src/core/hash.js";
 
 function git(root: string, ...args: string[]) {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
@@ -96,6 +102,13 @@ function activate(root: string, slug: string) {
     sensitiveContentReviewed: true,
     redistributable: true,
   };
+  definition.groundTruth = {
+    reviewed: true,
+    reviewedBy: "test-suite",
+    reviewedAt: "2026-08-26T00:00:00.000Z",
+    contractFamily: "synthetic-clear",
+    exhaustiveCandidates: true,
+  };
   definition.expectations = { aggregation: { outcome: "clear", findings: [] } };
   fs.writeFileSync(target, yaml.dump(definition));
 }
@@ -108,7 +121,7 @@ describe("AgentSmith v4 eval cases", () => {
     try {
       curateTrace({ root, traceId, slug: "case-one" });
       const { definition } = readEvalCase(root, "case-one");
-      expect(definition).toMatchObject({ schemaVersion: 4, status: "draft", expectations: {} });
+      expect(definition).toMatchObject({ schemaVersion: 6, status: "draft", expectations: {} });
       expect(definition.source.fixture).toBeTruthy();
       expect(() => curateTrace({ root, traceId, slug: "case-one" })).toThrow(/already exists/);
     } finally {
@@ -148,6 +161,72 @@ describe("AgentSmith v4 eval cases", () => {
     expect(score).toMatchObject({ truePositive: 1, falseNegative: 1, precision: 1, recall: 0.5 });
     expect(score.byClass.L2.recall).toBe(1);
     expect(score.byClass.L3.recall).toBe(0);
+  });
+
+  it("does not match a semantically different finding at the same line", () => {
+    const actual = [
+      {
+        id: "wrong",
+        file: "src/view.ts",
+        line: 9,
+        severity: "medium" as const,
+        category: "contract" as const,
+        title: "String mapping may throw",
+        description: "wrong claim",
+        confidence: "verified" as const,
+        evidence: [],
+        sourceWorkItemIds: [],
+        sourceReviewers: [],
+      },
+    ];
+    const expected = [
+      {
+        id: "cash-source",
+        file: "src/view.ts",
+        lineStart: 9,
+        lineEnd: 9,
+        severity: "low" as const,
+        category: "contract" as const,
+        titleContains: "cash snapshot",
+        discoveryClass: "L2" as const,
+        requiredEvidence: ["cash_snapshot"],
+        symbols: [],
+        description: "wrong provenance label",
+        rationale: "distinct claim",
+      },
+    ];
+    expect(scoreFindings(actual, expected)).toMatchObject({ truePositive: 0, falsePositive: 1, falseNegative: 1 });
+  });
+
+  it("accepts only digest-bound sensitive-content exemptions", () => {
+    const { root, traceId } = fixture();
+    try {
+      curateTrace({ root, traceId, slug: "case-sensitive" });
+      const directory = path.join(root, "evals", "agentsmith", "case-sensitive");
+      const note = 'token = "fake-token-value"\n';
+      fs.writeFileSync(path.join(directory, "review-note.txt"), note);
+      expect(validateEvalCases(root).valid).toBe(false);
+
+      const target = path.join(directory, "case.yaml");
+      const definition = yaml.load(fs.readFileSync(target, "utf8")) as any;
+      definition.sanitization.sensitiveContentExemptions = [
+        {
+          path: "review-note.txt",
+          patternId: "credential-assignment",
+          sha256: sha256(note),
+          rationale: "deterministic fake value",
+        },
+      ];
+      fs.writeFileSync(target, yaml.dump(definition));
+      expect(validateEvalCases(root).valid).toBe(true);
+
+      fs.writeFileSync(path.join(directory, "review-note.txt"), 'token = "different-fake-token"\n');
+      const stale = validateEvalCases(root);
+      expect(stale.valid).toBe(false);
+      expect(stale.cases[0].findings.join("\n")).toMatch(/stale|matched/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("runs partitioned variants against the same frozen snapshot", async () => {
