@@ -260,6 +260,87 @@ describe("AgentSmith stage scorecards", () => {
     ).toBe(0);
   });
 
+  it("splits verifier output into validity, specificity, contract, and acceptance metrics", () => {
+    const expected = {
+      id: "cash-source",
+      file: "view.ts",
+      lineStart: 9,
+      lineEnd: 9,
+      expectedPresence: true,
+      expectedVerdict: "verified",
+      requiredEvidenceKinds: ["implementation"],
+      requiredReasoningTerms: [],
+      forbiddenReasoningTerms: [],
+      rationale: "contract",
+    };
+    const golden = {
+      id: "golden-cash-source",
+      file: "view.ts",
+      line: 9,
+      severity: "low",
+      category: "contract",
+      title: "cash source",
+      description: "cash_snapshot",
+      evidenceRequests: [{ kind: "implementation", reason: "contract" }],
+    };
+    const candidateId = "golden-cash-source";
+    const make = (verification: Record<string, unknown>) =>
+      evaluateStages({
+        definition: { expectations: { verification: { candidates: [expected] } } } as any,
+        trace: { scope: { changedFiles: ["view.ts"], manifest: [], diff: "" } } as any,
+        execution: {
+          workItems: [],
+          candidates: [golden],
+          evidence: { [candidateId]: [{ id: "e-1" }, { id: "e-2" }] },
+          evidenceOutcomes: {
+            [candidateId]: [{ request: { kind: "implementation" }, status: "satisfied", packedRecordIds: ["e-1"] }],
+          },
+          verification: [{ candidateId, ...verification }],
+          graphSnapshot: { schemaVersion: 1, providerVersions: { ts: "1" } },
+          modelProfiles: { candidate: {}, verifier: {} },
+          projection: { code: [], audit: [] },
+          coverage: {},
+        } as any,
+        result: { findings: [], coverage: {} } as any,
+        tier: "isolated",
+        hermetic: true,
+      });
+    const value = (stages: ReturnType<typeof evaluateStages>, metric: string) =>
+      stages.find((stage) => stage.stage === "verification")?.metrics.find((item) => item.name === metric)?.value;
+
+    const clean = make({
+      verdict: "verified",
+      supportingEvidenceIds: ["e-1"],
+      rawVerdict: "verified",
+      rawSupportingEvidenceIds: ["[e-1]"],
+    });
+    expect(value(clean, "verification_accuracy")).toBe(1);
+    expect(value(clean, "grounding_validity")).toBe(1);
+    expect(value(clean, "grounding_specificity")).toBe(1);
+    expect(value(clean, "citation_contract_accuracy")).toBe(0);
+    expect(value(clean, "production_acceptance_accuracy")).toBe(1);
+    expect(
+      clean
+        .find((stage) => stage.stage === "verification")
+        ?.diagnostics.some((d) => d.startsWith("citation_contract_failure")),
+    ).toBe(true);
+
+    const hallucinated = make({
+      verdict: "insufficient_evidence",
+      supportingEvidenceIds: [],
+      rawVerdict: "verified",
+      rawSupportingEvidenceIds: ["[nope]"],
+    });
+    expect(value(hallucinated, "verification_accuracy")).toBe(1);
+    expect(value(hallucinated, "grounding_validity")).toBe(0);
+    expect(value(hallucinated, "grounding_specificity")).toBeNull();
+    expect(
+      hallucinated
+        .find((stage) => stage.stage === "verification")
+        ?.diagnostics.some((d) => d.startsWith("hallucinated_grounding")),
+    ).toBe(true);
+  });
+
   it("excludes conformance fixtures from benchmark coverage", () => {
     const coverage = corpusCoverage(process.cwd());
     expect(coverage.conformance).toBe(2);

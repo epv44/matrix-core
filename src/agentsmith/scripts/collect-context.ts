@@ -4,7 +4,16 @@ import fs from "node:fs";
 import { getChangedFiles } from "../../core/changed.js";
 import type { AgentDef } from "../types.js";
 import type { ReviewScope } from "../scope.js";
-import { reviewerDomain } from "../evidence.js";
+
+function reviewerDomain(name: string): string {
+  const domains: Record<string, string> = {
+    "bug-hunter": "correctness",
+    "semantic-reviewer": "contract",
+    "perf-reviewer": "performance",
+    "architecture-reviewer": "contract",
+  };
+  return domains[name] ?? name;
+}
 
 export interface ReviewContext {
   diff: string;
@@ -114,16 +123,17 @@ export function collectContext(opts: CollectContextOptions): ReviewContext {
         .filter(([, value]) => value.length > 0),
     );
   if (opts.scope) {
+    const scopeBase = opts.scope.base ?? base;
     const rubric = take(opts.rubric ?? "", "rubric", "rules", Math.floor(budget * 0.15));
     const report = take(opts.report ?? "", "report", "deterministic-gate", Math.floor(budget * 0.2));
-    const diff = take(opts.scope.diff, "diff", opts.scope.base, Math.floor(budget * 0.35));
+    const diff = take(opts.scope.diff, "diff", scopeBase, Math.floor(budget * 0.35));
     return {
       diff,
       changedFiles: opts.scope.changedFiles,
       deletedFiles: opts.scope.deletedFiles,
       report,
       rubric,
-      base: opts.scope.base,
+      base: scopeBase,
       fileContents: takeMap(opts.scope.fileContents, "changed-file"),
       suppliedContext: takeMap(opts.scope.suppliedContext, "explicit-context"),
       audit: { maxChars: budget, usedChars: budget - remaining, items },

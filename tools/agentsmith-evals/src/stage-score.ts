@@ -509,30 +509,74 @@ export function evaluateStages(opts: {
     let verdictMatches = 0;
     let falseVerified = 0;
     let cited = 0;
-    let validCitations = 0;
+    let groundingDenominator = 0;
+    let groundingNumerator = 0;
+    let specificityDenominator = 0;
+    let specificityNumerator = 0;
+    let contractDenominator = 0;
+    let contractNumerator = 0;
+    let acceptanceDenominator = 0;
+    let acceptanceNumerator = 0;
     let reasoningMatches = 0;
+    const isBare = (id: string) => id === id.trim() && !id.includes("[") && !id.includes("]");
+    const normalizeId = (id: string) => id.trim().replace(/^\[|\]$/g, "");
     const diagnostics: string[] = [];
     const applicable = verificationLabels.filter(
       (expected) =>
         expected.expectedPresence || execution.candidates.some((candidate) => candidateMatches(candidate, expected)),
     );
-    const citationApplicable = applicable.filter((expected) => expected.expectedVerdict === "verified");
     const reasoningApplicable = applicable.filter(
       (expected) => expected.requiredReasoningTerms.length || expected.forbiddenReasoningTerms.length,
     );
     for (const expected of applicable) {
       const candidate = execution.candidates.find((item) => candidateMatches(item, expected));
       const verdict = candidate && execution.verification.find((item) => item.candidateId === candidate.id);
-      if (verdict?.verdict === expected.expectedVerdict) verdictMatches += 1;
+      const rawVerdict = verdict?.rawVerdict ?? verdict?.verdict;
+      const rawCites = verdict?.rawSupportingEvidenceIds ?? [];
+      const cites = rawCites.map(normalizeId);
+      const pool = new Set(execution.evidence[candidate?.id ?? ""]?.map((record) => record.id) ?? []);
+      if (rawVerdict && rawVerdict === expected.expectedVerdict) verdictMatches += 1;
       if (expected.expectedVerdict !== "verified" && verdict?.verdict === "verified") falseVerified += 1;
       if (expected.expectedVerdict === "verified" && verdict?.supportingEvidenceIds.length) cited += 1;
-      const evidenceIds = new Set(execution.evidence[candidate?.id ?? ""]?.map((record) => record.id) ?? []);
-      if (
-        expected.expectedVerdict === "verified" &&
-        verdict?.supportingEvidenceIds.length &&
-        verdict.supportingEvidenceIds.every((id) => evidenceIds.has(id))
-      )
-        validCitations += 1;
+      const labels: string[] = [];
+      if (["verified", "rejected"].includes(expected.expectedVerdict) && rawCites.length) {
+        const valid = cites.every((id) => pool.has(id));
+        groundingDenominator += 1;
+        if (valid) {
+          groundingNumerator += 1;
+          for (const outcome of execution.evidenceOutcomes?.[candidate?.id ?? ""] ?? []) {
+            if (outcome.status !== "satisfied" && outcome.status !== "partial") continue;
+            const packed = new Set(outcome.packedRecordIds ?? []);
+            specificityDenominator += 1;
+            if (cites.some((id) => packed.has(id))) specificityNumerator += 1;
+            else labels.push("non_canonical_grounding");
+          }
+        } else {
+          labels.push("hallucinated_grounding");
+        }
+      }
+      if (rawCites.length) {
+        contractDenominator += 1;
+        if (rawCites.every(isBare)) contractNumerator += 1;
+        else labels.push("citation_contract_failure");
+      }
+      if (rawVerdict && rawVerdict !== expected.expectedVerdict && !labels.length) labels.push("incorrect_verdict");
+      if (verdict) {
+        acceptanceDenominator += 1;
+        const outcomes = execution.evidenceOutcomes?.[candidate?.id ?? ""] ?? [];
+        const requiredRequests = outcomes.filter(
+          (outcome) => outcome.status === "satisfied" || outcome.status === "partial",
+        );
+        const canonicalAll =
+          expected.expectedVerdict !== "verified" || verdict.supportingEvidenceIds.every((id) => pool.has(id));
+        const canonicalCovers =
+          expected.expectedVerdict !== "verified" ||
+          requiredRequests.every((outcome) =>
+            (outcome.packedRecordIds ?? []).some((id) => verdict.supportingEvidenceIds.includes(id)),
+          );
+        if (verdict.verdict === expected.expectedVerdict && canonicalAll && canonicalCovers) acceptanceNumerator += 1;
+      }
+      if (labels.length) diagnostics.push(`${labels[0]} ${expected.id}`);
       const reasoning = verdict?.reasoningSummary?.toLowerCase() ?? "";
       if (
         verdict &&
@@ -547,10 +591,13 @@ export function evaluateStages(opts: {
       stage: "verification",
       evaluation: evaluation("verification"),
       metrics: [
-        metric("verdictAccuracy", verdictMatches, applicable.length),
+        metric("verification_accuracy", verdictMatches, applicable.length),
         { name: "falseVerifications", value: falseVerified, direction: "lower" },
-        metric("citationRate", cited, citationApplicable.length),
-        metric("citationValidity", validCitations, citationApplicable.length),
+        metric("citationRate", cited, applicable.filter((c) => c.expectedVerdict === "verified").length),
+        metric("grounding_validity", groundingNumerator, groundingDenominator),
+        metric("grounding_specificity", specificityNumerator, specificityDenominator),
+        metric("citation_contract_accuracy", contractNumerator, contractDenominator),
+        metric("production_acceptance_accuracy", acceptanceNumerator, acceptanceDenominator),
         metric("reasoningTermAccuracy", reasoningMatches, reasoningApplicable.length),
       ],
       diagnostics,

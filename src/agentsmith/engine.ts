@@ -1030,7 +1030,7 @@ export async function executeReviewEngine(opts: {
       });
   }
   for (const omission of coverage.omissions.filter(
-    (item) => !["binary", "generated", "lower-ranked", "token-budget"].includes(item.reason),
+    (item) => !["binary", "generated", "lower-ranked", "token-budget", "unsupported-artifact"].includes(item.reason),
   ))
     incompleteReasons.push({
       kind: "material-omission",

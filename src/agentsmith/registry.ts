@@ -17,3 +17,7 @@ function toAgentDef(doc: AssetDoc, file: string, expectedName: SpecialistReviewe
 export function loadSpecialists(root?: string): AgentDef[] {
   return SPECIALIST_FILES.map(({ file, name }) => toAgentDef(loadDoc(file, name, root), file, name));
 }
+
+export function loadAgent(name: SpecialistReviewerId, root?: string): AgentDef | undefined {
+  return loadSpecialists(root).find((agent) => agent.name === name);
+}

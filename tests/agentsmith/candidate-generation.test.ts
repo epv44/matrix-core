@@ -105,7 +105,7 @@ describe("candidate structured output", () => {
           raw: JSON.stringify({
             verdict: "rejected",
             confidence: 0.9,
-            supportingEvidenceIds: [calls++ === 0 ? "[e-1]" : "e-1"],
+            supportingEvidenceIds: [calls++ === 0 ? "bogus-id" : "e-1"],
           }),
           usage: { inputTokens: 2, outputTokens: 1 },
         };
@@ -144,6 +144,47 @@ describe("candidate structured output", () => {
     ]);
     expect(judged).toMatchObject({ inputTokens: 4, outputTokens: 2 });
     expect(prompts[1]).toContain("request request-1: include at least one of e-1");
+  });
+
+  it("accepts and normalizes bracket-decorated citations without repair", async () => {
+    let calls = 0;
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async () => {
+        calls++;
+        return {
+          raw: '{"verdict":"verified","confidence":0.9,"supportingEvidenceIds":["[e-1]"," [e-2] "] }',
+          usage: { inputTokens: 2, outputTokens: 1 },
+        };
+      },
+    };
+    const judged = await verifyCandidateWithModel({
+      candidate: {
+        id: "candidate",
+        sourceWorkItemIds: ["local:1"],
+        sourceReviewers: [],
+        file: "src/a.ts",
+        line: 1,
+        severity: "medium",
+        category: "correctness",
+        title: "Candidate",
+        description: "Candidate description",
+        evidenceRequests: [],
+        candidateConfidence: 0.8,
+      },
+      originatingCode: "return true;",
+      evidenceText: "[e-1] src/a.ts:1-1\nreturn true;",
+      evidenceIds: ["e-1", "e-2"],
+      requiredEvidenceIdsByRequest: { "request-1": ["e-1"], "request-2": ["e-2"] },
+      profile,
+      provider,
+    });
+    expect(calls).toBe(1);
+    expect(judged.result).toMatchObject({
+      verdict: "verified",
+      supportingEvidenceIds: ["e-1", "e-2"],
+    });
+    expect(judged.result.citationRepairAttempted).toBeUndefined();
   });
 
   it("downgrades a verifier result when citation repair remains invalid", async () => {

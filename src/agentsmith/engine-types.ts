@@ -168,6 +168,10 @@ export interface VerificationResult {
   confidence: number;
   reasoningSummary?: string;
   supportingEvidenceIds: string[];
+  /** Raw attempt-1 verifier emission before any citation repair, for grounding diagnostics. */
+  rawVerdict?: VerificationResult["verdict"];
+  rawConfidence?: number;
+  rawSupportingEvidenceIds?: string[];
   prompt?: string;
   raw?: string;
   completion?: ProviderCompletionMetadata;

@@ -470,11 +470,13 @@ export async function verifyCandidateWithModel(opts: {
     signal: opts.signal,
     validate: (value) => verificationSchema.parse(value),
   });
+  const normalizeId = (id: string) => id.trim().replace(/^\[|\]$/g, "");
   const citationErrors = (parsed: z.infer<typeof verificationSchema>) => {
     const errors: string[] = [];
-    const unknown = parsed.supportingEvidenceIds.filter((id) => !opts.evidenceIds.includes(id));
+    const normalized = parsed.supportingEvidenceIds.map(normalizeId);
+    const unknown = normalized.filter((id) => !opts.evidenceIds.includes(id));
     if (unknown.length) errors.push(`unknown or malformed evidence IDs: ${unknown.join(", ")}`);
-    const exact = parsed.supportingEvidenceIds.filter((id) => opts.evidenceIds.includes(id));
+    const exact = normalized.filter((id) => opts.evidenceIds.includes(id));
     if (parsed.verdict !== "insufficient_evidence" && !exact.length)
       errors.push(`${parsed.verdict} verdict requires at least one exact evidence ID`);
     if (["verified", "rejected"].includes(parsed.verdict))
@@ -507,6 +509,10 @@ export async function verifyCandidateWithModel(opts: {
       result: {
         candidateId: opts.candidate.id,
         ...first.parsed,
+        rawVerdict: first.parsed.verdict,
+        rawConfidence: first.parsed.confidence,
+        rawSupportingEvidenceIds: first.parsed.supportingEvidenceIds,
+        supportingEvidenceIds: first.parsed.supportingEvidenceIds.map(normalizeId),
         prompt,
         raw: first.response.raw,
         completion: first.response.completion,
@@ -547,6 +553,9 @@ export async function verifyCandidateWithModel(opts: {
         verdict: "insufficient_evidence",
         confidence: 0,
         reasoningSummary: `verifier citation validation failed after repair: ${repairedErrors.join("; ")}`,
+        rawVerdict: first.parsed.verdict,
+        rawConfidence: first.parsed.confidence,
+        rawSupportingEvidenceIds: first.parsed.supportingEvidenceIds,
         supportingEvidenceIds: [],
         prompt: repairPrompt,
         raw: repaired.response.raw,
@@ -561,6 +570,10 @@ export async function verifyCandidateWithModel(opts: {
     result: {
       candidateId: opts.candidate.id,
       ...repaired.parsed,
+      rawVerdict: first.parsed.verdict,
+      rawConfidence: first.parsed.confidence,
+      rawSupportingEvidenceIds: first.parsed.supportingEvidenceIds,
+      supportingEvidenceIds: repaired.parsed.supportingEvidenceIds.map(normalizeId),
       prompt: repairPrompt,
       raw: repaired.response.raw,
       completion: repaired.response.completion,
