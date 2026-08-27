@@ -26,24 +26,6 @@ const categorySchema = z.enum(["correctness", "security", "performance", "contra
 const severitySchema = z.enum(["critical", "high", "medium", "low"]);
 const verdictSchema = z.enum(["verified", "likely", "rejected", "insufficient_evidence"]);
 const suiteSchema = z.enum(["component", "conformance", "draft"]);
-const replayModeSchema = z.enum([
-  "holistic",
-  "partitioned-local",
-  "partitioned-evidence",
-  "partitioned-interactions",
-  "hybrid",
-]);
-const replayStageSchema = z.enum([
-  "snapshot",
-  "graph",
-  "projection",
-  "planning",
-  "candidates",
-  "evidence",
-  "verification",
-  "aggregation",
-  "reporting",
-]);
 const evidenceKindSchema = z.enum([
   "definition",
   "callers",
