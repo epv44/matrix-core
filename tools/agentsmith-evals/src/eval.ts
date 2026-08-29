@@ -14,6 +14,7 @@ import { PlannerReviewProvider, RecordedReviewProvider } from "./eval-provider.j
 import { corpusHash, listEvalCases, materializeEvalRun, readEvalCase, readStageReplay } from "./case.js";
 import { evaluateStages, formatStageScorecard, type EvalStage } from "./stage-score.js";
 import { findingMatches, type ExpectedFinding } from "./matching.js";
+import { aggregateStage1Metrics, scoreStage1Run } from "./stage-1.js";
 
 export type EvalMode =
   "holistic" | "partitioned-local" | "partitioned-evidence" | "partitioned-interactions" | "hybrid";
@@ -228,6 +229,21 @@ export async function runEvalCases(opts: {
             durationMs,
           });
           const findingMetrics = scoreFindings(execution.result.findings, expectedFindings);
+          const coverageBudgetFailure =
+            execution.result.status !== "completed" ||
+            Boolean(execution.result.coverage.timeout) ||
+            execution.execution.errors.length > 0 ||
+            (execution.execution.providerFailures?.length ?? 0) > 0 ||
+            execution.result.coverage.omissions.some((omission) =>
+              ["token-budget", "timeout", "provider-failure"].includes(omission.reason),
+            );
+          const stage1 = scoreStage1Run({
+            goldFindings: expectedFindings,
+            workItems: execution.execution.workItems,
+            candidates: execution.execution.candidates,
+            verifiedFindings: execution.result.findings,
+            coverageBudgetFailure,
+          });
           const inspectionTargets = scoreInspectionTargets(
             execution.execution,
             definition.expectations.planning ?? definition.expectations.graph ?? { files: [], symbols: [], edges: [] },
@@ -266,10 +282,12 @@ export async function runEvalCases(opts: {
             tier: replay,
             iteration,
             outcome: execution.result.outcome,
+            status: execution.result.status,
             findings: execution.result.findings,
             coverage: execution.result.coverage,
             durationMs,
             metrics: findingMetrics,
+            stage1,
             benchmark,
             inspectionTargets,
             stages,
@@ -306,6 +324,7 @@ export async function runEvalCases(opts: {
             tier: replay,
             iteration,
             outcome: "incomplete" as const,
+            status: "error" as const,
             findings: [],
             durationMs: Date.now() - started,
             metrics: scoreFindings([], expectedFindings),
@@ -342,13 +361,14 @@ export async function runEvalCases(opts: {
     cases.push({
       id: slug,
       kind: definition.kind,
+      contractFamily: definition.groundTruth?.contractFamily ?? definition.id,
       expectedOutcome,
       results,
     });
   }
   const runId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID()}`;
   const reportBase = {
-    schemaVersion: 6,
+    schemaVersion: 7,
     runId,
     label: opts.label ?? null,
     createdAt: new Date().toISOString(),
@@ -358,7 +378,11 @@ export async function runEvalCases(opts: {
     repeat,
     cases,
   };
-  const report = { ...reportBase, summary: summarizeEvalReport(reportBase) };
+  const report = {
+    ...reportBase,
+    summary: summarizeEvalReport(reportBase),
+    stage1Summary: aggregateStage1Metrics(reportBase),
+  };
   const directory = path.join(opts.root, ".quality", "evals", "runs", runId);
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(path.join(directory, "result.json"), `${JSON.stringify(report, null, 2)}\n`);

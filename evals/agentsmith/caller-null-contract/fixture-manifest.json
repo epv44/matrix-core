@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "repositoryFingerprint": "caller-null-contract-fixture-v1",
+  "gitHead": null,
+  "entries": [
+    { "path": ".matrixcore-ignore", "type": "file", "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b", "size": 1, "executable": false },
+    { "path": "quality.yaml", "type": "file", "sha256": "23150f76ccaad780d79df0e3be3af89aecd34692cbfcbf14d6f53430f6d25cd9", "size": 68, "executable": false },
+    { "path": "src/display.ts", "type": "file", "sha256": "6047aa5c62f47f0b1ab25b8f37c8a8b2c8468dc6bc610e11349a3476c3a8228e", "size": 128, "executable": false },
+    { "path": "src/profile.ts", "type": "file", "sha256": "0bb33754c546328003b3f358d0aff75e0a93b693ba316cdac3e2587421b2358c", "size": 156, "executable": false }
+  ],
+  "deletedPaths": []
+}

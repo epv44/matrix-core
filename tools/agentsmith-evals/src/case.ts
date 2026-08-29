@@ -17,7 +17,7 @@ import {
 import { computeWorkspaceVersion } from "../../../src/core/version.js";
 import { sha256 } from "../../../src/core/hash.js";
 
-export const EVAL_CASE_SCHEMA_VERSION = 6;
+export const EVAL_CASE_SCHEMA_VERSION = 7;
 export const STAGE_REPLAY_SCHEMA_VERSION = 1;
 const slugPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -86,6 +86,19 @@ export interface StageReplayArtifact {
   goldenCandidates: CandidateFinding[];
 }
 
+export const minimumEvidenceSchema = z
+  .object({
+    file: z.string().min(1),
+    lineStart: z.number().int().positive().optional(),
+    lineEnd: z.number().int().positive().optional(),
+    symbol: z.string().trim().min(1).optional(),
+    contains: z.array(z.string().trim().min(1)).min(1),
+  })
+  .refine(
+    (value) => value.lineStart === undefined || value.lineEnd === undefined || value.lineEnd >= value.lineStart,
+    { path: ["lineEnd"], message: "lineEnd must be >= lineStart" },
+  );
+
 export const expectedFindingSchema = z.object({
   id: z.string().min(1),
   file: z.string().min(1),
@@ -100,6 +113,8 @@ export const expectedFindingSchema = z.object({
   graphDistance: z.number().int().min(0).max(3).optional(),
   description: z.string().default(""),
   rationale: z.string().min(1),
+  smallModelExpected: z.boolean().optional(),
+  minimumEvidence: z.array(minimumEvidenceSchema).optional(),
 });
 
 const expectedCandidateSchema = z.object({
@@ -171,7 +186,7 @@ const sensitiveContentExemptionSchema = z.object({
 
 export const evalCaseSchema = z
   .object({
-    schemaVersion: z.union([z.literal(5), z.literal(EVAL_CASE_SCHEMA_VERSION)]),
+    schemaVersion: z.union([z.literal(5), z.literal(6), z.literal(EVAL_CASE_SCHEMA_VERSION)]),
     id: z.string().min(1),
     status: z.enum(["draft", "active"]),
     kind: z.enum(["benchmark", "conformance"]).default("benchmark"),
@@ -278,6 +293,61 @@ export const evalCaseSchema = z
           message: "lineEnd must be >= lineStart",
         });
     });
+    const normalizedCasePath = (candidate: string) => {
+      const normalized = candidate.replaceAll("\\", "/").replace(/^\.\//, "");
+      return (
+        candidate.length > 0 &&
+        normalized === candidate &&
+        !path.isAbsolute(candidate) &&
+        !normalized.split("/").includes("..") &&
+        !normalized.split("/").includes("")
+      );
+    };
+    value.expectations.aggregation?.findings.forEach((finding, findingIndex) => {
+      if (value.schemaVersion === 7 && value.status === "active" && value.kind === "benchmark") {
+        if (finding.smallModelExpected === undefined)
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["expectations", "aggregation", "findings", findingIndex, "smallModelExpected"],
+            message: "active schema-v7 benchmark findings require smallModelExpected",
+          });
+        if (!finding.minimumEvidence?.length)
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["expectations", "aggregation", "findings", findingIndex, "minimumEvidence"],
+            message: "active schema-v7 benchmark findings require minimum evidence",
+          });
+      }
+      if (value.schemaVersion !== 7) return;
+      if (!normalizedCasePath(finding.file))
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["expectations", "aggregation", "findings", findingIndex, "file"],
+          message: "finding file must be a normalized case-relative path",
+        });
+      finding.minimumEvidence?.forEach((evidence, evidenceIndex) => {
+        const evidencePath = [
+          "expectations",
+          "aggregation",
+          "findings",
+          findingIndex,
+          "minimumEvidence",
+          evidenceIndex,
+        ];
+        if (!normalizedCasePath(evidence.file))
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...evidencePath, "file"],
+            message: "minimum-evidence file must be a normalized case-relative path",
+          });
+        if (evidence.lineStart !== undefined && evidence.lineEnd !== undefined && evidence.lineEnd < evidence.lineStart)
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...evidencePath, "lineEnd"],
+            message: "lineEnd must be >= lineStart",
+          });
+      });
+    });
     const exemptionKeys = new Set<string>();
     value.sanitization.sensitiveContentExemptions.forEach((item, index) => {
       const normalized = item.path.replaceAll("\\", "/").replace(/^\.\//, "");
@@ -317,11 +387,11 @@ export const evalCaseSchema = z
           path: ["source", "fixture"],
           message: "active cases require a verified frozen fixture",
         });
-      if (value.schemaVersion === EVAL_CASE_SCHEMA_VERSION && !value.groundTruth?.reviewed)
+      if (value.schemaVersion >= 6 && !value.groundTruth?.reviewed)
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["groundTruth", "reviewed"],
-          message: "active schema-v6 cases require reviewed ground truth",
+          message: "active schema-v6+ cases require reviewed ground truth",
         });
     }
   });
@@ -714,6 +784,7 @@ export function listEvalCases(root: string, includeDrafts = false): string[] {
       .map((entry) => entry.name)
       .filter((slug) => {
         try {
+          if (!fs.existsSync(path.join(root, "evals", "agentsmith", slug, "case.yaml"))) return false;
           return includeDrafts || readEvalCase(root, slug).definition.status === "active";
         } catch {
           return false;

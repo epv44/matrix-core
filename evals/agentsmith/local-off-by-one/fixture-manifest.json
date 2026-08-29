@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "repositoryFingerprint": "local-off-by-one-fixture-v1",
+  "gitHead": null,
+  "entries": [
+    { "path": ".matrixcore-ignore", "type": "file", "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b", "size": 1, "executable": false },
+    { "path": "quality.yaml", "type": "file", "sha256": "1ed3c7c6a1172e24063019117287d5aeede0c15dc339ffe87afe3d073eebeb0d", "size": 64, "executable": false },
+    { "path": "src/pagination.py", "type": "file", "sha256": "89d14ebcb3e84d9da2afd1365d954416670e6c206b4e08e738d314f502b8032a", "size": 163, "executable": false }
+  ],
+  "deletedPaths": []
+}

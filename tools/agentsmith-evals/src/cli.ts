@@ -5,8 +5,15 @@ import { Command } from "commander";
 import { resolveConfig } from "../../../src/core/config-resolver.js";
 import { compareEvalReports, runEvalCases, type EvalMode, type EvalReplayMode } from "./eval.js";
 import { corpusCoverage } from "./coverage.js";
-import { attachFixture, curateTrace, inventory, validateEvalCases } from "./case.js";
+import { attachFixture, corpusHash, curateTrace, inventory, listEvalCases, validateEvalCases } from "./case.js";
 import type { EvalStage } from "./stage-score.js";
+import {
+  readStage1Baseline,
+  summarizeStage1Baseline,
+  validateStage1Promotion,
+  writeStage1Baseline,
+  type Stage1EvalReport,
+} from "./stage-1.js";
 
 const program = new Command();
 program.name("eval:agentsmith").description("Repository-only AgentSmith diagnostic evaluation lab");
@@ -135,6 +142,40 @@ program
     const after = JSON.parse(fs.readFileSync(path.resolve(current), "utf8"));
     const comparison = compareEvalReports(before, after);
     console.log(opts.json ? JSON.stringify(comparison, null, 2) : JSON.stringify(comparison, null, 2));
+  });
+
+const baseline = program.command("baseline").description("Create and validate reproducible migration baselines");
+
+baseline
+  .command("create")
+  .requiredOption("--stage-result <path>", "Two-repetition deterministic stage eval result")
+  .requiredOption("--live-result <path>", "Three-repetition live eval result")
+  .option("--output <path>", "Baseline output", "evals/agentsmith/baselines/stage-1.json")
+  .option("--root <path>", "MatrixCore repository root", process.cwd())
+  .action((opts) => {
+    const repositoryRoot = root(opts.root);
+    const stageResult = JSON.parse(fs.readFileSync(path.resolve(opts.stageResult), "utf8")) as Stage1EvalReport;
+    const liveResult = JSON.parse(fs.readFileSync(path.resolve(opts.liveResult), "utf8")) as Stage1EvalReport;
+    const created = summarizeStage1Baseline(stageResult, liveResult);
+    const output = path.resolve(repositoryRoot, opts.output);
+    writeStage1Baseline(output, created);
+    console.log(JSON.stringify({ output, corpusHash: created.corpusHash, promotionReady: true }, null, 2));
+  });
+
+baseline
+  .command("validate")
+  .option("--baseline <path>", "Stage 1 baseline", "evals/agentsmith/baselines/stage-1.json")
+  .option("--root <path>", "MatrixCore repository root", process.cwd())
+  .action((opts) => {
+    const repositoryRoot = root(opts.root);
+    const baselinePath = path.resolve(repositoryRoot, opts.baseline);
+    const activeCases = listEvalCases(repositoryRoot);
+    const validation = validateStage1Promotion({
+      baseline: readStage1Baseline(baselinePath),
+      currentCorpusHash: corpusHash(repositoryRoot, activeCases),
+    });
+    console.log(JSON.stringify({ stage: 1, baseline: baselinePath, activeCases, ...validation }, null, 2));
+    if (!validation.ok) process.exitCode = 1;
   });
 
 await program.parseAsync(process.argv);

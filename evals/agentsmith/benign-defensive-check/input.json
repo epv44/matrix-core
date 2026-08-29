@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 5,
+  "traceId": "benign-defensive-check-trace",
+  "captureMode": "explicit-local",
+  "createdAt": "2026-08-28T00:00:00.000Z",
+  "packageVersion": "0.5.1",
+  "root": "<repo>",
+  "version": "benign-defensive-check-fixture-v1",
+  "sourceSnapshot": { "schemaVersion": 1, "manifestHash": "2eac5a8823c0a59456b2824592240f170ab7facd33d86f72c95a390150c9ea43", "fileCount": 3, "totalBytes": 279, "complete": true, "portable": true, "captureDurationMs": 0, "warnings": [] },
+  "scope": {
+    "id": "benign-defensive-check-scope-v1", "version": "benign-defensive-check-fixture-v1", "root": "<repo>", "base": null,
+    "diff": "diff --git a/src/limits.py b/src/limits.py\n--- a/src/limits.py\n+++ b/src/limits.py\n@@ -1,5 +1,5 @@\n def parse_limit(raw: str | None) -> int:\n-    if raw is None:\n+    if raw is None or raw.strip() == \"\":\n         return 100\n     value = int(raw)\n     if value < 1:\n",
+    "changedFiles": ["src/limits.py"],
+    "changeSources": { "src/limits.py": ["working-tree"] },
+    "deletedFiles": [],
+    "fileContents": { "src/limits.py": "def parse_limit(raw: str | None) -> int:\n    if raw is None or raw.strip() == \"\":\n        return 100\n    value = int(raw)\n    if value < 1:\n        raise ValueError(\"limit must be positive\")\n    return value\n" },
+    "suppliedContext": {},
+    "manifest": [{ "path": "src/limits.py", "changeKind": "modified", "additions": 1, "deletions": 1, "language": "python", "generated": false, "binary": false, "sizeBytes": 208 }],
+    "omissions": [], "languages": ["python"],
+    "metadata": { "fileCount": 1, "additions": 1, "deletions": 1, "capturedAt": "2026-08-28T00:00:00.000Z" }
+  },
+  "deterministicReport": "PASS",
+  "result": {
+    "schemaVersion": 3, "version": "benign-defensive-check-fixture-v1", "snapshotId": "benign-defensive-check-scope-v1",
+    "status": "completed", "outcome": "clear", "mode": "partitioned", "reviewPath": "generic", "findings": [],
+    "coverage": { "changedFiles": 1, "changedFilesReviewed": 1, "changedSymbols": 1, "changedSymbolsReviewed": 1, "localUnitsGenerated": 1, "localUnitsReviewed": 1, "interactionUnitsGenerated": 0, "interactionUnitsReviewed": 0, "dependencyEdgesIdentified": 0, "dependencyEdgesEligible": 0, "dependencyEdgesReviewed": 0, "evidenceRequests": 0, "evidenceResolved": 0, "evidenceGaps": 0, "globalScan": "none", "omissions": [] },
+    "summary": "Draft synthetic trace; expected labels are stored in case.yaml.", "timestamp": "2026-08-28T00:00:00.000Z", "reviewer": "AgentSmith",
+    "runtime": { "models": { "candidate": "qwen3.5:9b-q4_K_M", "verifier": "qwen3.5:9b-q4_K_M" }, "inputTokens": 0, "outputTokens": 0, "concurrency": 1 }
+  },
+  "decisionProvenance": { "publishedFindingIds": [], "rejectedCandidateIds": [], "likelyCandidateIds": [], "insufficientEvidenceCandidateIds": [], "aggregateRule": "verified only", "errors": [] }
+}

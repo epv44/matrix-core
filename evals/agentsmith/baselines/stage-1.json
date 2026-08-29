@@ -1,0 +1,244 @@
+{
+  "corpusHash": "dcbf4c6055aaf3fe8148bb136a2217d38c83ff81cda2fa08aba9a726e9c59cdf",
+  "evidence": {
+    "live": {
+      "harnessErrors": 0,
+      "repetitions": 3,
+      "reportHash": "14d1979d2542159cc45711e27b72ef6da7c617dfa503cf7b44d832f2b4f8bebd"
+    },
+    "stageReplay": {
+      "deterministic": true,
+      "repetitions": 2,
+      "reportHash": "9e0b630a8b42eed015f45b9c77017950cb73eabc983b6ad77daeee71f3cf1e80"
+    }
+  },
+  "metrics": {
+    "byContractFamily": {
+      "cash-snapshot-source-label": {
+        "attributions": {
+          "coverage-budget-failure": 6,
+          "found": 0,
+          "model-miss": 0,
+          "selection-miss": 0,
+          "verification-rejection": 0
+        },
+        "candidateFindingPrecision": 0,
+        "candidateFindingRecall": 0,
+        "inputTokens": 35427,
+        "latencyMeanMs": 44023.833333333336,
+        "latencyStdDevMs": 14342.406741509214,
+        "modelCallCount": 24,
+        "outputTokens": 2997,
+        "partialReviewRate": 1,
+        "runs": 6,
+        "selectionRecall": 0,
+        "totalTokens": 38424,
+        "verifiedFindingPrecision": 0,
+        "verifiedFindingRecall": 0
+      },
+      "python-empty-input-default": {
+        "attributions": {
+          "coverage-budget-failure": 0,
+          "found": 0,
+          "model-miss": 0,
+          "selection-miss": 0,
+          "verification-rejection": 0
+        },
+        "candidateFindingPrecision": 0,
+        "candidateFindingRecall": null,
+        "inputTokens": 1692,
+        "latencyMeanMs": 7413,
+        "latencyStdDevMs": 1024.8437279247344,
+        "modelCallCount": 3,
+        "outputTokens": 339,
+        "partialReviewRate": 1,
+        "runs": 3,
+        "selectionRecall": null,
+        "totalTokens": 2031,
+        "verifiedFindingPrecision": 1,
+        "verifiedFindingRecall": null
+      },
+      "python-pagination-boundary": {
+        "attributions": {
+          "coverage-budget-failure": 0,
+          "found": 0,
+          "model-miss": 3,
+          "selection-miss": 0,
+          "verification-rejection": 0
+        },
+        "candidateFindingPrecision": 0,
+        "candidateFindingRecall": 0,
+        "inputTokens": 3351,
+        "latencyMeanMs": 14232.333333333334,
+        "latencyStdDevMs": 2461.2042219657887,
+        "modelCallCount": 6,
+        "outputTokens": 645,
+        "partialReviewRate": 0,
+        "runs": 3,
+        "selectionRecall": 1,
+        "totalTokens": 3996,
+        "verifiedFindingPrecision": 0,
+        "verifiedFindingRecall": 0
+      },
+      "python-timeout-unit-conversion": {
+        "attributions": {
+          "coverage-budget-failure": 0,
+          "found": 0,
+          "model-miss": 3,
+          "selection-miss": 0,
+          "verification-rejection": 0
+        },
+        "candidateFindingPrecision": 0,
+        "candidateFindingRecall": 0,
+        "inputTokens": 6327,
+        "latencyMeanMs": 28282.333333333332,
+        "latencyStdDevMs": 6008.36219133153,
+        "modelCallCount": 9,
+        "outputTokens": 1230,
+        "partialReviewRate": 0,
+        "runs": 3,
+        "selectionRecall": 1,
+        "totalTokens": 7557,
+        "verifiedFindingPrecision": 0,
+        "verifiedFindingRecall": 0
+      },
+      "typescript-admin-authorization-guard": {
+        "attributions": {
+          "coverage-budget-failure": 3,
+          "found": 0,
+          "model-miss": 0,
+          "selection-miss": 0,
+          "verification-rejection": 0
+        },
+        "candidateFindingPrecision": 0,
+        "candidateFindingRecall": 0,
+        "inputTokens": 11979,
+        "latencyMeanMs": 46859.333333333336,
+        "latencyStdDevMs": 5696.501518963683,
+        "modelCallCount": 18,
+        "outputTokens": 1770,
+        "partialReviewRate": 1,
+        "runs": 3,
+        "selectionRecall": 1,
+        "totalTokens": 13749,
+        "verifiedFindingPrecision": 0,
+        "verifiedFindingRecall": 0
+      },
+      "typescript-async-timer-lifecycle": {
+        "attributions": {
+          "coverage-budget-failure": 2,
+          "found": 0,
+          "model-miss": 1,
+          "selection-miss": 0,
+          "verification-rejection": 0
+        },
+        "candidateFindingPrecision": 0,
+        "candidateFindingRecall": 0,
+        "inputTokens": 10512,
+        "latencyMeanMs": 45823.666666666664,
+        "latencyStdDevMs": 10867.917320668616,
+        "modelCallCount": 13,
+        "outputTokens": 1701,
+        "partialReviewRate": 0.6666666666666666,
+        "runs": 3,
+        "selectionRecall": 1,
+        "totalTokens": 12213,
+        "verifiedFindingPrecision": 0,
+        "verifiedFindingRecall": 0
+      },
+      "typescript-currency-unit-large-change": {
+        "attributions": {
+          "coverage-budget-failure": 3,
+          "found": 0,
+          "model-miss": 0,
+          "selection-miss": 0,
+          "verification-rejection": 0
+        },
+        "candidateFindingPrecision": 0.3333333333333333,
+        "candidateFindingRecall": 1,
+        "inputTokens": 17160,
+        "latencyMeanMs": 68932.33333333333,
+        "latencyStdDevMs": 3784.6958779919014,
+        "modelCallCount": 21,
+        "outputTokens": 2508,
+        "partialReviewRate": 1,
+        "runs": 3,
+        "selectionRecall": 0,
+        "totalTokens": 19668,
+        "verifiedFindingPrecision": 0,
+        "verifiedFindingRecall": 0
+      },
+      "typescript-nullable-caller": {
+        "attributions": {
+          "coverage-budget-failure": 3,
+          "found": 0,
+          "model-miss": 0,
+          "selection-miss": 0,
+          "verification-rejection": 0
+        },
+        "candidateFindingPrecision": 0,
+        "candidateFindingRecall": 0,
+        "inputTokens": 7242,
+        "latencyMeanMs": 21837,
+        "latencyStdDevMs": 140.61531448127073,
+        "modelCallCount": 12,
+        "outputTokens": 624,
+        "partialReviewRate": 1,
+        "runs": 3,
+        "selectionRecall": 0,
+        "totalTokens": 7866,
+        "verifiedFindingPrecision": 0,
+        "verifiedFindingRecall": 0
+      }
+    },
+    "contractFamilyMacro": {
+      "attributions": {
+        "coverage-budget-failure": 17,
+        "found": 0,
+        "model-miss": 7,
+        "selection-miss": 0,
+        "verification-rejection": 0
+      },
+      "candidateFindingPrecision": 0.041666666666666664,
+      "candidateFindingRecall": 0.14285714285714285,
+      "inputTokens": 11711.25,
+      "latencyMeanMs": 34675.479166666664,
+      "latencyStdDevMs": 5540.818364354592,
+      "modelCallCount": 13.25,
+      "outputTokens": 1476.75,
+      "partialReviewRate": 0.7083333333333333,
+      "runs": 27,
+      "selectionRecall": 0.5714285714285714,
+      "totalTokens": 13188,
+      "verifiedFindingPrecision": 0.125,
+      "verifiedFindingRecall": 0
+    },
+    "micro": {
+      "attributions": {
+        "coverage-budget-failure": 17,
+        "found": 0,
+        "model-miss": 7,
+        "selection-miss": 0,
+        "verification-rejection": 0
+      },
+      "candidateFindingPrecision": 0.05,
+      "candidateFindingRecall": 0.125,
+      "inputTokens": 93690,
+      "latencyMeanMs": 35714.18518518518,
+      "latencyStdDevMs": 19993.66707519795,
+      "modelCallCount": 106,
+      "outputTokens": 11814,
+      "partialReviewRate": 0.7407407407407407,
+      "runs": 27,
+      "selectionRecall": 0.5,
+      "totalTokens": 105504,
+      "verifiedFindingPrecision": 0,
+      "verifiedFindingRecall": 0
+    }
+  },
+  "modes": [
+    "partitioned-interactions"
+  ],
+  "schemaVersion": 1,
+  "stage": 1
+}

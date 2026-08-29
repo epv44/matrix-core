@@ -1,0 +1,4 @@
+version: 2
+project: producer-consumer-unit-mismatch
+review:
+  agentsmith: true

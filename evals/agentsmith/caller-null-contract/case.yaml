@@ -1,0 +1,94 @@
+schemaVersion: 7
+id: caller-null-contract
+status: active
+kind: benchmark
+suite: component
+source:
+  traceId: caller-null-contract-trace
+  traceSchemaVersion: 5
+  repositoryFingerprint: caller-null-contract-fixture-v1
+  fixture:
+    path: fixture/repo
+    manifestPath: fixture-manifest.json
+    digest: 042678c938193b110fe1ed549a6950dfef7916f54e5248cb9e6688ac4550b228
+  project: synthetic-stage-1
+sanitization:
+  reviewed: true
+  absolutePathsRemoved: true
+  sensitiveContentReviewed: true
+  redistributable: true
+groundTruth:
+  reviewed: true
+  reviewedBy: product-owner
+  reviewedAt: "2026-08-29T00:00:00.000Z"
+  contractFamily: typescript-nullable-caller
+  exhaustiveCandidates: true
+expectations:
+  snapshot:
+    files:
+      - { path: src/profile.ts, changeKind: modified }
+  graph:
+    files: [src/profile.ts, src/display.ts]
+    symbols: [src/profile.ts#loadProfile, src/display.ts#displayName]
+    edges: [src/display.ts:displayName->src/profile.ts:loadProfile:calls]
+  projection:
+    requiredSnippets:
+      - { file: src/profile.ts, lineStart: 5, lineEnd: 7, contains: [Profile | null, "return id ==="] }
+      - { file: src/display.ts, lineStart: 3, lineEnd: 5, contains: [loadProfile, .name] }
+  planning:
+    route: partitioned
+    files: [src/profile.ts, src/display.ts]
+    symbols: [src/profile.ts#loadProfile, src/display.ts#displayName]
+    edges: [src/display.ts:displayName->src/profile.ts:loadProfile:calls]
+  candidates:
+    items: &expected_candidates
+      - id: display-name-dereferences-null-profile
+        file: src/profile.ts
+        lineStart: 5
+        lineEnd: 6
+        category: contract
+        severity: high
+        titleContains: "null"
+        expectedPresence: true
+        expectedVerdict: verified
+        requiredEvidenceKinds: [callers]
+        requiredReasoningTerms: [displayName, name, "null"]
+        forbiddenReasoningTerms: []
+        rationale: The changed producer can return null while its direct caller dereferences name unconditionally.
+  verification:
+    candidates: *expected_candidates
+  aggregation:
+    status: completed
+    outcome: findings
+    findings:
+      - id: display-name-dereferences-null-profile
+        file: src/profile.ts
+        lineStart: 5
+        lineEnd: 6
+        severity: high
+        category: contract
+        discoveryClass: L1
+        smallModelExpected: true
+        minimumEvidence:
+          - file: src/profile.ts
+            lineStart: 5
+            lineEnd: 7
+            symbol: loadProfile
+            contains: [Profile | null, "return id ==="]
+          - file: src/display.ts
+            lineStart: 3
+            lineEnd: 5
+            symbol: displayName
+            contains: ["loadProfile(id).name"]
+        requiredEvidence: [Profile | null, "loadProfile(id).name"]
+        symbols: [loadProfile, displayName]
+        graphDistance: 1
+        description: Unknown profile IDs now cause displayName to dereference null.
+        rationale: loadProfile widened its return contract but the direct caller was not updated.
+  reporting:
+    requiredSections: [src/profile.ts, src/display.ts]
+narrative:
+  summary: Draft synthetic L1 caller/callee contract fixture.
+  trueCodeFlow: displayName calls loadProfile and immediately reads name even though loadProfile now returns null for unknown IDs.
+  references: [src/profile.ts:5, src/display.ts:4]
+tags: [stage-1, synthetic, draft-unapproved, typescript, contract, L1, caller]

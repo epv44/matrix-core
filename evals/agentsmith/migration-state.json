@@ -1,0 +1,22 @@
+{
+  "roadmapVersion": 1,
+  "currentStage": 2,
+  "completedStages": [1],
+  "lastSuccessfulStage": 1,
+  "stageResults": {
+    "1": {
+      "promotion": "PASS",
+      "checkpointRef": "refs/tags/small-model-stage-1",
+      "baseline": "evals/agentsmith/baselines/stage-1.json",
+      "baselineSha256": "926f8c99f801756b69e9bcf986d4f4304c4239d9bc4bd344c2f2d7372ce7e967",
+      "corpusHash": "dcbf4c6055aaf3fe8148bb136a2217d38c83ff81cda2fa08aba9a726e9c59cdf",
+      "selectionRecall": 0.5,
+      "findingRecall": 0.125,
+      "precision": 0.05,
+      "verifiedPrecision": 0,
+      "partialReviewRate": 0.7407407407407407,
+      "liveRepetitions": 3,
+      "stageRepetitions": 2
+    }
+  }
+}

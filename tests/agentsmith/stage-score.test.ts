@@ -344,8 +344,8 @@ describe("AgentSmith stage scorecards", () => {
   it("excludes conformance fixtures from benchmark coverage", () => {
     const coverage = corpusCoverage(process.cwd());
     expect(coverage.conformance).toBe(2);
-    expect(coverage.activeBenchmarks).toBe(2);
-    expect(coverage.activeComponents).toBe(2);
+    expect(coverage.activeBenchmarks).toBe(9);
+    expect(coverage.activeComponents).toBe(9);
     expect(coverage.drafts).toBe(1);
   });
 });

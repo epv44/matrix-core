@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+stage="${1:-}"
+if [ "$stage" != "stage-1" ]; then
+  echo "usage: ./scripts/check-review-promotion stage-1 [--root PATH] [--baseline PATH]" >&2
+  exit 2
+fi
+shift
+
+exec node --import tsx tools/agentsmith-evals/src/cli.ts baseline validate "$@"

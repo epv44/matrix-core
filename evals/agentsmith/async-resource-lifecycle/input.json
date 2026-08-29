@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 5,
+  "traceId": "async-resource-lifecycle-trace",
+  "captureMode": "explicit-local",
+  "createdAt": "2026-08-28T00:00:00.000Z",
+  "packageVersion": "0.5.1",
+  "root": "<repo>",
+  "version": "async-resource-lifecycle-fixture-v1",
+  "sourceSnapshot": { "schemaVersion": 1, "manifestHash": "84d142016e4b037ed6e8532d09bee684e51d2598f45e659fabdcdd02bf3d46e6", "fileCount": 4, "totalBytes": 388, "complete": true, "portable": true, "captureDurationMs": 0, "warnings": [] },
+  "scope": {
+    "id": "async-resource-lifecycle-scope-v1", "version": "async-resource-lifecycle-fixture-v1", "root": "<repo>", "base": null,
+    "diff": "diff --git a/src/worker.ts b/src/worker.ts\n--- a/src/worker.ts\n+++ b/src/worker.ts\n@@ -1,8 +1,4 @@\n export async function pollOnce(fetchNext: () => Promise<void>): Promise<void> {\n-  const heartbeat = setInterval(() => console.info(\"poll heartbeat\"), 1_000);\n-  try {\n-    await fetchNext();\n-  } finally {\n-    clearInterval(heartbeat);\n-  }\n+  setInterval(() => console.info(\"poll heartbeat\"), 1_000);\n+  await fetchNext();\n }\n",
+    "changedFiles": ["src/worker.ts"],
+    "changeSources": { "src/worker.ts": ["working-tree"] },
+    "deletedFiles": [],
+    "fileContents": { "src/worker.ts": "export async function pollOnce(fetchNext: () => Promise<void>): Promise<void> {\n  setInterval(() => console.info(\"poll heartbeat\"), 1_000);\n  await fetchNext();\n}\n" },
+    "suppliedContext": { "src/runner.ts": "import { pollOnce } from \"./worker.js\";\n\nexport async function runCycle(fetchNext: () => Promise<void>): Promise<void> {\n  await pollOnce(fetchNext);\n}\n" },
+    "manifest": [{ "path": "src/worker.ts", "changeKind": "modified", "additions": 2, "deletions": 6, "language": "typescript", "generated": false, "binary": false, "sizeBytes": 163 }],
+    "omissions": [], "languages": ["typescript"],
+    "metadata": { "fileCount": 1, "additions": 2, "deletions": 6, "capturedAt": "2026-08-28T00:00:00.000Z" }
+  },
+  "deterministicReport": "PASS",
+  "result": {
+    "schemaVersion": 3, "version": "async-resource-lifecycle-fixture-v1", "snapshotId": "async-resource-lifecycle-scope-v1",
+    "status": "completed", "outcome": "findings", "mode": "partitioned", "reviewPath": "generic", "findings": [],
+    "coverage": { "changedFiles": 1, "changedFilesReviewed": 1, "changedSymbols": 1, "changedSymbolsReviewed": 1, "localUnitsGenerated": 1, "localUnitsReviewed": 1, "interactionUnitsGenerated": 1, "interactionUnitsReviewed": 1, "dependencyEdgesIdentified": 1, "dependencyEdgesEligible": 1, "dependencyEdgesReviewed": 1, "evidenceRequests": 1, "evidenceResolved": 1, "evidenceGaps": 0, "globalScan": "none", "omissions": [] },
+    "summary": "Draft synthetic trace; expected labels are stored in case.yaml.", "timestamp": "2026-08-28T00:00:00.000Z", "reviewer": "AgentSmith",
+    "runtime": { "models": { "candidate": "qwen3.5:9b-q4_K_M", "verifier": "qwen3.5:9b-q4_K_M" }, "inputTokens": 0, "outputTokens": 0, "concurrency": 1 }
+  },
+  "decisionProvenance": { "publishedFindingIds": [], "rejectedCandidateIds": [], "likelyCandidateIds": [], "insufficientEvidenceCandidateIds": [], "aggregateRule": "verified only", "errors": [] }
+}

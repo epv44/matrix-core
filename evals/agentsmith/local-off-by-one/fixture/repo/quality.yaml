@@ -1,0 +1,4 @@
+version: 2
+project: local-off-by-one
+review:
+  agentsmith: true

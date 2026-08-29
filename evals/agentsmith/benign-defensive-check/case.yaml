@@ -1,0 +1,67 @@
+schemaVersion: 7
+id: benign-defensive-check
+status: active
+kind: benchmark
+suite: component
+source:
+  traceId: benign-defensive-check-trace
+  traceSchemaVersion: 5
+  repositoryFingerprint: benign-defensive-check-fixture-v1
+  fixture:
+    path: fixture/repo
+    manifestPath: fixture-manifest.json
+    digest: 2eac5a8823c0a59456b2824592240f170ab7facd33d86f72c95a390150c9ea43
+  project: synthetic-stage-1
+sanitization:
+  reviewed: true
+  absolutePathsRemoved: true
+  sensitiveContentReviewed: true
+  redistributable: true
+groundTruth:
+  reviewed: true
+  reviewedBy: product-owner
+  reviewedAt: "2026-08-29T00:00:00.000Z"
+  contractFamily: python-empty-input-default
+  exhaustiveCandidates: true
+expectations:
+  snapshot:
+    files:
+      - { path: src/limits.py, changeKind: modified }
+  graph:
+    files: [src/limits.py]
+    symbols: [src/limits.py#parse_limit]
+  projection:
+    requiredSnippets:
+      - { file: src/limits.py, lineStart: 1, lineEnd: 7, contains: [raw.strip, "return 100", ValueError] }
+  planning:
+    route: partitioned
+    files: [src/limits.py]
+    symbols: [src/limits.py#parse_limit]
+  candidates:
+    items: &expected_candidates
+      - id: empty-limit-default-false-positive
+        file: src/limits.py
+        lineStart: 2
+        lineEnd: 3
+        category: contract
+        severity: low
+        titleContains: empty
+        expectedPresence: false
+        expectedVerdict: rejected
+        requiredEvidenceKinds: []
+        requiredReasoningTerms: []
+        forbiddenReasoningTerms: []
+        rationale: Treating empty input as the documented default is defensive and does not bypass positive-value validation.
+  verification:
+    candidates: *expected_candidates
+  aggregation:
+    status: completed
+    outcome: clear
+    findings: []
+  reporting:
+    requiredSections: [No verified findings]
+narrative:
+  summary: Draft exhaustive clear negative for a suspicious-looking but valid defensive check.
+  trueCodeFlow: Missing or whitespace-only input selects the same safe default, while provided numeric input still undergoes parsing and positivity validation.
+  references: [src/limits.py:2]
+tags: [stage-1, synthetic, draft-unapproved, python, clear, negative-control, exhaustive]

@@ -1,0 +1,130 @@
+schemaVersion: 7
+id: noisy-high-risk-contract
+status: active
+kind: benchmark
+suite: component
+source:
+  traceId: noisy-high-risk-contract-trace
+  traceSchemaVersion: 5
+  repositoryFingerprint: noisy-high-risk-contract-fixture-v1
+  fixture:
+    path: fixture/repo
+    manifestPath: fixture-manifest.json
+    digest: 2ff2b3c57a7af0afaa9c2cd187255b09467d1f43cc5c70dffe7191e11f4cf850
+  project: synthetic-stage-1
+sanitization:
+  reviewed: true
+  absolutePathsRemoved: true
+  sensitiveContentReviewed: true
+  redistributable: true
+groundTruth:
+  reviewed: true
+  reviewedBy: product-owner
+  reviewedAt: "2026-08-29T00:00:00.000Z"
+  contractFamily: typescript-currency-unit-large-change
+  exhaustiveCandidates: true
+expectations:
+  snapshot:
+    files:
+      - { path: src/invoice-api.ts, changeKind: modified }
+      - { path: src/noise/telemetry-01.ts, changeKind: modified }
+      - { path: src/noise/telemetry-02.ts, changeKind: modified }
+      - { path: src/noise/telemetry-03.ts, changeKind: modified }
+      - { path: src/noise/telemetry-04.ts, changeKind: modified }
+      - { path: src/noise/telemetry-05.ts, changeKind: modified }
+      - { path: src/noise/telemetry-06.ts, changeKind: modified }
+      - { path: src/noise/telemetry-07.ts, changeKind: modified }
+      - { path: src/noise/telemetry-08.ts, changeKind: modified }
+  graph:
+    files: [src/invoice-api.ts, src/contracts.ts, src/checkout.ts]
+    symbols: [src/invoice-api.ts#invoiceSummary, src/contracts.ts#InvoiceSummary, src/checkout.ts#chargeAmount]
+    edges:
+      - src/invoice-api.ts:invoiceSummary->src/contracts.ts:InvoiceSummary:reads-type
+      - src/checkout.ts:chargeAmount->src/invoice-api.ts:invoiceSummary:calls
+  projection:
+    requiredSnippets:
+      - { file: src/invoice-api.ts, lineStart: 3, lineEnd: 5, contains: [totalDollars, totalCents] }
+      - { file: src/contracts.ts, lineStart: 1, lineEnd: 3, contains: [InvoiceSummary, totalDollars] }
+      - { file: src/checkout.ts, lineStart: 3, lineEnd: 5, contains: [totalDollars, "* 100"] }
+    forbiddenFiles:
+      - src/noise/telemetry-01.ts
+      - src/noise/telemetry-02.ts
+      - src/noise/telemetry-03.ts
+      - src/noise/telemetry-04.ts
+      - src/noise/telemetry-05.ts
+      - src/noise/telemetry-06.ts
+      - src/noise/telemetry-07.ts
+      - src/noise/telemetry-08.ts
+  planning:
+    route: partitioned
+    files: [src/invoice-api.ts, src/contracts.ts, src/checkout.ts]
+    symbols: [src/invoice-api.ts#invoiceSummary, src/contracts.ts#InvoiceSummary, src/checkout.ts#chargeAmount]
+    edges:
+      - src/invoice-api.ts:invoiceSummary->src/contracts.ts:InvoiceSummary:reads-type
+      - src/checkout.ts:chargeAmount->src/invoice-api.ts:invoiceSummary:calls
+    forbiddenFiles:
+      - src/noise/telemetry-01.ts
+      - src/noise/telemetry-02.ts
+      - src/noise/telemetry-03.ts
+      - src/noise/telemetry-04.ts
+      - src/noise/telemetry-05.ts
+      - src/noise/telemetry-06.ts
+      - src/noise/telemetry-07.ts
+      - src/noise/telemetry-08.ts
+  candidates:
+    items: &expected_candidates
+      - id: invoice-cents-returned-as-dollars
+        file: src/invoice-api.ts
+        lineStart: 3
+        lineEnd: 4
+        category: contract
+        severity: critical
+        titleContains: cents
+        expectedPresence: true
+        expectedVerdict: verified
+        requiredEvidenceKinds: [type, usage]
+        requiredReasoningTerms: [totalCents, totalDollars, "100"]
+        forbiddenReasoningTerms: [telemetry]
+        rationale: The selected producer, type contract, and consumer prove a 100x charge despite eight unrelated changed files.
+  verification:
+    candidates: *expected_candidates
+  aggregation:
+    status: completed
+    outcome: findings
+    findings:
+      - id: invoice-cents-returned-as-dollars
+        file: src/invoice-api.ts
+        lineStart: 3
+        lineEnd: 4
+        severity: critical
+        category: contract
+        discoveryClass: L3
+        smallModelExpected: true
+        minimumEvidence:
+          - file: src/invoice-api.ts
+            lineStart: 3
+            lineEnd: 5
+            symbol: invoiceSummary
+            contains: ["totalDollars: record.totalCents"]
+          - file: src/contracts.ts
+            lineStart: 1
+            lineEnd: 3
+            symbol: InvoiceSummary
+            contains: [totalDollars]
+          - file: src/checkout.ts
+            lineStart: 3
+            lineEnd: 5
+            symbol: chargeAmount
+            contains: ["totalDollars * 100"]
+        requiredEvidence: [totalCents, totalDollars, "* 100"]
+        symbols: [invoiceSummary, InvoiceSummary, chargeAmount]
+        graphDistance: 2
+        description: Checkout multiplies an already-cent-denominated value by 100 and charges one hundred times the invoice total.
+        rationale: Risk selection must retain the currency contract interaction while dropping unrelated telemetry edits under the work budget.
+  reporting:
+    requiredSections: [src/invoice-api.ts, totalCents]
+narrative:
+  summary: Draft synthetic L3 high-risk contract fixture embedded in a noisy nine-file change.
+  trueCodeFlow: invoiceSummary assigns cents to a dollars field, then chargeAmount converts that mislabeled value to cents again; the telemetry changes are unrelated distractors.
+  references: [src/invoice-api.ts:4, src/contracts.ts:2, src/checkout.ts:4]
+tags: [stage-1, synthetic, draft-unapproved, typescript, contract, noisy-change, hard-budget, L3]

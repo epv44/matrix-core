@@ -1,0 +1,86 @@
+schemaVersion: 7
+id: local-off-by-one
+status: active
+kind: benchmark
+suite: component
+source:
+  traceId: local-off-by-one-trace
+  traceSchemaVersion: 5
+  repositoryFingerprint: local-off-by-one-fixture-v1
+  fixture:
+    path: fixture/repo
+    manifestPath: fixture-manifest.json
+    digest: 136e454410a1083ea7e334a563fd35a745fab44e36d7f15b19a3b386fd2bb34c
+  project: synthetic-stage-1
+sanitization:
+  reviewed: true
+  absolutePathsRemoved: true
+  sensitiveContentReviewed: true
+  redistributable: true
+groundTruth:
+  reviewed: true
+  reviewedBy: product-owner
+  reviewedAt: "2026-08-29T00:00:00.000Z"
+  contractFamily: python-pagination-boundary
+  exhaustiveCandidates: true
+expectations:
+  snapshot:
+    files:
+      - { path: src/pagination.py, changeKind: modified }
+  graph:
+    files: [src/pagination.py]
+    symbols: [src/pagination.py#page_slice]
+  projection:
+    requiredSnippets:
+      - { file: src/pagination.py, lineStart: 1, lineEnd: 4, contains: [page_size - 1, "items[start:end]"] }
+  planning:
+    route: partitioned
+    files: [src/pagination.py]
+    symbols: [src/pagination.py#page_slice]
+  candidates:
+    items: &expected_candidates
+      - id: page-slice-drops-last-item
+        file: src/pagination.py
+        lineStart: 3
+        lineEnd: 4
+        category: correctness
+        severity: medium
+        titleContains: drops
+        expectedPresence: true
+        expectedVerdict: verified
+        requiredEvidenceKinds: [definition]
+        requiredReasoningTerms: [exclusive, page_size]
+        forbiddenReasoningTerms: []
+        rationale: Python slice end indices are exclusive, so subtracting one returns page_size minus one items.
+  verification:
+    candidates: *expected_candidates
+  aggregation:
+    status: completed
+    outcome: findings
+    findings:
+      - id: page-slice-drops-last-item
+        file: src/pagination.py
+        lineStart: 3
+        lineEnd: 4
+        severity: medium
+        category: correctness
+        discoveryClass: L0
+        smallModelExpected: true
+        minimumEvidence:
+          - file: src/pagination.py
+            lineStart: 1
+            lineEnd: 4
+            symbol: page_slice
+            contains: ["end = start + page_size - 1", "items[start:end]"]
+        requiredEvidence: [page_size, exclusive]
+        symbols: [page_slice]
+        graphDistance: 0
+        description: Every nonempty page omits its last expected item.
+        rationale: The changed end index subtracts one even though Python slicing already excludes the end.
+  reporting:
+    requiredSections: [src/pagination.py, page_size]
+narrative:
+  summary: Draft synthetic L0 correctness fixture for an obvious local boundary defect.
+  trueCodeFlow: page_slice computes an exclusive end index one short and returns only page_size minus one items.
+  references: [src/pagination.py:3]
+tags: [stage-1, synthetic, draft-unapproved, python, correctness, L0, local]

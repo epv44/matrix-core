@@ -1,4 +1,4 @@
-schemaVersion: 6
+schemaVersion: 7
 id: budgeting-holdings-table-source-label
 status: active
 kind: benchmark
@@ -173,6 +173,18 @@ expectations:
         graphDistance: 1
         description: cash_snapshot holdings are displayed as Account balance in the Source column.
         rationale: The frontend contract and backend test establish three source states, but the changed binary mapping preserves only two labels.
+        smallModelExpected: true
+        minimumEvidence:
+          - file: frontend/src/components/InvestmentView.tsx
+            lineStart: 949
+            lineEnd: 949
+            symbol: HoldingsCard
+            contains: [value_source, Account balance]
+          - file: frontend/src/lib/api.ts
+            lineStart: 487
+            lineEnd: 652
+            symbol: InvestmentDashboard
+            contains: [cash_snapshot]
   reporting:
     requiredSections: [cash_snapshot, frontend/src/components/InvestmentView.tsx]
 narrative:

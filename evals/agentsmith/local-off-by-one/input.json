@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 5,
+  "traceId": "local-off-by-one-trace",
+  "captureMode": "explicit-local",
+  "createdAt": "2026-08-28T00:00:00.000Z",
+  "packageVersion": "0.5.1",
+  "root": "<repo>",
+  "version": "local-off-by-one-fixture-v1",
+  "sourceSnapshot": {
+    "schemaVersion": 1,
+    "manifestHash": "136e454410a1083ea7e334a563fd35a745fab44e36d7f15b19a3b386fd2bb34c",
+    "fileCount": 3,
+    "totalBytes": 228,
+    "complete": true,
+    "portable": true,
+    "captureDurationMs": 0,
+    "warnings": []
+  },
+  "scope": {
+    "id": "local-off-by-one-scope-v1",
+    "version": "local-off-by-one-fixture-v1",
+    "root": "<repo>",
+    "base": null,
+    "diff": "diff --git a/src/pagination.py b/src/pagination.py\n--- a/src/pagination.py\n+++ b/src/pagination.py\n@@ -1,4 +1,4 @@\n def page_slice(items: list[str], page: int, page_size: int) -> list[str]:\n     start = page * page_size\n-    end = start + page_size\n+    end = start + page_size - 1\n     return items[start:end]\n",
+    "changedFiles": ["src/pagination.py"],
+    "changeSources": { "src/pagination.py": ["working-tree"] },
+    "deletedFiles": [],
+    "fileContents": {
+      "src/pagination.py": "def page_slice(items: list[str], page: int, page_size: int) -> list[str]:\n    start = page * page_size\n    end = start + page_size - 1\n    return items[start:end]\n"
+    },
+    "suppliedContext": {},
+    "manifest": [
+      { "path": "src/pagination.py", "changeKind": "modified", "additions": 1, "deletions": 1, "language": "python", "generated": false, "binary": false, "sizeBytes": 163 }
+    ],
+    "omissions": [],
+    "languages": ["python"],
+    "metadata": { "fileCount": 1, "additions": 1, "deletions": 1, "capturedAt": "2026-08-28T00:00:00.000Z" }
+  },
+  "deterministicReport": "PASS",
+  "result": {
+    "schemaVersion": 3,
+    "version": "local-off-by-one-fixture-v1",
+    "snapshotId": "local-off-by-one-scope-v1",
+    "status": "completed",
+    "outcome": "findings",
+    "mode": "partitioned",
+    "reviewPath": "generic",
+    "findings": [],
+    "coverage": { "changedFiles": 1, "changedFilesReviewed": 1, "changedSymbols": 1, "changedSymbolsReviewed": 1, "localUnitsGenerated": 1, "localUnitsReviewed": 1, "interactionUnitsGenerated": 0, "interactionUnitsReviewed": 0, "dependencyEdgesIdentified": 0, "dependencyEdgesEligible": 0, "dependencyEdgesReviewed": 0, "evidenceRequests": 0, "evidenceResolved": 0, "evidenceGaps": 0, "globalScan": "none", "omissions": [] },
+    "summary": "Draft synthetic trace; expected labels are stored in case.yaml.",
+    "timestamp": "2026-08-28T00:00:00.000Z",
+    "reviewer": "AgentSmith",
+    "runtime": { "models": { "candidate": "qwen3.5:9b-q4_K_M", "verifier": "qwen3.5:9b-q4_K_M" }, "inputTokens": 0, "outputTokens": 0, "concurrency": 1 }
+  },
+  "decisionProvenance": { "publishedFindingIds": [], "rejectedCandidateIds": [], "likelyCandidateIds": [], "insufficientEvidenceCandidateIds": [], "aggregateRule": "verified only", "errors": [] }
+}

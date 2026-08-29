@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "repositoryFingerprint": "noisy-high-risk-contract-fixture-v1",
+  "gitHead": null,
+  "entries": [
+    { "path": ".matrixcore-ignore", "type": "file", "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b", "size": 1, "executable": false },
+    { "path": "quality.yaml", "type": "file", "sha256": "970b658288608243d7b805acb12ca9ff0ec850eb2a8b9d5b726dc838c4b9e2b7", "size": 72, "executable": false },
+    { "path": "src/checkout.ts", "type": "file", "sha256": "f44e8fc11f4b6b3fc1d673c20bd33598f63c5c7f59e6831b4782a0ca96514c0a", "size": 177, "executable": false },
+    { "path": "src/contracts.ts", "type": "file", "sha256": "c14210cf05432339a4b5597c10ccfefd96935f9c1cf02d16a1f6470d9ea393c6", "size": 60, "executable": false },
+    { "path": "src/invoice-api.ts", "type": "file", "sha256": "abb7c7913fcff85de10724c21b98c2f5d389ded3f7558d2e663dd4545f78f468", "size": 184, "executable": false },
+    { "path": "src/noise/telemetry-01.ts", "type": "file", "sha256": "ae3632aef555fa4a22703a8cde95dacde283ac57e3077b07fbf664b7a9fbff1e", "size": 54, "executable": false },
+    { "path": "src/noise/telemetry-02.ts", "type": "file", "sha256": "e5c1fc2389d5794ff0b84af7a3207a431594de6eea5769c80e48d8d5b239b2fa", "size": 56, "executable": false },
+    { "path": "src/noise/telemetry-03.ts", "type": "file", "sha256": "c601f03778d5e22a23b238025c72cf2c99af815e23f28b893b9619a3f8d3070a", "size": 57, "executable": false },
+    { "path": "src/noise/telemetry-04.ts", "type": "file", "sha256": "5f559cbdb51c8aa41b9670bdb4ce8f5bfc58895c2dd4c8eb66f15fecba97e05e", "size": 57, "executable": false },
+    { "path": "src/noise/telemetry-05.ts", "type": "file", "sha256": "29128b90b2e322512696c42f0b5849f3732709af582119048067d19ed7b3ae10", "size": 53, "executable": false },
+    { "path": "src/noise/telemetry-06.ts", "type": "file", "sha256": "eb82e51a6ffbcbdf1e39767dd2269d14291a1dab5664850458c6b859f27f1f48", "size": 55, "executable": false },
+    { "path": "src/noise/telemetry-07.ts", "type": "file", "sha256": "cd226ae1e93045682decb04e057b400f37d9dc773e6ec0d47e97f2d6d3f805b6", "size": 55, "executable": false },
+    { "path": "src/noise/telemetry-08.ts", "type": "file", "sha256": "8bc7796ce9994dbb60b45dd97f0bf9a00519ef06be3e98cd404e48d7b6e0abe7", "size": 54, "executable": false }
+  ],
+  "deletedPaths": []
+}

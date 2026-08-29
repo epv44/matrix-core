@@ -1,0 +1,94 @@
+schemaVersion: 7
+id: async-resource-lifecycle
+status: active
+kind: benchmark
+suite: component
+source:
+  traceId: async-resource-lifecycle-trace
+  traceSchemaVersion: 5
+  repositoryFingerprint: async-resource-lifecycle-fixture-v1
+  fixture:
+    path: fixture/repo
+    manifestPath: fixture-manifest.json
+    digest: 84d142016e4b037ed6e8532d09bee684e51d2598f45e659fabdcdd02bf3d46e6
+  project: synthetic-stage-1
+sanitization:
+  reviewed: true
+  absolutePathsRemoved: true
+  sensitiveContentReviewed: true
+  redistributable: true
+groundTruth:
+  reviewed: true
+  reviewedBy: product-owner
+  reviewedAt: "2026-08-29T00:00:00.000Z"
+  contractFamily: typescript-async-timer-lifecycle
+  exhaustiveCandidates: true
+expectations:
+  snapshot:
+    files:
+      - { path: src/worker.ts, changeKind: modified }
+  graph:
+    files: [src/worker.ts, src/runner.ts]
+    symbols: [src/worker.ts#pollOnce, src/runner.ts#runCycle]
+    edges: [src/runner.ts:runCycle->src/worker.ts:pollOnce:calls]
+  projection:
+    requiredSnippets:
+      - { file: src/worker.ts, lineStart: 1, lineEnd: 4, contains: [setInterval, "await fetchNext()"] }
+      - { file: src/runner.ts, lineStart: 3, lineEnd: 5, contains: [runCycle, pollOnce] }
+  planning:
+    route: partitioned
+    files: [src/worker.ts, src/runner.ts]
+    symbols: [src/worker.ts#pollOnce, src/runner.ts#runCycle]
+    edges: [src/runner.ts:runCycle->src/worker.ts:pollOnce:calls]
+  candidates:
+    items: &expected_candidates
+      - id: poll-once-leaks-heartbeat-timer
+        file: src/worker.ts
+        lineStart: 1
+        lineEnd: 3
+        category: performance
+        severity: medium
+        titleContains: timer
+        expectedPresence: true
+        expectedVerdict: verified
+        requiredEvidenceKinds: [callers]
+        requiredReasoningTerms: [setInterval, runCycle, clearInterval]
+        forbiddenReasoningTerms: []
+        rationale: Each completed cycle leaves a referenced interval alive and repeated cycles accumulate timers.
+  verification:
+    candidates: *expected_candidates
+  aggregation:
+    status: completed
+    outcome: findings
+    findings:
+      - id: poll-once-leaks-heartbeat-timer
+        file: src/worker.ts
+        lineStart: 1
+        lineEnd: 3
+        severity: medium
+        category: performance
+        discoveryClass: L2
+        smallModelExpected: true
+        minimumEvidence:
+          - file: src/worker.ts
+            lineStart: 1
+            lineEnd: 4
+            symbol: pollOnce
+            contains: [setInterval, "await fetchNext()"]
+          - file: src/runner.ts
+            lineStart: 3
+            lineEnd: 5
+            symbol: runCycle
+            contains: ["await pollOnce(fetchNext)"]
+        requiredEvidence: [setInterval, pollOnce]
+        symbols: [pollOnce, runCycle]
+        graphDistance: 1
+        description: Every runCycle invocation leaves a heartbeat interval running after the work completes.
+        rationale: The changed function no longer stores and clears the interval around the awaited operation.
+  reporting:
+    requiredSections: [src/worker.ts, setInterval]
+narrative:
+  summary: Draft synthetic L2 asynchronous resource-lifecycle fixture.
+  trueCodeFlow: runCycle repeatedly awaits pollOnce, which now creates a referenced interval without any cleanup path.
+  references: [src/worker.ts:2, src/runner.ts:4]
+tags: [stage-1, synthetic, draft-unapproved, typescript, performance, lifecycle, L2]

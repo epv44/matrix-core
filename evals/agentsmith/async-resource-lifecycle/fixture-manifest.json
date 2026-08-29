@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "repositoryFingerprint": "async-resource-lifecycle-fixture-v1",
+  "gitHead": null,
+  "entries": [
+    { "path": ".matrixcore-ignore", "type": "file", "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b", "size": 1, "executable": false },
+    { "path": "quality.yaml", "type": "file", "sha256": "379c5339b86c3a4ea09f8d58f50885aa9fd6f03fc9bc6873cbb975666162b9c5", "size": 72, "executable": false },
+    { "path": "src/runner.ts", "type": "file", "sha256": "305f8341ad15a99df4711dbb214d965b63e3e986d917c13d26e3905aa056c9be", "size": 152, "executable": false },
+    { "path": "src/worker.ts", "type": "file", "sha256": "6b9a745370916400fd9564f8891ef5d7d2cac8382a2bdb4edcf610e13491bae2", "size": 163, "executable": false }
+  ],
+  "deletedPaths": []
+}

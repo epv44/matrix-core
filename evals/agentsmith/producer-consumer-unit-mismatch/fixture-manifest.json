@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "repositoryFingerprint": "producer-consumer-unit-mismatch-fixture-v1",
+  "gitHead": null,
+  "entries": [
+    { "path": ".matrixcore-ignore", "type": "file", "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b", "size": 1, "executable": false },
+    { "path": "quality.yaml", "type": "file", "sha256": "0220a6835dab02dc982ea185373fd951e10c8f4917d4960eb254c13b0a411528", "size": 79, "executable": false },
+    { "path": "src/client.py", "type": "file", "sha256": "65f432f6472d6ab97bd09ebcf2315f126774b15699d67e5ff3b6f35972a860c3", "size": 148, "executable": false },
+    { "path": "src/settings.py", "type": "file", "sha256": "ee7c367888660814b9b3f7fda8e16e19402aa4341cb7df18f090d13b62fa59c7", "size": 84, "executable": false }
+  ],
+  "deletedPaths": []
+}

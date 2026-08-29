@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "repositoryFingerprint": "benign-defensive-check-fixture-v1",
+  "gitHead": null,
+  "entries": [
+    { "path": ".matrixcore-ignore", "type": "file", "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b", "size": 1, "executable": false },
+    { "path": "quality.yaml", "type": "file", "sha256": "7441d5479041d6ea0bc637333af59f161227cd7ade3a1805d91b09cd276099ce", "size": 70, "executable": false },
+    { "path": "src/limits.py", "type": "file", "sha256": "f71636055b13114a92b1d7e6a5a31068382225562ce1f4185b0faba9d786081b", "size": 208, "executable": false }
+  ],
+  "deletedPaths": []
+}

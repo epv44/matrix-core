@@ -1,0 +1,94 @@
+schemaVersion: 7
+id: producer-consumer-unit-mismatch
+status: active
+kind: benchmark
+suite: component
+source:
+  traceId: producer-consumer-unit-mismatch-trace
+  traceSchemaVersion: 5
+  repositoryFingerprint: producer-consumer-unit-mismatch-fixture-v1
+  fixture:
+    path: fixture/repo
+    manifestPath: fixture-manifest.json
+    digest: d00724213598bbf8da9308f726d8fb6bfa78425e33337564fcf0500e7f776e58
+  project: synthetic-stage-1
+sanitization:
+  reviewed: true
+  absolutePathsRemoved: true
+  sensitiveContentReviewed: true
+  redistributable: true
+groundTruth:
+  reviewed: true
+  reviewedBy: product-owner
+  reviewedAt: "2026-08-29T00:00:00.000Z"
+  contractFamily: python-timeout-unit-conversion
+  exhaustiveCandidates: true
+expectations:
+  snapshot:
+    files:
+      - { path: src/settings.py, changeKind: modified }
+  graph:
+    files: [src/settings.py, src/client.py]
+    symbols: [src/settings.py#load_timeout_ms, src/client.py#wait_before_retry]
+    edges: [src/client.py:wait_before_retry->src/settings.py:load_timeout_ms:calls]
+  projection:
+    requiredSnippets:
+      - { file: src/settings.py, lineStart: 1, lineEnd: 2, contains: [load_timeout_ms, timeout_ms] }
+      - { file: src/client.py, lineStart: 6, lineEnd: 7, contains: [time.sleep, load_timeout_ms] }
+  planning:
+    route: partitioned
+    files: [src/settings.py, src/client.py]
+    symbols: [src/settings.py#load_timeout_ms, src/client.py#wait_before_retry]
+    edges: [src/client.py:wait_before_retry->src/settings.py:load_timeout_ms:calls]
+  candidates:
+    items: &expected_candidates
+      - id: milliseconds-passed-to-seconds-api
+        file: src/settings.py
+        lineStart: 1
+        lineEnd: 2
+        category: contract
+        severity: high
+        titleContains: milliseconds
+        expectedPresence: true
+        expectedVerdict: verified
+        requiredEvidenceKinds: [usage]
+        requiredReasoningTerms: [timeout_ms, time.sleep, seconds]
+        forbiddenReasoningTerms: []
+        rationale: The producer now returns milliseconds but the consumer passes the value to a seconds-based API.
+  verification:
+    candidates: *expected_candidates
+  aggregation:
+    status: completed
+    outcome: findings
+    findings:
+      - id: milliseconds-passed-to-seconds-api
+        file: src/settings.py
+        lineStart: 1
+        lineEnd: 2
+        severity: high
+        category: contract
+        discoveryClass: L2
+        smallModelExpected: true
+        minimumEvidence:
+          - file: src/settings.py
+            lineStart: 1
+            lineEnd: 2
+            symbol: load_timeout_ms
+            contains: [timeout_ms]
+          - file: src/client.py
+            lineStart: 6
+            lineEnd: 7
+            symbol: wait_before_retry
+            contains: ["time.sleep(load_timeout_ms(config))"]
+        requiredEvidence: [timeout_ms, time.sleep]
+        symbols: [load_timeout_ms, wait_before_retry]
+        graphDistance: 1
+        description: A millisecond retry interval is interpreted as seconds, delaying retries by a factor of one thousand.
+        rationale: The changed producer contract and unchanged standard-library consumer use different units.
+  reporting:
+    requiredSections: [src/settings.py, src/client.py]
+narrative:
+  summary: Draft synthetic L2 multi-file producer/consumer interaction fixture.
+  trueCodeFlow: wait_before_retry passes the millisecond value returned by load_timeout_ms directly to time.sleep, which accepts seconds.
+  references: [src/settings.py:2, src/client.py:7]
+tags: [stage-1, synthetic, draft-unapproved, python, contract, interaction, L2]

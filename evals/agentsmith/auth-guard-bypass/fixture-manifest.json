@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "repositoryFingerprint": "auth-guard-bypass-fixture-v1",
+  "gitHead": null,
+  "entries": [
+    { "path": ".matrixcore-ignore", "type": "file", "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b", "size": 1, "executable": false },
+    { "path": "quality.yaml", "type": "file", "sha256": "64e34ef84f2a5131495524a82b9f3b42f13f3eeb1642bc0cabeedb8f0118ca11", "size": 65, "executable": false },
+    { "path": "src/auth.ts", "type": "file", "sha256": "0d32215f93aa52b7bc0c57cb04f2c447da52742a6b09b41983b1dc971d2fd142", "size": 75, "executable": false },
+    { "path": "src/routes.ts", "type": "file", "sha256": "3fad751cef5915308258c8a0ace7e11dba37dce5defdaef6e445369c159ed7a8", "size": 249, "executable": false }
+  ],
+  "deletedPaths": []
+}

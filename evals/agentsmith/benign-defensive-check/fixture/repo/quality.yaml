@@ -1,0 +1,4 @@
+version: 2
+project: benign-defensive-check
+review:
+  agentsmith: true

@@ -115,13 +115,13 @@ function activate(root: string, slug: string) {
 
 afterEach(() => vi.unstubAllEnvs());
 
-describe("AgentSmith v4 eval cases", () => {
+describe("AgentSmith eval cases", () => {
   it("curates an unlabeled sanitized draft from a local trace", () => {
     const { root, traceId } = fixture();
     try {
       curateTrace({ root, traceId, slug: "case-one" });
       const { definition } = readEvalCase(root, "case-one");
-      expect(definition).toMatchObject({ schemaVersion: 6, status: "draft", expectations: {} });
+      expect(definition).toMatchObject({ schemaVersion: 7, status: "draft", expectations: {} });
       expect(definition.source.fixture).toBeTruthy();
       expect(() => curateTrace({ root, traceId, slug: "case-one" })).toThrow(/already exists/);
     } finally {

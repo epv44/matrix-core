@@ -1,0 +1,94 @@
+schemaVersion: 7
+id: auth-guard-bypass
+status: active
+kind: benchmark
+suite: component
+source:
+  traceId: auth-guard-bypass-trace
+  traceSchemaVersion: 5
+  repositoryFingerprint: auth-guard-bypass-fixture-v1
+  fixture:
+    path: fixture/repo
+    manifestPath: fixture-manifest.json
+    digest: 462820155f19c18c540e8b5da6972bf601431cbd2002d7d60a0a1224d3acb1a0
+  project: synthetic-stage-1
+sanitization:
+  reviewed: true
+  absolutePathsRemoved: true
+  sensitiveContentReviewed: true
+  redistributable: true
+groundTruth:
+  reviewed: true
+  reviewedBy: product-owner
+  reviewedAt: "2026-08-29T00:00:00.000Z"
+  contractFamily: typescript-admin-authorization-guard
+  exhaustiveCandidates: true
+expectations:
+  snapshot:
+    files:
+      - { path: src/routes.ts, changeKind: modified }
+  graph:
+    files: [src/routes.ts, src/auth.ts]
+    symbols: [src/routes.ts#deleteUser, src/auth.ts#Session]
+    edges: [src/routes.ts:deleteUser->src/auth.ts:Session:reads-type]
+  projection:
+    requiredSnippets:
+      - { file: src/routes.ts, lineStart: 3, lineEnd: 7, contains: ["const role", "!session && role !== \"admin\"", deleted] }
+      - { file: src/auth.ts, lineStart: 1, lineEnd: 4, contains: [admin, member] }
+  planning:
+    route: partitioned
+    files: [src/routes.ts, src/auth.ts]
+    symbols: [src/routes.ts#deleteUser, src/auth.ts#Session]
+    edges: [src/routes.ts:deleteUser->src/auth.ts:Session:reads-type]
+  candidates:
+    items: &expected_candidates
+      - id: member-session-bypasses-admin-guard
+        file: src/routes.ts
+        lineStart: 4
+        lineEnd: 6
+        category: security
+        severity: critical
+        titleContains: admin
+        expectedPresence: true
+        expectedVerdict: verified
+        requiredEvidenceKinds: [type]
+        requiredReasoningTerms: [member, "&&", deleteUser]
+        forbiddenReasoningTerms: []
+        rationale: A present member session makes the first side of the conjunction false, so deletion proceeds.
+  verification:
+    candidates: *expected_candidates
+  aggregation:
+    status: completed
+    outcome: findings
+    findings:
+      - id: member-session-bypasses-admin-guard
+        file: src/routes.ts
+        lineStart: 4
+        lineEnd: 6
+        severity: critical
+        category: security
+        discoveryClass: L1
+        smallModelExpected: true
+        minimumEvidence:
+          - file: src/routes.ts
+            lineStart: 3
+            lineEnd: 7
+            symbol: deleteUser
+            contains: ["const role = session?.role", "!session && role !== \"admin\"", "deleted:${userId}"]
+          - file: src/auth.ts
+            lineStart: 1
+            lineEnd: 4
+            symbol: Session
+            contains: ["role: \"admin\" | \"member\""]
+        requiredEvidence: [member, "&&"]
+        symbols: [deleteUser, Session]
+        graphDistance: 1
+        description: Authenticated member sessions can execute the admin-only delete operation.
+        rationale: Changing the guard from OR to AND prevents the role check from rejecting any non-null session.
+  reporting:
+    requiredSections: [src/routes.ts, member]
+narrative:
+  summary: Draft synthetic security-boundary fixture for an authorization guard bypass.
+  trueCodeFlow: deleteUser throws for null sessions but the conjunction short-circuits for all present sessions, including members.
+  references: [src/routes.ts:5, src/auth.ts:3]
+tags: [stage-1, synthetic, draft-unapproved, typescript, security, authorization, L1]
