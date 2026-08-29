@@ -1,8 +1,8 @@
 {
   "roadmapVersion": 1,
-  "currentStage": 2,
-  "completedStages": [1],
-  "lastSuccessfulStage": 1,
+  "currentStage": 3,
+  "completedStages": [1, 2],
+  "lastSuccessfulStage": 2,
   "stageResults": {
     "1": {
       "promotion": "PASS",
@@ -17,6 +17,15 @@
       "partialReviewRate": 0.7407407407407407,
       "liveRepetitions": 3,
       "stageRepetitions": 2
+    },
+    "2": {
+      "promotion": "PASS",
+      "checkpointRef": "refs/tags/small-model-stage-2",
+      "tests": "npm test (56 files / 290 tests)",
+      "evalCheck": "npm run eval:check (37 tests)",
+      "build": "npm run build",
+      "lint": "eslint . --max-warnings 0",
+      "baselineCompatibility": "stage-1 baseline validate: PASS"
     }
   }
 }
