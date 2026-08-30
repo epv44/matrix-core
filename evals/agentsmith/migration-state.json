@@ -1,8 +1,8 @@
 {
   "roadmapVersion": 1,
-  "currentStage": 8,
-  "completedStages": [1, 2, 3, 4, 5, 6, 7],
-  "lastSuccessfulStage": 7,
+  "currentStage": 9,
+  "completedStages": [1, 2, 3, 4, 5, 6, 7, 8],
+  "lastSuccessfulStage": 8,
   "stageResults": {
     "1": {
       "promotion": "PASS",
@@ -55,6 +55,12 @@
       "promotion": "PASS",
       "checkpointRef": "refs/tags/small-model-stage-7",
       "tests": "typed evidence requests, bounded resolver, token/request limits, and insufficient-context fallback",
+      "quality": "no regression against Stage 1 baseline"
+    },
+    "8": {
+      "promotion": "PASS",
+      "checkpointRef": "refs/tags/small-model-stage-8",
+      "tests": "candidate verification, citation/grounding validation, rejection, insufficient-context, and aggregation coverage",
       "quality": "no regression against Stage 1 baseline"
     }
   }
