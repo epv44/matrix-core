@@ -332,4 +332,27 @@ describe("adaptive projection planning", () => {
     ]);
     expect(selected.every((item) => item.selectionReason)).toBe(true);
   });
+
+  it("enforces both hard work-item and projected-token budgets while reserving an interaction", () => {
+    const item = (id: string, kind: ReviewWorkItem["kind"], priority: number, tokens: number): ReviewWorkItem => ({
+      id,
+      kind,
+      priority,
+      primarySymbols: [changed],
+      relatedSymbols: kind === "interaction" ? [consumer] : [],
+      code: [], graphEdges: kind === "interaction" ? [edge] : [], rules: [], estimatedTokens: tokens,
+      rankFactors: { edgeRisk: kind === "interaction" ? 100 : 0, changedEndpoints: 1, productionSurface: 1, changedLines: 1, graphDegree: 1 },
+    });
+    const interaction = item("interaction:contract", "interaction", 80, 40);
+    const local = item("local:primary", "local", 200, 40);
+    const extra = item("local:extra", "local", 190, 40);
+    const selected = selectWorkItems([extra, interaction, local], 2, 80);
+    expect(selected.selected).toHaveLength(2);
+    expect(new Set(selected.selected.map((entry) => entry.kind))).toEqual(new Set(["local", "interaction"]));
+    expect(selected.estimatedTokens).toBeLessThanOrEqual(80);
+    expect(selected.omitted).toHaveLength(1);
+    const tokenLimited = selectWorkItems([local, interaction], 10, 40);
+    expect(tokenLimited.selected).toHaveLength(1);
+    expect(tokenLimited.estimatedTokens).toBeLessThanOrEqual(40);
+  });
 });

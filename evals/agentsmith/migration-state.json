@@ -1,8 +1,8 @@
 {
   "roadmapVersion": 1,
-  "currentStage": 4,
-  "completedStages": [1, 2, 3],
-  "lastSuccessfulStage": 3,
+  "currentStage": 5,
+  "completedStages": [1, 2, 3, 4],
+  "lastSuccessfulStage": 4,
   "stageResults": {
     "1": {
       "promotion": "PASS",
@@ -31,6 +31,12 @@
       "promotion": "PASS",
       "checkpointRef": "refs/tags/small-model-stage-3",
       "tests": "projection-v2 symbol-unit coverage (8 tests)",
+      "selectionRecall": "no regression against Stage 1 baseline"
+    },
+    "4": {
+      "promotion": "PASS",
+      "checkpointRef": "refs/tags/small-model-stage-4",
+      "tests": "hard selection, interaction reservation, deterministic ranking, and token-budget coverage",
       "selectionRecall": "no regression against Stage 1 baseline"
     }
   }
