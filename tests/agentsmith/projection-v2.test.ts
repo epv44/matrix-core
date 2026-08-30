@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildProjection,
   buildWorkItems,
+  extensionLanguage,
   projectionBudget,
   routeReview,
   selectWorkItems,
@@ -123,6 +124,35 @@ const rules = [
 ];
 
 describe("adaptive projection planning", () => {
+  it("maps changed symbols into deterministic local units with bounded token accounting", () => {
+    const projection = buildProjection({ scope, graph, profile: small, rules, kind: "full" });
+    const budget = projectionBudget(small, routing).inputBudgetTokens;
+    const items = buildWorkItems({
+      projection,
+      graph,
+      profile: small,
+      rules,
+      inputBudgetTokens: budget,
+      policy: { maxParallelUnits: 20, maxRulesPerUnit: 8, maxUnitsPerChangedSymbol: 6, preferSemanticBoundaries: true, hunkFallback: true },
+    });
+    const local = items.find((item) => item.kind === "local");
+    expect(local?.primarySymbols).toEqual([changed]);
+    expect(local?.code[0]).toMatchObject({ file: "api.ts", symbol: "read", changed: true });
+    expect(local?.estimatedTokens).toBeGreaterThan(0);
+    expect(local?.estimatedTokens).toBeLessThanOrEqual(budget);
+    const again = buildWorkItems({ projection, graph, profile: small, rules, inputBudgetTokens: budget, policy: { maxParallelUnits: 20, maxRulesPerUnit: 8, maxUnitsPerChangedSymbol: 6, preferSemanticBoundaries: true, hunkFallback: true } });
+    expect(again.map((item) => item.id)).toEqual(items.map((item) => item.id));
+  });
+
+  it("falls back to changed hunk context when semantic symbols are unavailable", () => {
+    expect(extensionLanguage("worker.py")).toBe("python");
+    expect(extensionLanguage("worker.rb")).toBe("rb");
+    const noSymbols = buildProjection({ scope, graph: { ...graph, changedSymbols: [], nodes: [], edges: [] }, profile: small, rules: [], kind: "full" });
+    const fallback = noSymbols.code.find((item) => item.changed);
+    expect(fallback?.reason).toContain("changed hunk fallback");
+    expect(fallback?.content).toContain("read");
+  });
+
   it("routes by complete projection fit and reasoning capability", () => {
     const fullSmall = buildProjection({ scope, graph, profile: small, rules, kind: "full" });
     const compactSmall = buildProjection({ scope, graph, profile: small, rules, kind: "compact" });
@@ -161,6 +191,44 @@ describe("adaptive projection planning", () => {
     expect(selection.selected).toHaveLength(1);
     expect(selection.selected[0].kind).toBe("interaction");
     expect(selection.omitted).toHaveLength(1);
+  });
+
+  it("constructs one deterministic local unit for each changed symbol", () => {
+    const secondChanged = { ...changed, name: "write", qualifiedName: "write", startLine: 2, endLine: 2 };
+    const secondGraph: GraphContext = {
+      ...graph,
+      changedSymbols: [changed, secondChanged],
+      nodes: [
+        { symbol: changed, score: 130, distance: 0 },
+        { symbol: secondChanged, score: 120, distance: 0 },
+      ],
+      edges: [],
+    };
+    const projection = buildProjection({ scope, graph: secondGraph, profile: small, rules: [], kind: "full" });
+    const build = () =>
+      buildWorkItems({
+        projection,
+        graph: secondGraph,
+        profile: small,
+        rules: [],
+        inputBudgetTokens: 20_000,
+        policy: {
+          maxParallelUnits: 20,
+          maxRulesPerUnit: 8,
+          maxUnitsPerChangedSymbol: 6,
+          preferSemanticBoundaries: true,
+          hunkFallback: true,
+        },
+      });
+    const first = build();
+    const second = build();
+    expect(first.filter((item) => item.kind === "local")).toHaveLength(2);
+    expect(first.filter((item) => item.kind === "local").map((item) => item.primarySymbols[0].qualifiedName)).toEqual([
+      "read",
+      "write",
+    ]);
+    expect(first).toEqual(second);
+    expect(first.every((item) => item.estimatedTokens <= 20_000)).toBe(true);
   });
 
   it("deduplicates overlapping provider facts and stratifies selected review surfaces", () => {

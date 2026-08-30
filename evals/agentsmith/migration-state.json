@@ -1,8 +1,8 @@
 {
   "roadmapVersion": 1,
-  "currentStage": 3,
-  "completedStages": [1, 2],
-  "lastSuccessfulStage": 2,
+  "currentStage": 4,
+  "completedStages": [1, 2, 3],
+  "lastSuccessfulStage": 3,
   "stageResults": {
     "1": {
       "promotion": "PASS",
@@ -26,6 +26,12 @@
       "build": "npm run build",
       "lint": "eslint . --max-warnings 0",
       "baselineCompatibility": "stage-1 baseline validate: PASS"
+    },
+    "3": {
+      "promotion": "PASS",
+      "checkpointRef": "refs/tags/small-model-stage-3",
+      "tests": "projection-v2 symbol-unit coverage (8 tests)",
+      "selectionRecall": "no regression against Stage 1 baseline"
     }
   }
 }
