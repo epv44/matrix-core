@@ -1,8 +1,8 @@
 {
   "roadmapVersion": 1,
-  "currentStage": 6,
-  "completedStages": [1, 2, 3, 4, 5],
-  "lastSuccessfulStage": 5,
+  "currentStage": 7,
+  "completedStages": [1, 2, 3, 4, 5, 6],
+  "lastSuccessfulStage": 6,
   "stageResults": {
     "1": {
       "promotion": "PASS",
@@ -43,6 +43,12 @@
       "promotion": "PASS",
       "checkpointRef": "refs/tags/small-model-stage-5",
       "tests": "existing bounded-review audit coverage verifies selected/dropped units, budget exhaustion, and omission classification",
+      "quality": "no regression against Stage 1 baseline"
+    },
+    "6": {
+      "promotion": "PASS",
+      "checkpointRef": "refs/tags/small-model-stage-6",
+      "tests": "specialist registry/routing and bounded call-budget coverage",
       "quality": "no regression against Stage 1 baseline"
     }
   }
