@@ -1,8 +1,8 @@
 {
   "roadmapVersion": 1,
   "currentStage": 9,
-  "completedStages": [1, 2, 3, 4, 5, 6, 7, 8],
-  "lastSuccessfulStage": 8,
+  "completedStages": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  "lastSuccessfulStage": 9,
   "stageResults": {
     "1": {
       "promotion": "PASS",
@@ -61,6 +61,12 @@
       "promotion": "PASS",
       "checkpointRef": "refs/tags/small-model-stage-8",
       "tests": "candidate verification, citation/grounding validation, rejection, insufficient-context, and aggregation coverage",
+      "quality": "no regression against Stage 1 baseline"
+    },
+    "9": {
+      "promotion": "PASS",
+      "checkpointRef": "refs/tags/small-model-stage-9",
+      "tests": "full/partitioned routing, partial semantics, escalation signals, and deterministic shadow comparison",
       "quality": "no regression against Stage 1 baseline"
     }
   }
