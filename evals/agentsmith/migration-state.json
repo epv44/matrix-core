@@ -1,8 +1,8 @@
 {
   "roadmapVersion": 1,
-  "currentStage": 7,
-  "completedStages": [1, 2, 3, 4, 5, 6],
-  "lastSuccessfulStage": 6,
+  "currentStage": 8,
+  "completedStages": [1, 2, 3, 4, 5, 6, 7],
+  "lastSuccessfulStage": 7,
   "stageResults": {
     "1": {
       "promotion": "PASS",
@@ -49,6 +49,12 @@
       "promotion": "PASS",
       "checkpointRef": "refs/tags/small-model-stage-6",
       "tests": "specialist registry/routing and bounded call-budget coverage",
+      "quality": "no regression against Stage 1 baseline"
+    },
+    "7": {
+      "promotion": "PASS",
+      "checkpointRef": "refs/tags/small-model-stage-7",
+      "tests": "typed evidence requests, bounded resolver, token/request limits, and insufficient-context fallback",
       "quality": "no regression against Stage 1 baseline"
     }
   }
