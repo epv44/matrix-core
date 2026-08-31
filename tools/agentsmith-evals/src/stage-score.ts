@@ -1,5 +1,5 @@
 import type { ReviewResult } from "../../../src/core/types.js";
-import type { EngineExecution } from "../../../src/agentsmith/engine-types.js";
+import type { EngineExecution, ReviewWorkItem } from "../../../src/agentsmith/engine-types.js";
 import type { AgentSmithTrace } from "../../../src/agentsmith/trace.js";
 import type { EvalCase } from "./case.js";
 import { findingMatches } from "./matching.js";
@@ -39,6 +39,138 @@ const metric = (
   denominator: number,
   direction: StageMetric["direction"] = "higher",
 ): StageMetric => ({ name, numerator, denominator, value: ratio(numerator, denominator), direction });
+
+export interface PlanningRiskRankingScore {
+  ordered: number | null;
+  mustOutrank: number | null;
+  expectedEdges: number | null;
+  priorityAssertions: number | null;
+  diagnostics: string[];
+  rankedIds: string[];
+}
+
+type RiskRankingExpectation = NonNullable<NonNullable<EvalCase["expectations"]["planning"]>["riskRanking"]>;
+
+type PlannerManifestItem = NonNullable<EngineExecution["plannerManifest"]>[number];
+type PlanningItem = ReviewWorkItem | PlannerManifestItem;
+
+function workItemKey(item: PlanningItem): string[] {
+  if ("primarySymbols" in item)
+    return [
+      item.id,
+      ...item.primarySymbols.flatMap((symbol) => [symbol.name, symbol.qualifiedName, `${symbol.file}#${symbol.qualifiedName}`]),
+      ...item.relatedSymbols.flatMap((symbol) => [symbol.name, symbol.qualifiedName, `${symbol.file}#${symbol.qualifiedName}`]),
+    ];
+  return [
+    item.id,
+    ...item.symbols.flatMap((symbol) => [symbol, symbol.replace("#", ":")]),
+  ];
+}
+
+function riskRank(left: PlanningItem, right: PlanningItem): number {
+  const lf = left.rankFactors;
+  const rf = right.rankFactors;
+  return (
+    (right.priority ?? 0) - (left.priority ?? 0) ||
+    (rf?.productionSurface ?? 0) - (lf?.productionSurface ?? 0) ||
+    (rf?.changedEndpoints ?? 0) - (lf?.changedEndpoints ?? 0) ||
+    (rf?.edgeRisk ?? 0) - (lf?.edgeRisk ?? 0) ||
+    (rf?.graphDegree ?? 0) - (lf?.graphDegree ?? 0) ||
+    (rf?.changedLines ?? 0) - (lf?.changedLines ?? 0) ||
+    left.kind.localeCompare(right.kind) ||
+    riskSemanticKey(left).localeCompare(riskSemanticKey(right))
+  );
+}
+
+function riskSemanticKey(item: PlanningItem): string {
+  if (!("primarySymbols" in item)) return [item.kind, ...item.symbols, ...item.edges].join("|");
+  return [
+    item.kind,
+    ...item.primarySymbols.map((symbol) => `${symbol.file}:${symbol.qualifiedName}`),
+    ...item.relatedSymbols.map((symbol) => `${symbol.file}:${symbol.qualifiedName}`),
+    ...item.graphEdges.map((edge) => edge.kind),
+  ].join("|");
+}
+
+/** Score planner ordering only. Selection limits and selected work items are
+ * deliberately not part of this function's inputs. */
+export function scorePlanningRiskRanking(
+  expectation: RiskRankingExpectation,
+  workItems: PlanningItem[],
+): PlanningRiskRankingScore {
+  const ranked = [...workItems].sort(riskRank);
+  const byKey = new Map<string, PlanningItem>();
+  for (const item of ranked)
+    for (const key of workItemKey(item))
+      if (!byKey.has(key)) byKey.set(key, item);
+  const positions = new Map(ranked.map((item, index) => [item.id, index]));
+  const diagnostics: string[] = [];
+  const resolve = (key: string) => {
+    const item = byKey.get(key);
+    if (!item) diagnostics.push(`missing risk-ranked unit ${key}`);
+    return item;
+  };
+
+  let orderedMatched = 0;
+  let orderedTotal = 0;
+  for (let index = 0; index < Math.max(0, expectation.ordered.length - 1); index += 1) {
+    const higher = resolve(expectation.ordered[index]);
+    const lower = resolve(expectation.ordered[index + 1]);
+    if (!higher || !lower) continue;
+    orderedTotal += 1;
+    if ((positions.get(higher.id) ?? Infinity) < (positions.get(lower.id) ?? -1)) orderedMatched += 1;
+    else diagnostics.push(`risk order violated ${expectation.ordered[index]} > ${expectation.ordered[index + 1]}`);
+  }
+  let outrankMatched = 0;
+  let outrankTotal = 0;
+  for (const pair of expectation.mustOutrank) {
+    const higher = resolve(pair.higher);
+    const lower = resolve(pair.lower);
+    if (!higher || !lower) continue;
+    outrankTotal += 1;
+    if ((positions.get(higher.id) ?? Infinity) < (positions.get(lower.id) ?? -1)) outrankMatched += 1;
+    else diagnostics.push(`risk order violated ${pair.higher} > ${pair.lower}`);
+  }
+  const actualEdges = new Set(
+    ranked.flatMap((item) =>
+      "graphEdges" in item
+        ? item.graphEdges.map((edge) => `${edge.source}->${edge.target ?? edge.targetText}:${edge.kind}`)
+        : item.edges,
+    ),
+  );
+  const edgeMatched = expectation.expectedEdges.filter((edge) =>
+    actualEdges.has(`${edge.source}->${edge.target}:${edge.kind}`),
+  );
+  diagnostics.push(...expectation.expectedEdges
+    .filter((edge) => !edgeMatched.includes(edge))
+    .map((edge) => `missing risk edge ${edge.source}->${edge.target}:${edge.kind}`));
+
+  let priorityMatched = 0;
+  let priorityTotal = 0;
+  for (const assertion of expectation.units) {
+    const item = resolve(assertion.id);
+    if (!item) continue;
+    if (assertion.minPriority !== undefined) {
+      priorityTotal += 1;
+      if ((item.priority ?? 0) >= assertion.minPriority) priorityMatched += 1;
+      else diagnostics.push(`priority below minimum for ${assertion.id}`);
+    }
+    for (const [factor, minimum] of Object.entries(assertion.factors ?? {})) {
+      priorityTotal += 1;
+      const actual = item.rankFactors?.[factor as keyof NonNullable<ReviewWorkItem["rankFactors"]>] ?? 0;
+      if (actual >= minimum) priorityMatched += 1;
+      else diagnostics.push(`rank factor ${factor} below minimum for ${assertion.id}`);
+    }
+  }
+  return {
+    ordered: ratio(orderedMatched, orderedTotal),
+    mustOutrank: ratio(outrankMatched, outrankTotal),
+    expectedEdges: ratio(edgeMatched.length, expectation.expectedEdges.length),
+    priorityAssertions: ratio(priorityMatched, priorityTotal),
+    diagnostics,
+    rankedIds: ranked.map((item) => item.id),
+  };
+}
 
 type Inspection = { files: Set<string>; symbols: Set<string>; edges: Set<string> };
 
@@ -178,6 +310,8 @@ export function evaluateStages(opts: {
   hermetic: boolean;
   selected?: EvalStage[];
   candidateExecution?: EngineExecution;
+  /** Complete planner output, before selection limits are applied. */
+  planningWorkItems?: PlanningItem[];
   reportMarkdown?: string;
 }): StageEvaluation[] {
   const { definition, trace, execution, result } = opts;
@@ -201,8 +335,35 @@ export function evaluateStages(opts: {
     return "executed" as const;
   };
   const values: StageEvaluation[] = [];
+  const stageOrder: EvalStage[] = [
+    "snapshot",
+    "graph",
+    "planning",
+    "projection",
+    "candidates",
+    "evidence",
+    "verification",
+    "aggregation",
+    "reporting",
+  ];
+  const causalFailures = new Map<EvalStage, StageEvaluation>();
   const push = (value: StageEvaluation) => {
-    if (chosen.has(value.stage)) values.push(value);
+    if (!chosen.has(value.stage)) return;
+    const prior = stageOrder.slice(0, stageOrder.indexOf(value.stage)).find((stage) => causalFailures.has(stage));
+    if (prior && !value.causalStatus && !(value.stage === "evidence" && opts.tier === "isolated")) {
+      value = {
+        ...value,
+        causalStatus: "downstream-blocked",
+        blockedBy: [prior],
+        diagnostics: [...value.diagnostics, `blocked by ${prior} root-failure`],
+      };
+    } else if (!value.causalStatus && value.evaluation !== "not-evaluable" && value.diagnostics.length) {
+      value = { ...value, causalStatus: "root-failure" };
+    } else if (!value.causalStatus && value.evaluation !== "not-evaluable") {
+      value = { ...value, causalStatus: "healthy" };
+    }
+    if (value.causalStatus === "root-failure") causalFailures.set(value.stage, value);
+    values.push(value);
   };
 
   const snapshot = definition.expectations.snapshot;
@@ -224,7 +385,10 @@ export function evaluateStages(opts: {
           direction: "exact",
         },
       ],
-      diagnostics: snapshot.files.filter((item) => !matched.includes(item)).map((item) => `missing ${item.path}`),
+      diagnostics: [
+        ...snapshot.files.filter((item) => !matched.includes(item)).map((item) => `missing ${item.path}`),
+        ...(matched.length !== actual.size ? [`snapshot precision ${matched.length}/${actual.size} is not exact`] : []),
+      ],
     });
   }
 
@@ -332,6 +496,53 @@ export function evaluateStages(opts: {
           name: `optional${item.metric.name[0].toUpperCase()}${item.metric.name.slice(1)}`,
         })),
       );
+      const planningLabels = targets as NonNullable<EvalCase["expectations"]["planning"]>;
+      const riskRanking = planningLabels.riskRanking;
+      if (riskRanking) {
+        const score = scorePlanningRiskRanking(riskRanking, opts.planningWorkItems ?? execution.workItems);
+        metrics.push(
+          { name: "riskRankOrderRecall", value: score.ordered, direction: "higher" },
+          { name: "riskMustOutrankAccuracy", value: score.mustOutrank, direction: "higher" },
+          { name: "riskExpectedEdgeRecall", value: score.expectedEdges, direction: "higher" },
+          { name: "riskPriorityAssertionAccuracy", value: score.priorityAssertions, direction: "higher" },
+        );
+        diagnostics.push(...score.diagnostics);
+      }
+      const selection = planningLabels.selection;
+      if (selection) {
+        const selected = execution.workItems;
+        const selectedKeys = new Set(selected.flatMap(workItemKey));
+        const matched = selection.selected.filter((key) => selectedKeys.has(key));
+        const selectedSymbolKeys = new Set(
+          selected.flatMap((item) =>
+            [...item.primarySymbols, ...item.relatedSymbols].map((symbol) => `${symbol.file}#${symbol.qualifiedName}`),
+          ),
+        );
+        const constrainedMatched = selection.selected.filter((key) => selectedSymbolKeys.has(key));
+        metrics.push(
+          metric("selectionExpectedRecall", matched.length, selection.selected.length),
+          metric("selectionConstrainedRunRecall", constrainedMatched.length, selection.selected.length),
+          { name: "selectionWorkItemBudgetRespected", value: selected.length <= selection.maxWorkItems, direction: "exact" },
+          {
+            name: "selectionTokenBudgetRespected",
+            value: selected.reduce((sum, item) => sum + item.estimatedTokens, 0) <= selection.maxTokens,
+            direction: "exact",
+          },
+          metric("selectionRequiredKindRecall", selection.requiredKinds.filter((kind) => selected.some((item) => item.kind === kind)).length, selection.requiredKinds.length),
+        );
+        diagnostics.push(
+          ...selection.selected.filter((key) => !selectedKeys.has(key)).map((key) => `missing selected unit ${key}`),
+          ...selection.selected
+            .filter((key) => !selectedSymbolKeys.has(key))
+            .map((key) => `missing selected symbol in constrained run ${key}`),
+          ...(selected.length > selection.maxWorkItems
+            ? [`selection work-item budget exceeded ${selected.length}/${selection.maxWorkItems}`]
+            : []),
+          ...(selected.reduce((sum, item) => sum + item.estimatedTokens, 0) > selection.maxTokens
+            ? [`selection token budget exceeded ${selected.reduce((sum, item) => sum + item.estimatedTokens, 0)}/${selection.maxTokens}`]
+            : []),
+        );
+      }
     }
     push({ stage, evaluation: evaluation(stage), metrics, diagnostics });
   }

@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "repositoryFingerprint": "fantasybotcrawler-player-identity-edges-fixture-v1",
+  "gitHead": null,
+  "entries": [
+    { "path": ".matrixcore-ignore", "type": "file", "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b", "size": 1, "executable": false },
+    { "path": "quality.yaml", "type": "file", "sha256": "af5ea79e858540b605c505573b29ad90555092cf449c10b2b6c2d7de3a7648a7", "size": 87, "executable": false },
+    { "path": "fantasy_bot_crawler/crawler_factory.py", "type": "file", "sha256": "03d28a016d7e378455e0c7fe829951e7fa4d03a4bd1a523197698ef1dabef4b2", "size": 369, "executable": false },
+    { "path": "fantasy_bot_crawler/models/player.py", "type": "file", "sha256": "7c9517071fa1efd99245e08351e7adab32c16effddf8b7bce0cd4ac35db2898f", "size": 232, "executable": false },
+    { "path": "fantasy_bot_crawler/models/team.py", "type": "file", "sha256": "bd5b79de4cdcd8242227c772da2dddfb9cbae32edd8b124a4a8c721ac0723a39", "size": 102, "executable": false },
+    { "path": "fantasy_bot_crawler/providers/espn/fantasy_models.py", "type": "file", "sha256": "7fe0a5a74d48e198f0be63a291d36da9f5b1f917f7c7fe5aade2023a9408ec68", "size": 421, "executable": false },
+    { "path": "fantasy_bot_crawler/repositories/player_repository.py", "type": "file", "sha256": "9294055ce744b2a06fe87faa7f0e8c7e28e3481b221a415869c362655e2152a1", "size": 228, "executable": false }
+  ],
+  "deletedPaths": []
+}

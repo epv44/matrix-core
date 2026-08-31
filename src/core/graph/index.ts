@@ -174,6 +174,14 @@ export class RepositoryGraph {
     const symbols = canonicalSymbols(store.symbols());
     const rawEdges = store.edges();
     const ranges = changedRanges(scope.diff);
+    // Explicit replay manifests may intentionally omit line statistics while
+    // declaring a file changed. Treat those entries as whole-file changes so
+    // every declared symbol participates in graph retrieval; normal captured
+    // scopes carry additions/deletions and retain precise hunk ranges.
+    for (const entry of scope.manifest ?? []) {
+      if (entry.additions === undefined && entry.deletions === undefined)
+        ranges.set(entry.path, [{ start: 1, end: Number.MAX_SAFE_INTEGER }]);
+    }
     const changed = symbols.filter((symbol) => {
       if (!scope.changedFiles.includes(symbol.file)) return false;
       const fileRanges = ranges.get(symbol.file);

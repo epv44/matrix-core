@@ -158,6 +158,54 @@ const optionalTargetSchema = z.object({
   edges: z.array(z.string()).default([]),
 });
 
+/** Deterministic assertions for planner risk ordering.  These labels describe
+ * the complete planner output, before selection budgets are applied. */
+const riskRankingUnitSchema = z.object({
+  id: z.string().min(1),
+  minPriority: z.number().finite().optional(),
+  factors: z
+    .object({
+      edgeRisk: z.number().finite().optional(),
+      changedEndpoints: z.number().finite().optional(),
+      productionSurface: z.number().finite().optional(),
+      changedLines: z.number().finite().optional(),
+      graphDegree: z.number().finite().optional(),
+    })
+    .optional(),
+});
+
+export const riskRankingExpectationSchema = z.object({
+  /** Ordered unit IDs or symbol keys, highest risk first. */
+  ordered: z.array(z.string().min(1)).default([]),
+  /** Pairwise ordering constraints, independent of selection limits. */
+  mustOutrank: z
+    .array(
+      z.object({
+        higher: z.string().min(1),
+        lower: z.string().min(1),
+      }),
+    )
+    .default([]),
+  /** Edges expected to contribute to graph-derived risk. */
+  expectedEdges: z
+    .array(
+      z.object({
+        source: z.string().min(1),
+        target: z.string().min(1),
+        kind: z.string().min(1),
+      }),
+    )
+    .default([]),
+  units: z.array(riskRankingUnitSchema).default([]),
+});
+
+const selectionExpectationSchema = z.object({
+  maxWorkItems: z.number().int().positive(),
+  maxTokens: z.number().int().positive(),
+  selected: z.array(z.string().min(1)).default([]),
+  requiredKinds: z.array(z.enum(["local", "interaction"])).default([]),
+});
+
 const snippetExpectationSchema = z.object({
   file: z.string().min(1),
   lineStart: z.number().int().positive().optional(),
@@ -247,6 +295,8 @@ export const evalCaseSchema = z
           .extend({
             route: z.enum(["holistic", "partitioned", "hybrid"]).optional(),
             optionalTargets: optionalTargetSchema.default({ files: [], symbols: [], edges: [] }),
+            riskRanking: riskRankingExpectationSchema.optional(),
+            selection: selectionExpectationSchema.optional(),
           })
           .optional(),
         candidates: z.object({ items: z.array(expectedCandidateSchema).default([]) }).optional(),

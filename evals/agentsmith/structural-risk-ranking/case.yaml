@@ -1,0 +1,80 @@
+schemaVersion: 7
+id: structural-risk-ranking
+status: active
+kind: benchmark
+suite: component
+source:
+  traceId: structural-risk-ranking-trace
+  traceSchemaVersion: 5
+  repositoryFingerprint: structural-risk-ranking-fixture-v1
+  fixture:
+    path: fixture/repo
+    manifestPath: fixture-manifest.json
+    digest: 8065e384a9c53a69b068b7db835a3ac8a7fe1969e5e4fe81e104093fb7fca957
+  project: synthetic-risk-ranking
+sanitization:
+  reviewed: true
+  absolutePathsRemoved: true
+  sensitiveContentReviewed: true
+  redistributable: true
+groundTruth:
+  reviewed: true
+  reviewedBy: codex-review
+  reviewedAt: "2026-08-29T00:00:00.000Z"
+  contractFamily: structural-graph-risk-ranking
+  exhaustiveCandidates: true
+expectations:
+  snapshot:
+    files:
+      - { path: src/models/player.py, changeKind: modified }
+      - { path: src/models/identity.py, changeKind: modified }
+      - { path: src/models/team.py, changeKind: modified }
+      - { path: src/repositories/player_repository.py, changeKind: modified }
+      - { path: src/factories/player_factory.py, changeKind: modified }
+  graph:
+    files: [src/models/player.py, src/models/identity.py, src/repositories/player_repository.py, src/factories/player_factory.py]
+    symbols: [src/models/player.py#Player, src/models/identity.py#ExternalIdentity, src/repositories/player_repository.py#PlayerRepository.save, src/factories/player_factory.py#make_player]
+    edges:
+      - src/repositories/player_repository.py:PlayerRepository.save->src/models/player.py:Player:references
+      - src/repositories/player_repository.py:PlayerRepository.save->src/models/identity.py:ExternalIdentity:references
+      - src/factories/player_factory.py:make_player->src/models/player.py:Player:references
+      - src/factories/player_factory.py:make_player->src/models/identity.py:ExternalIdentity:references
+  planning:
+    route: partitioned
+    files: [src/factories/player_factory.py, src/models/player.py, src/models/identity.py]
+    symbols: [src/models/player.py#Player, src/models/identity.py#ExternalIdentity]
+    edges: []
+    riskRanking:
+      ordered: [src/models/identity.py#ExternalIdentity, src/models/player.py#Player, src/models/team.py#Team]
+      mustOutrank:
+        - { higher: src/models/player.py#Player, lower: src/models/team.py#Team }
+        - { higher: src/models/identity.py#ExternalIdentity, lower: src/models/team.py#Team }
+      expectedEdges:
+        - { source: src/repositories/player_repository.py:PlayerRepository.save, target: src/models/player.py:Player, kind: references }
+        - { source: src/repositories/player_repository.py:PlayerRepository.save, target: src/models/identity.py:ExternalIdentity, kind: references }
+        - { source: src/factories/player_factory.py:make_player, target: src/models/player.py:Player, kind: references }
+        - { source: src/factories/player_factory.py:make_player, target: src/models/identity.py:ExternalIdentity, kind: references }
+      units:
+        - id: src/models/player.py#Player
+          minPriority: 1
+          factors: { edgeRisk: 1, changedEndpoints: 1, graphDegree: 2 }
+        - id: src/models/identity.py#ExternalIdentity
+          minPriority: 1
+          factors: { edgeRisk: 1, changedEndpoints: 1, graphDegree: 2 }
+        - id: src/models/team.py#Team
+          minPriority: 0
+          factors: { edgeRisk: 0, changedEndpoints: 0, graphDegree: 0 }
+    selection:
+      maxWorkItems: 4
+      maxTokens: 10000
+      selected: [src/models/player.py#Player, src/models/identity.py#ExternalIdentity]
+      requiredKinds: [local, interaction]
+  aggregation:
+    status: completed
+    outcome: clear
+    findings: []
+narrative:
+  summary: Draft deterministic ranking case proving imported and referenced domain symbols outrank unreferenced siblings.
+  trueCodeFlow: Player and ExternalIdentity are imported and used by both a repository and a factory, creating graph edges and raising their structural risk above the unreferenced Team sibling.
+  references: [src/repositories/player_repository.py:5, src/factories/player_factory.py:6]
+tags: [promoted, deterministic, risk-ranking, graph-edges, selection, python]

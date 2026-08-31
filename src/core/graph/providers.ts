@@ -114,7 +114,7 @@ export function scanFile(
 
 export class TreeSitterProvider implements GraphProvider {
   readonly id = "tree-sitter-wasm";
-  readonly version = "0.26.12-vscode-0.3.1-v2";
+  readonly version = "0.26.12-vscode-0.3.1-v3-python-reference-edges";
   supports(workspace: LanguageWorkspace) {
     return workspace.language === "typescript" || workspace.language === "python";
   }
@@ -128,6 +128,7 @@ export class TreeSitterProvider implements GraphProvider {
     const scanned = files
       .filter((file) => file.language === "python")
       .map((file) => scanWasmFile(root, file, languages.get("python")!));
+    addPythonReferenceEdges(root, scanned);
     return {
       files: scanned.map((item) => item.file),
       symbols: scanned.flatMap((item) => item.symbols),
@@ -135,6 +136,73 @@ export class TreeSitterProvider implements GraphProvider {
       provider: this.id,
       providerVersion: this.version,
     };
+  }
+}
+
+/** Resolve Python imports and usages against the workspace symbols.  The
+ * tree-sitter grammar gives us declarations, but not Python's module binding
+ * semantics; this deterministic pass supplies exact cross-file references
+ * without depending on an interpreter or project import side effects. */
+function addPythonReferenceEdges(
+  root: string,
+  scanned: Array<{ file: GraphFile; symbols: GraphSymbol[]; edges: GraphEdge[] }>,
+) {
+  const moduleSymbols = new Map<string, GraphSymbol>();
+  const modulePath = (file: string) => file.replace(/\.(py|pyi)$/, "").replace(/\\/g, "/");
+  for (const item of scanned)
+    for (const symbol of item.symbols) moduleSymbols.set(`${modulePath(item.file.path)}:${symbol.name}`, symbol);
+
+  for (const item of scanned) {
+    let source: string;
+    try {
+      source = fs.readFileSync(path.join(root, item.file.path), "utf8");
+    } catch {
+      continue;
+    }
+    const bindings = new Map<string, GraphSymbol>();
+    for (const match of source.matchAll(/^\s*from\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s+import\s+(.+)$/gm)) {
+      const module = match[1].replaceAll(".", "/");
+      for (const part of match[2].split(",")) {
+        const parsed = /^\s*([A-Za-z_]\w*)(?:\s+as\s+([A-Za-z_]\w*))?/.exec(part);
+        if (!parsed) continue;
+        const target = moduleSymbols.get(`${module}:${parsed[1]}`);
+        if (target) bindings.set(parsed[2] ?? parsed[1], target);
+      }
+    }
+    for (const match of source.matchAll(/^\s*import\s+([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)(?:\s+as\s+([A-Za-z_]\w*))?/gm)) {
+      const importedModule = match[1].replaceAll(".", "/");
+      const alias = match[2] ?? importedModule.split(".").at(-1)!;
+      for (const symbol of item.symbols) {
+        const target = moduleSymbols.get(`${importedModule}:${symbol.name}`);
+        if (target) bindings.set(alias, target);
+      }
+    }
+    if (!bindings.size) continue;
+    const declarations = [...item.symbols];
+    const ownerAt = (line: number) =>
+      declarations
+        .filter((symbol) => symbol.startLine <= line && symbol.endLine >= line)
+        .sort((a, b) => b.startLine - a.startLine || a.endLine - b.endLine)[0] ?? declarations[0];
+    for (const [binding, target] of bindings) {
+      const usage = new RegExp(`\\b${binding}\\b`, "g");
+      for (const match of source.matchAll(usage)) {
+        const line = lineAt(source, match.index ?? 0);
+        const lineText = source.split("\n")[line - 1] ?? "";
+        if (/^\s*(?:from|import)\b/.test(lineText)) continue;
+        const owner = ownerAt(line);
+        if (!owner) continue;
+        const edge: GraphEdge = {
+          source: `${item.file.path}:${owner.qualifiedName}`,
+          target: `${target.file}:${target.qualifiedName}`,
+          targetText: target.name,
+          kind: "references",
+          confidence: "exact",
+          provider: "tree-sitter-wasm",
+        };
+        if (!item.edges.some((existing) => existing.source === edge.source && existing.target === edge.target && existing.kind === edge.kind))
+          item.edges.push(edge);
+      }
+    }
   }
 }
 
@@ -149,7 +217,7 @@ function scanWasmFile(root: string, file: GraphFile, language: Language) {
   }
   const symbols: GraphSymbol[] = [];
   const edges: GraphEdge[] = [];
-  const visit = (node: any) => {
+  const visit = (node: any, className?: string) => {
     const nameNode = node.childForFieldName?.("name");
     const type = String(node.type);
     if (
@@ -158,20 +226,50 @@ function scanWasmFile(root: string, file: GraphFile, language: Language) {
     ) {
       const name = source.slice(nameNode.startIndex, nameNode.endIndex);
       const kind: GraphSymbol["kind"] = type.includes("class") ? "class" : "function";
+      const qualifiedName = className && kind === "function" ? `${className}.${name}` : name;
       symbols.push({
         file: file.path,
         provider: "tree-sitter-wasm",
         kind,
         name,
-        qualifiedName: name,
+        qualifiedName,
         startLine: node.startPosition.row + 1,
         endLine: node.endPosition.row + 1,
         contentHash: file.contentHash,
       });
     }
-    for (let index = 0; index < node.childCount; index++) visit(node.child(index));
+    const nextClass = type === "class_definition" && nameNode ? source.slice(nameNode.startIndex, nameNode.endIndex) : className;
+    for (let index = 0; index < node.childCount; index++) visit(node.child(index), nextClass);
   };
   visit(tree.rootNode);
+  // Keep declaration extraction total for valid Python syntax that a
+  // particular WASM grammar version may expose under an unexpected node
+  // shape (notably annotated methods).  The line-oriented fallback is only
+  // for declarations; references still come from the binding pass below.
+  const classStack: Array<{ indent: number; name: string }> = [];
+  for (const [index, line] of source.split("\n").entries()) {
+    const classMatch = /^(\s*)class\s+([A-Za-z_]\w*)/.exec(line);
+    const functionMatch = /^(\s*)(?:async\s+)?def\s+([A-Za-z_]\w*)/.exec(line);
+    const indent = (classMatch?.[1] ?? functionMatch?.[1] ?? "").length;
+    while (classStack.length && indent <= classStack.at(-1)!.indent) classStack.pop();
+    if (classMatch) classStack.push({ indent, name: classMatch[2] });
+    if (functionMatch) {
+      const name = functionMatch[2];
+      const owner = classStack.at(-1)?.name;
+      const qualifiedName = owner ? `${owner}.${name}` : name;
+      if (!symbols.some((symbol) => symbol.qualifiedName === qualifiedName))
+        symbols.push({
+          file: file.path,
+          provider: "tree-sitter-wasm",
+          kind: "function",
+          name,
+          qualifiedName,
+          startLine: index + 1,
+          endLine: source.split("\n").length,
+          contentHash: file.contentHash,
+        });
+    }
+  }
   const sourceSymbol = symbols[0]?.qualifiedName;
   if (sourceSymbol) {
     for (const match of source.matchAll(/^(?:from\s+([\w.]+)\s+import|import\s+)([\w.]+)/gm)) {

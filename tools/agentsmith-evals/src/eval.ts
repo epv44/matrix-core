@@ -148,16 +148,22 @@ export async function runEvalCases(opts: {
   replay?: EvalReplayMode;
   stages?: EvalStage[];
   label?: string;
+  allowDrafts?: boolean;
 }) {
   const slugs = opts.slugs?.length ? opts.slugs : listEvalCases(opts.root);
   if (!slugs.length) throw new Error("No AgentSmith eval cases found");
+  const definitions = new Map(slugs.map((slug) => [slug, readEvalCase(opts.root, slug)]));
+  const activeSlugs = slugs.filter((slug) => definitions.get(slug)!.definition.status === "active");
+  const draftSlugs = slugs.filter((slug) => definitions.get(slug)!.definition.status === "draft");
+  if (draftSlugs.length && !opts.allowDrafts)
+    throw new Error(`Eval case ${draftSlugs[0]} is draft and cannot be replayed`);
   const replay = opts.replay ?? "live";
   const modes = opts.modes?.length ? opts.modes : (["partitioned-interactions"] as EvalMode[]);
   const repeat = Math.max(1, opts.repeat ?? 1);
   const cases = [];
   for (const slug of slugs) {
-    const { definition, trace } = readEvalCase(opts.root, slug);
-    if (definition.status !== "active") throw new Error(`Eval case ${slug} is draft and cannot be replayed`);
+    const { definition, trace } = definitions.get(slug)!;
+    const scored = definition.status === "active";
     if (!definition.source.fixture) throw new Error(`Eval case ${slug} has no frozen fixture`);
     const expectedFindings = definition.expectations.aggregation?.findings ?? [];
     const expectedOutcome = definition.expectations.aggregation?.outcome ?? null;
@@ -257,6 +263,7 @@ export async function runEvalCases(opts: {
             hermetic: true,
             selected: opts.stages,
             candidateExecution: candidateExecution?.execution,
+            planningWorkItems: execution.execution.plannerManifest,
             reportMarkdown: formatAgentSmithReview(execution.result),
           });
           const recordedMisses =
@@ -292,7 +299,7 @@ export async function runEvalCases(opts: {
             inspectionTargets,
             stages,
             qualityEvaluable:
-              replay !== "stage" && !recordedMisses.length && Boolean(definition.expectations.aggregation),
+              scored && replay !== "stage" && !recordedMisses.length && Boolean(definition.expectations.aggregation),
             outcomeCorrect:
               replay !== "stage" && !recordedMisses.length && expectedOutcome
                 ? execution.result.outcome === expectedOutcome
@@ -303,6 +310,7 @@ export async function runEvalCases(opts: {
             diagnostics: evaluationDiagnostics(execution),
             errors: recordedMisses.length ? [] : (execution.result.errors ?? []),
             incompatibilities: recordedMisses,
+            evaluationRole: scored ? ("scored" as const) : ("diagnostic" as const),
             provenance: {
               fixtureDigest: replayWorkspace.fixtureDigest,
               traceSchemaVersion: trace.schemaVersion,
@@ -353,6 +361,7 @@ export async function runEvalCases(opts: {
             outputTokens: 0,
             errors: incompatible ? [] : [message],
             incompatibilities: incompatible ? [message] : [],
+            evaluationRole: scored ? ("scored" as const) : ("diagnostic" as const),
           });
         } finally {
           cleanup?.();
@@ -361,6 +370,10 @@ export async function runEvalCases(opts: {
     cases.push({
       id: slug,
       kind: definition.kind,
+      suite: definition.suite,
+      caseStatus: definition.status,
+      scored,
+      evaluationRole: scored ? ("scored" as const) : ("diagnostic" as const),
       contractFamily: definition.groundTruth?.contractFamily ?? definition.id,
       expectedOutcome,
       results,
@@ -372,7 +385,14 @@ export async function runEvalCases(opts: {
     runId,
     label: opts.label ?? null,
     createdAt: new Date().toISOString(),
-    corpusHash: corpusHash(opts.root, slugs),
+    corpusHash: corpusHash(opts.root, activeSlugs),
+    evaluatedCorpusHash: corpusHash(opts.root, slugs),
+    corpus: {
+      active: activeSlugs,
+      drafts: draftSlugs,
+      activeCount: activeSlugs.length,
+      draftCount: draftSlugs.length,
+    },
     replay,
     modes,
     repeat,
@@ -381,7 +401,7 @@ export async function runEvalCases(opts: {
   const report = {
     ...reportBase,
     summary: summarizeEvalReport(reportBase),
-    stage1Summary: aggregateStage1Metrics(reportBase),
+    stage1Summary: aggregateStage1Metrics({ ...reportBase, cases: cases.filter((item) => item.scored) }),
   };
   const directory = path.join(opts.root, ".quality", "evals", "runs", runId);
   fs.mkdirSync(directory, { recursive: true });
@@ -448,49 +468,51 @@ function summarizeStages(results: any[]) {
   );
 }
 
-export function summarizeEvalReport(report: { cases: Array<{ id: string; results: any[] }> }) {
-  return report.cases.flatMap((evalCase) => {
-    const modes = [...new Set(evalCase.results.map((result) => result.mode as string))];
-    return modes.map((mode) => {
-      const results = evalCase.results.filter((result) => result.mode === mode);
-      const quality = results.filter((result) => result.qualityEvaluable);
-      return {
-        caseId: evalCase.id,
-        mode,
-        runs: results.length,
-        precision: mean(numeric(quality.map((result) => result.metrics?.precision))),
-        recall: mean(numeric(quality.map((result) => result.metrics?.recall))),
-        f1: mean(numeric(quality.map((result) => result.metrics?.f1))),
-        changedFileCoverage: mean(numeric(results.map((result) => result.benchmark?.coverage.changedFiles.rate))),
-        changedLineCoverage: mean(numeric(results.map((result) => result.benchmark?.coverage.changedLines.rate))),
-        candidateAdjudication: mean(numeric(results.map((result) => result.benchmark?.candidates.adjudicationRate))),
-        evidenceRelevance: mean(numeric(results.map((result) => result.benchmark?.evidence.relevanceRate))),
-        inspectionFileRecall: mean(numeric(results.map((result) => result.inspectionTargets?.files.rate))),
-        inspectionSymbolRecall: mean(numeric(results.map((result) => result.inspectionTargets?.symbols.rate))),
-        inspectionEdgeRecall: mean(numeric(results.map((result) => result.inspectionTargets?.edges.rate))),
-        durationMs: mean(numeric(results.map((result) => result.durationMs))),
-        inputTokens: mean(numeric(results.map((result) => result.inputTokens))),
-        outputTokens: mean(numeric(results.map((result) => result.outputTokens))),
-        honestRunRate: mean(results.map((result) => (result.benchmark?.honesty.honest ? 1 : 0))),
-        errorRuns: results.filter((result) => result.errors?.length).length,
-        incompatibleRuns: results.filter((result) => result.incompatibilities?.length).length,
-        outcomeAgreement:
-          results.length > 0
-            ? Math.max(
-                ...[...new Set(results.map((result) => result.outcome))].map(
-                  (outcome) => results.filter((result) => result.outcome === outcome).length / results.length,
-                ),
-              )
-            : null,
-        stageMetrics: summarizeStages(results),
-      };
+export function summarizeEvalReport(report: { cases: Array<{ id: string; scored?: boolean; results: any[] }> }) {
+  return report.cases
+    .filter((evalCase) => evalCase.scored !== false)
+    .flatMap((evalCase) => {
+      const modes = [...new Set(evalCase.results.map((result) => result.mode as string))];
+      return modes.map((mode) => {
+        const results = evalCase.results.filter((result) => result.mode === mode);
+        const quality = results.filter((result) => result.qualityEvaluable);
+        return {
+          caseId: evalCase.id,
+          mode,
+          runs: results.length,
+          precision: mean(numeric(quality.map((result) => result.metrics?.precision))),
+          recall: mean(numeric(quality.map((result) => result.metrics?.recall))),
+          f1: mean(numeric(quality.map((result) => result.metrics?.f1))),
+          changedFileCoverage: mean(numeric(results.map((result) => result.benchmark?.coverage.changedFiles.rate))),
+          changedLineCoverage: mean(numeric(results.map((result) => result.benchmark?.coverage.changedLines.rate))),
+          candidateAdjudication: mean(numeric(results.map((result) => result.benchmark?.candidates.adjudicationRate))),
+          evidenceRelevance: mean(numeric(results.map((result) => result.benchmark?.evidence.relevanceRate))),
+          inspectionFileRecall: mean(numeric(results.map((result) => result.inspectionTargets?.files.rate))),
+          inspectionSymbolRecall: mean(numeric(results.map((result) => result.inspectionTargets?.symbols.rate))),
+          inspectionEdgeRecall: mean(numeric(results.map((result) => result.inspectionTargets?.edges.rate))),
+          durationMs: mean(numeric(results.map((result) => result.durationMs))),
+          inputTokens: mean(numeric(results.map((result) => result.inputTokens))),
+          outputTokens: mean(numeric(results.map((result) => result.outputTokens))),
+          honestRunRate: mean(results.map((result) => (result.benchmark?.honesty.honest ? 1 : 0))),
+          errorRuns: results.filter((result) => result.errors?.length).length,
+          incompatibleRuns: results.filter((result) => result.incompatibilities?.length).length,
+          outcomeAgreement:
+            results.length > 0
+              ? Math.max(
+                  ...[...new Set(results.map((result) => result.outcome))].map(
+                    (outcome) => results.filter((result) => result.outcome === outcome).length / results.length,
+                  ),
+                )
+              : null,
+          stageMetrics: summarizeStages(results),
+        };
+      });
     });
-  });
 }
 
 export function compareEvalReports(
-  baseline: { corpusHash?: string; cases: Array<{ id: string; results: any[] }> },
-  current: { corpusHash?: string; cases: Array<{ id: string; results: any[] }> },
+  baseline: { corpusHash?: string; cases: Array<{ id: string; scored?: boolean; results: any[] }> },
+  current: { corpusHash?: string; cases: Array<{ id: string; scored?: boolean; results: any[] }> },
 ) {
   if (baseline.corpusHash && current.corpusHash && baseline.corpusHash !== current.corpusHash)
     throw new Error("Eval reports use different corpus hashes and cannot be compared");

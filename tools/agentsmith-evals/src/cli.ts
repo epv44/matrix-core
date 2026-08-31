@@ -7,6 +7,8 @@ import { compareEvalReports, runEvalCases, type EvalMode, type EvalReplayMode } 
 import { corpusCoverage } from "./coverage.js";
 import { attachFixture, corpusHash, curateTrace, inventory, listEvalCases, validateEvalCases } from "./case.js";
 import type { EvalStage } from "./stage-score.js";
+import { runCanonicalEvalSuite } from "./suite.js";
+import { renderEvalHtml } from "./html-report.js";
 import {
   readStage1Baseline,
   summarizeStage1Baseline,
@@ -132,6 +134,52 @@ program
     console.log(opts.json ? JSON.stringify(reports, null, 2) : reports.map((item) => item.markdown).join("\n\n"));
     if (reports.some((report) => report.cases.some((item) => item.results.some((result) => result.errors.length))))
       process.exitCode = 1;
+  });
+
+program
+  .command("suite")
+  .description("Run the canonical active and diagnostic AgentSmith eval matrix")
+  .option("--root <path>", "MatrixCore repository root", process.cwd())
+  .option("--stage <stage...>", "Selected pipeline stages")
+  .option("--label <name>", "Human-readable run label")
+  .option("--output <path>", "Suite JSON output path")
+  .option("--json", "Print the complete suite JSON", false)
+  .action(async (opts) => {
+    const repositoryRoot = root(opts.root);
+    const selectedStages = opts.stage as EvalStage[] | undefined;
+    if (selectedStages?.some((stage) => !stages.includes(stage))) throw new Error("Invalid pipeline stage");
+    const suite = await runCanonicalEvalSuite({
+      root: repositoryRoot,
+      stages: selectedStages,
+      label: opts.label,
+      output: opts.output,
+    });
+    console.log(
+      opts.json
+        ? JSON.stringify(suite, null, 2)
+        : [
+            `AgentSmith canonical suite: ${suite.status}`,
+            `Active cases: ${suite.corpus.activeCount}; diagnostic drafts: ${suite.corpus.draftCount}`,
+            `Promotion eligible: ${suite.promotable ? "yes" : "no"}`,
+            `Result: ${suite.output}`,
+          ].join("\n"),
+    );
+    if (suite.status !== "pass") process.exitCode = 1;
+  });
+
+program
+  .command("html <input>")
+  .description("Render a suite or eval JSON artifact as a self-contained HTML walkthrough")
+  .option("--root <path>", "MatrixCore repository root", process.cwd())
+  .option("--output <path>", "HTML output path", "eval-report.html")
+  .action((input, opts) => {
+    const repositoryRoot = root(opts.root);
+    const source = path.resolve(repositoryRoot, input);
+    const report = JSON.parse(fs.readFileSync(source, "utf8"));
+    const output = path.resolve(repositoryRoot, opts.output);
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    fs.writeFileSync(output, renderEvalHtml(report));
+    console.log(output);
   });
 
 program

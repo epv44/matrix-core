@@ -1,8 +1,90 @@
 import { describe, expect, it } from "vitest";
-import { evaluateStages } from "../../tools/agentsmith-evals/src/stage-score.js";
+import { evalCaseSchema } from "../../tools/agentsmith-evals/src/case.js";
+import { evaluateStages, scorePlanningRiskRanking } from "../../tools/agentsmith-evals/src/stage-score.js";
 import { corpusCoverage } from "../../tools/agentsmith-evals/src/coverage.js";
 
 describe("AgentSmith stage scorecards", () => {
+  const unit = (id: string, priority: number, edgeRisk = 0) =>
+    ({
+      id,
+      kind: "local",
+      priority,
+      primarySymbols: [{ file: `${id}.ts`, name: id, qualifiedName: id }],
+      relatedSymbols: [],
+      graphEdges: edgeRisk
+        ? [{ source: `${id}.ts:${id}`, target: "repo.ts:Repository", targetText: "Repository", kind: "references" }]
+        : [],
+      code: [],
+      rules: [],
+      estimatedTokens: 100,
+      rankFactors: { edgeRisk, changedEndpoints: 1, productionSurface: 1, changedLines: 1, graphDegree: edgeRisk ? 1 : 0 },
+    }) as any;
+
+  it("scores structural risk ordering without consulting selection budgets", () => {
+    const player = unit("Player", 230, 100);
+    const sibling = unit("Sibling", 120);
+    const expectation = {
+      ordered: ["Player", "Sibling"],
+      mustOutrank: [{ higher: "Player", lower: "Sibling" }],
+      expectedEdges: [{ source: "Player.ts:Player", target: "repo.ts:Repository", kind: "references" }],
+      units: [{ id: "Player", minPriority: 200, factors: { edgeRisk: 80 } }],
+    } as any;
+    const full = scorePlanningRiskRanking(expectation, [sibling, player]);
+    expect(full.ordered).toBe(1);
+    expect(full.mustOutrank).toBe(1);
+    expect(full.expectedEdges).toBe(1);
+    expect(full.priorityAssertions).toBe(1);
+    // A smaller selection budget is intentionally not an input to ranking.
+    expect(scorePlanningRiskRanking(expectation, [player, sibling]).rankedIds).toEqual(full.rankedIds);
+  });
+
+  it("scores selected units and hard selection budgets independently", () => {
+    const player = unit("Player", 230, 100);
+    const sibling = unit("Sibling", 120);
+    const definition = {
+      expectations: {
+        planning: {
+          files: [], symbols: [], edges: [], forbiddenFiles: [], forbiddenSymbols: [], forbiddenEdges: [], paths: [],
+          selection: { maxWorkItems: 2, maxTokens: 250, selected: ["Player"], requiredKinds: ["local"] },
+        },
+      },
+    } as any;
+    const stages = evaluateStages({
+      definition,
+      trace: { scope: { changedFiles: [], manifest: [] } } as any,
+      execution: {
+        workItems: [player],
+        projection: { code: [], audit: [] },
+        candidates: [], verification: [], evidence: {},
+        route: { mode: "partitioned" },
+      } as any,
+      result: { findings: [], coverage: { candidateTokensEstimated: 200, candidateTokenBudget: 250 } } as any,
+      tier: "stage", hermetic: true, planningWorkItems: [player, sibling],
+    });
+    const planning = stages.find((stage) => stage.stage === "planning")!;
+    expect(planning.metrics.find((metric) => metric.name === "selectionExpectedRecall")?.value).toBe(1);
+    expect(planning.metrics.find((metric) => metric.name === "selectionWorkItemBudgetRespected")?.value).toBe(true);
+    expect(planning.metrics.find((metric) => metric.name === "selectionTokenBudgetRespected")?.value).toBe(true);
+  });
+
+  it("rejects malformed risk-ranking assertions", () => {
+    const base = {
+      schemaVersion: 7,
+      id: "risk-schema",
+      status: "draft",
+      kind: "benchmark",
+      source: { traceId: "trace", traceSchemaVersion: 5, fixture: null },
+      sanitization: { reviewed: false, absolutePathsRemoved: true, sensitiveContentReviewed: false, redistributable: false },
+      expectations: {
+        planning: {
+          files: [], symbols: [], edges: [], forbiddenFiles: [], forbiddenSymbols: [], forbiddenEdges: [],
+          riskRanking: { ordered: ["Player"], mustOutrank: [{ higher: "", lower: "Sibling" }] },
+        },
+      },
+    };
+    expect(() => evalCaseSchema.parse(base)).toThrow(/higher/);
+  });
+
   it("attributes a present graph target and a missing planner selection to different stages", () => {
     const definition = {
       expectations: {
@@ -344,8 +426,8 @@ describe("AgentSmith stage scorecards", () => {
   it("excludes conformance fixtures from benchmark coverage", () => {
     const coverage = corpusCoverage(process.cwd());
     expect(coverage.conformance).toBe(2);
-    expect(coverage.activeBenchmarks).toBe(9);
-    expect(coverage.activeComponents).toBe(9);
+    expect(coverage.activeBenchmarks).toBe(11);
+    expect(coverage.activeComponents).toBe(11);
     expect(coverage.drafts).toBe(1);
   });
 });

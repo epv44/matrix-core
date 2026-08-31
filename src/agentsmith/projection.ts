@@ -487,11 +487,20 @@ function selectionNovelty(item: ReviewWorkItem, selected: ReviewWorkItem[]): num
     selected.flatMap((entry) => entry.primarySymbols.map((symbol) => subsystem(symbol.file))),
   );
   const selectedEdges = new Set(selected.flatMap((entry) => entry.graphEdges.map((edge) => edge.kind)));
+  const selectedSymbols = new Set(
+    selected.flatMap((entry) =>
+      [...entry.primarySymbols, ...entry.relatedSymbols].map((symbol) => `${symbol.file}#${symbol.qualifiedName}`),
+    ),
+  );
   const primaryFiles = item.primarySymbols.map((symbol) => symbol.file);
+  const symbols = [...item.primarySymbols, ...item.relatedSymbols].map(
+    (symbol) => `${symbol.file}#${symbol.qualifiedName}`,
+  );
   return (
     (primaryFiles.some((file) => !selectedSubsystems.has(subsystem(file))) ? 4 : 0) +
     (primaryFiles.some((file) => !selectedFiles.has(file)) ? 2 : 0) +
-    (item.graphEdges.some((edge) => !selectedEdges.has(edge.kind)) ? 1 : 0)
+    (item.graphEdges.some((edge) => !selectedEdges.has(edge.kind)) ? 1 : 0) +
+    (symbols.some((symbol) => !selectedSymbols.has(symbol)) ? 2 : 0)
   );
 }
 
@@ -534,11 +543,40 @@ export function selectWorkItems(items: ReviewWorkItem[], limit: number, tokenBud
     if (!fitting.length) break;
     const highestPriority = fitting[0].priority ?? 0;
     const riskBand = fitting.filter((item) => (item.priority ?? 0) === highestPriority);
-    riskBand.sort(
+    let candidates = riskBand;
+    // Preserve bounded risk ordering while ensuring a constrained run does
+    // not spend every slot repeating the same interaction endpoint. Once an
+    // interaction is selected, prefer the highest-risk fitting item that
+    // introduces a new symbol; this keeps structural diversity observable
+    // under small work-item budgets.
+    if (selected.some((item) => item.kind === "interaction")) {
+      const selectedSymbols = new Set(
+        selected.flatMap((entry) =>
+          [...entry.primarySymbols, ...entry.relatedSymbols].map((symbol) => `${symbol.file}#${symbol.qualifiedName}`),
+        ),
+      );
+      const novel = fitting.filter((item) =>
+        [...item.primarySymbols, ...item.relatedSymbols].some(
+          (symbol) => !selectedSymbols.has(`${symbol.file}#${symbol.qualifiedName}`),
+        ),
+      );
+      const novelInteractions = fitting.filter((item) => {
+        if (item.kind !== "interaction") return false;
+        const selectedTargets = new Set(
+          selected.flatMap((entry) => entry.relatedSymbols.map((symbol) => `${symbol.file}#${symbol.qualifiedName}`)),
+        );
+        return item.relatedSymbols.some(
+          (symbol) => !selectedTargets.has(`${symbol.file}#${symbol.qualifiedName}`),
+        );
+      });
+      if (novelInteractions.length) candidates = novelInteractions;
+      else if (novel.length) candidates = novel;
+    }
+    candidates.sort(
       (left, right) =>
         selectionNovelty(right, selected) - selectionNovelty(left, selected) || workItemRank(left, right),
     );
-    const item = riskBand[0];
+    const item = candidates[0];
     const novelty = selectionNovelty(item, selected);
     item.selectionReason = `ranked-fill; priority=${item.priority ?? 0}; novelty=${novelty}; semantic=${workItemSemanticKey(item)}`;
     selected.push(item);

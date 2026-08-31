@@ -1,0 +1,75 @@
+schemaVersion: 7
+id: fantasybotcrawler-player-identity-edges
+status: active
+kind: benchmark
+suite: component
+source:
+  traceId: fantasybotcrawler-player-identity-edges-trace
+  traceSchemaVersion: 5
+  repositoryFingerprint: fantasybotcrawler-player-identity-edges-fixture-v1
+  fixture:
+    path: fixture/repo
+    manifestPath: fixture-manifest.json
+    digest: fe2d35e4247164bb2362a3f5113b5a71676b0ffce0c72f994e5715c8039b7d65
+  project: fantasy-bot-crawler
+sanitization:
+  reviewed: true
+  absolutePathsRemoved: true
+  sensitiveContentReviewed: true
+  redistributable: true
+groundTruth:
+  reviewed: true
+  reviewedBy: codex-review
+  reviewedAt: "2026-08-29T00:00:00.000Z"
+  contractFamily: player-external-identity-structural-edges
+  exhaustiveCandidates: true
+expectations:
+  snapshot:
+    files:
+      - { path: fantasy_bot_crawler/models/player.py, changeKind: modified }
+      - { path: fantasy_bot_crawler/models/team.py, changeKind: modified }
+      - { path: fantasy_bot_crawler/repositories/player_repository.py, changeKind: modified }
+      - { path: fantasy_bot_crawler/providers/espn/fantasy_models.py, changeKind: modified }
+      - { path: fantasy_bot_crawler/crawler_factory.py, changeKind: modified }
+  graph:
+    files: [fantasy_bot_crawler/models/player.py, fantasy_bot_crawler/models/team.py, fantasy_bot_crawler/repositories/player_repository.py, fantasy_bot_crawler/providers/espn/fantasy_models.py, fantasy_bot_crawler/crawler_factory.py]
+    symbols: [fantasy_bot_crawler/models/player.py#Player, fantasy_bot_crawler/models/player.py#ExternalIdentity, fantasy_bot_crawler/models/team.py#Team]
+    edges:
+      - fantasy_bot_crawler/repositories/player_repository.py:PlayerRepository.save->fantasy_bot_crawler/models/player.py:Player:references
+      - fantasy_bot_crawler/repositories/player_repository.py:PlayerRepository.save->fantasy_bot_crawler/models/player.py:ExternalIdentity:references
+      - fantasy_bot_crawler/providers/espn/fantasy_models.py:to_player->fantasy_bot_crawler/models/player.py:Player:references
+      - fantasy_bot_crawler/providers/espn/fantasy_models.py:to_external_identity->fantasy_bot_crawler/models/player.py:ExternalIdentity:references
+      - fantasy_bot_crawler/crawler_factory.py:materialize_identity->fantasy_bot_crawler/models/player.py:Player:references
+      - fantasy_bot_crawler/crawler_factory.py:materialize_identity->fantasy_bot_crawler/models/player.py:ExternalIdentity:references
+  projection:
+    requiredSnippets:
+      - { file: fantasy_bot_crawler/models/player.py, lineStart: 4, lineEnd: 12, contains: [Player, ExternalIdentity] }
+      - { file: fantasy_bot_crawler/repositories/player_repository.py, lineStart: 1, lineEnd: 6, contains: [Player, ExternalIdentity] }
+      - { file: fantasy_bot_crawler/providers/espn/fantasy_models.py, lineStart: 3, lineEnd: 12, contains: [to_player, to_external_identity] }
+  planning:
+    route: partitioned
+    files: [fantasy_bot_crawler/repositories/player_repository.py, fantasy_bot_crawler/providers/espn/fantasy_models.py, fantasy_bot_crawler/crawler_factory.py]
+    symbols: [fantasy_bot_crawler/models/player.py#Player, fantasy_bot_crawler/models/player.py#ExternalIdentity]
+    riskRanking:
+      ordered: [fantasy_bot_crawler/models/player.py#Player, fantasy_bot_crawler/models/player.py#ExternalIdentity, fantasy_bot_crawler/models/team.py#Team]
+      mustOutrank:
+        - { higher: fantasy_bot_crawler/models/player.py#Player, lower: fantasy_bot_crawler/models/team.py#Team }
+        - { higher: fantasy_bot_crawler/models/player.py#ExternalIdentity, lower: fantasy_bot_crawler/models/team.py#Team }
+      expectedEdges:
+        - { source: fantasy_bot_crawler/repositories/player_repository.py:PlayerRepository.save, target: fantasy_bot_crawler/models/player.py:Player, kind: references }
+        - { source: fantasy_bot_crawler/repositories/player_repository.py:PlayerRepository.save, target: fantasy_bot_crawler/models/player.py:ExternalIdentity, kind: references }
+        - { source: fantasy_bot_crawler/providers/espn/fantasy_models.py:to_player, target: fantasy_bot_crawler/models/player.py:Player, kind: references }
+    selection:
+      maxWorkItems: 4
+      maxTokens: 10000
+      selected: [fantasy_bot_crawler/models/player.py#Player, fantasy_bot_crawler/models/player.py#ExternalIdentity]
+      requiredKinds: [local, interaction]
+  aggregation:
+    status: completed
+    outcome: clear
+    findings: []
+narrative:
+  summary: Draft sanitized regression case derived from FantasyBotCrawler model and provider wiring.
+  trueCodeFlow: Player and ExternalIdentity are imported by the player repository, ESPN conversion functions, and crawler factory, giving both symbols structural import/reference edges while Team remains unreferenced.
+  references: [fantasy_bot_crawler/models/player.py:4, fantasy_bot_crawler/repositories/player_repository.py:5]
+tags: [promoted, fantasybotcrawler, python, risk-ranking, graph-edges, player, external-identity]

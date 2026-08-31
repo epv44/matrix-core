@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 5,
+  "traceId": "structural-risk-ranking-trace",
+  "captureMode": "explicit-local",
+  "createdAt": "2026-08-29T00:00:00.000Z",
+  "packageVersion": "0.5.1",
+  "root": "<repo>",
+  "version": "structural-risk-ranking-fixture-v1",
+  "sourceSnapshot": { "schemaVersion": 1, "manifestHash": "8065e384a9c53a69b068b7db835a3ac8a7fe1969e5e4fe81e104093fb7fca957", "fileCount": 7, "totalBytes": 1104, "complete": true, "portable": true, "captureDurationMs": 0, "warnings": [] },
+  "scope": {
+    "id": "structural-risk-ranking-scope-v1", "version": "structural-risk-ranking-fixture-v1", "root": "<repo>", "base": null,
+    "diff": "diff --git a/src/models/player.py b/src/models/player.py\n--- a/src/models/player.py\n+++ b/src/models/player.py\n@@ -1,5 +1,6 @@\n class Player:\n     def __init__(self, player_id: str, name: str, source: str = \"unknown\") -> None:\n+        # Domain identity model participates in repository/factory flow.\n         self.player_id = player_id\n         self.name = name\n         self.source = source\n\ndiff --git a/src/models/identity.py b/src/models/identity.py\n--- a/src/models/identity.py\n+++ b/src/models/identity.py\n@@ -1,5 +1,6 @@\n class ExternalIdentity:\n     def __init__(self, provider: str, external_id: str, normalized: bool = True) -> None:\n+        # External identity is shared by persistence and factories.\n         self.provider = provider\n         self.external_id = external_id\n         self.normalized = normalized\n\ndiff --git a/src/models/team.py b/src/models/team.py\n--- a/src/models/team.py\n+++ b/src/models/team.py\n@@ -1,4 +1,5 @@\n class Team:\n     def __init__(self, team_id: str, sport: str = \"football\") -> None:\n+        # Unreferenced sibling control.\n         self.team_id = team_id\n         self.sport = sport\n\ndiff --git a/src/repositories/player_repository.py b/src/repositories/player_repository.py\n--- a/src/repositories/player_repository.py\n+++ b/src/repositories/player_repository.py\n@@ -1,4 +1,5 @@\n from src.models.player import Player\n+from src.models.identity import ExternalIdentity\n\n class PlayerRepository:\n-    def save(self, player: Player, identity_id: str) -> str:\n-        return player.player_id\n+    def save(self, player: Player, identity: ExternalIdentity) -> tuple[str, str]:\n+        return player.player_id, identity.external_id\n\ndiff --git a/src/factories/player_factory.py b/src/factories/player_factory.py\n--- a/src/factories/player_factory.py\n+++ b/src/factories/player_factory.py\n@@ -1,4 +1,5 @@\n from src.models.player import Player\n+from src.models.identity import ExternalIdentity\n\n-def make_player(player_id: str, name: str) -> Player:\n-    return Player(player_id, name)\n+def make_player(player_id: str, name: str, external_id: str) -> tuple[Player, ExternalIdentity]:\n+    return Player(player_id, name), ExternalIdentity(\"ESPN\", external_id)\n",
+    "changedFiles": ["src/models/player.py", "src/models/identity.py", "src/models/team.py", "src/repositories/player_repository.py", "src/factories/player_factory.py"],
+    "changeSources": { "src/models/player.py": ["working-tree"], "src/models/identity.py": ["working-tree"], "src/models/team.py": ["working-tree"], "src/repositories/player_repository.py": ["working-tree"], "src/factories/player_factory.py": ["working-tree"] },
+    "deletedFiles": [],
+    "fileContents": {
+      "src/repositories/player_repository.py": "from src.models.player import Player\nfrom src.models.identity import ExternalIdentity\n\n\nclass PlayerRepository:\n    def save(self, player: Player, identity: ExternalIdentity) -> tuple[str, str]:\n        return player.player_id, identity.external_id\n\n",
+      "src/factories/player_factory.py": "from src.models.player import Player\nfrom src.models.identity import ExternalIdentity\n\n\ndef make_player(player_id: str, name: str, external_id: str) -> tuple[Player, ExternalIdentity]:\n    return Player(player_id, name), ExternalIdentity(\"ESPN\", external_id)\n\n",
+      "src/models/player.py": "class Player:\n    def __init__(self, player_id: str, name: str, source: str = \"unknown\") -> None:\n        self.player_id = player_id\n        self.name = name\n        self.source = source\n",
+      "src/models/identity.py": "class ExternalIdentity:\n    def __init__(self, provider: str, external_id: str, normalized: bool = True) -> None:\n        self.provider = provider\n        self.external_id = external_id\n        self.normalized = normalized\n",
+      "src/models/team.py": "class Team:\n    def __init__(self, team_id: str, sport: str = \"football\") -> None:\n        self.team_id = team_id\n        self.sport = sport\n"
+    },
+    "suppliedContext": {
+      "src/models/player.py": "class Player:\n    def __init__(self, player_id: str, name: str, source: str = \"unknown\") -> None:\n        self.player_id = player_id\n        self.name = name\n        self.source = source\n",
+      "src/models/identity.py": "class ExternalIdentity:\n    def __init__(self, provider: str, external_id: str, normalized: bool = True) -> None:\n        self.provider = provider\n        self.external_id = external_id\n        self.normalized = normalized\n",
+      "src/models/team.py": "class Team:\n    def __init__(self, team_id: str, sport: str = \"football\") -> None:\n        self.team_id = team_id\n        self.sport = sport\n"
+    },
+    "manifest": [], "omissions": [], "languages": ["python"], "metadata": { "fileCount": 5, "additions": 7, "deletions": 7, "capturedAt": "2026-08-29T00:00:00.000Z" }
+  },
+  "deterministicReport": "PASS",
+  "result": { "schemaVersion": 3, "version": "structural-risk-ranking-fixture-v1", "snapshotId": "structural-risk-ranking-scope-v1", "status": "completed", "outcome": "clear", "mode": "partitioned", "reviewPath": "generic", "findings": [], "coverage": { "changedFiles": 2, "changedFilesReviewed": 2, "changedSymbols": 2, "changedSymbolsReviewed": 2, "localUnitsGenerated": 5, "localUnitsReviewed": 2, "interactionUnitsGenerated": 4, "interactionUnitsReviewed": 2, "dependencyEdgesIdentified": 4, "dependencyEdgesEligible": 4, "dependencyEdgesReviewed": 4, "evidenceRequests": 0, "evidenceResolved": 0, "evidenceGaps": 0, "globalScan": "none", "omissions": [] }, "summary": "Draft deterministic ranking fixture.", "timestamp": "2026-08-29T00:00:00.000Z", "reviewer": "AgentSmith", "runtime": { "models": { "candidate": "fixture", "verifier": "fixture" }, "inputTokens": 0, "outputTokens": 0, "concurrency": 1 } },
+  "decisionProvenance": { "publishedFindingIds": [], "rejectedCandidateIds": [], "likelyCandidateIds": [], "insufficientEvidenceCandidateIds": [], "aggregateRule": "verified only", "errors": [] }
+}
