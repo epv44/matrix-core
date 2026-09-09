@@ -3,13 +3,55 @@
   "repositoryFingerprint": "structural-risk-ranking-fixture-v1",
   "gitHead": null,
   "entries": [
-    { "path": ".matrixcore-ignore", "type": "file", "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b", "size": 1, "executable": false },
-    { "path": "quality.yaml", "type": "file", "sha256": "2de69f9211fe3533eaec15897bfbaf6f3c00a4b2669c3ffa2e2fe7f348443e27", "size": 71, "executable": false },
-    { "path": "src/factories/player_factory.py", "type": "file", "sha256": "a2c86a324bff3b3224c864053e36eabdd1e032dbdec10b84938aa3d21b6f3267", "size": 260, "executable": false },
-    { "path": "src/models/identity.py", "type": "file", "sha256": "bf79593df7731de6549d64d0fcaab74c67b1b2b96ecd97c8f23a936ad1d0cce3", "size": 223, "executable": false },
-    { "path": "src/models/player.py", "type": "file", "sha256": "07f9d1b87161607ccbac926756b15a700ebcf7794cb326b60e46ab4a985f1541", "size": 187, "executable": false },
-    { "path": "src/models/team.py", "type": "file", "sha256": "11177f103de467a1b246fd047ab62a5d1a8b5ad346a14158302a4214044a19d0", "size": 141, "executable": false },
-    { "path": "src/repositories/player_repository.py", "type": "file", "sha256": "142ad59d90fb2d289653880c29cad38e822fe4c6f426a4350bf94c8905b983d7", "size": 250, "executable": false }
+    {
+      "path": ".matrixcore-ignore",
+      "type": "file",
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "size": 1,
+      "executable": false
+    },
+    {
+      "path": "quality.yaml",
+      "type": "file",
+      "sha256": "2de69f9211fe3533eaec15897bfbaf6f3c00a4b2669c3ffa2e2fe7f348443e27",
+      "size": 71,
+      "executable": false
+    },
+    {
+      "path": "src/factories/player_factory.py",
+      "type": "file",
+      "sha256": "888df54a398b52acfbe7f22e6d416c1e00773a16139eb8ea460df724ad60c072",
+      "size": 258,
+      "executable": false
+    },
+    {
+      "path": "src/models/identity.py",
+      "type": "file",
+      "sha256": "a3d831daf4b560168bcc699111f3e1b74120338850f221ef800596be57094d21",
+      "size": 291,
+      "executable": false
+    },
+    {
+      "path": "src/models/player.py",
+      "type": "file",
+      "sha256": "432baba1e3a35b0c4cdad86352918e274c1a0a85fef9d04b6102fd783eac3c15",
+      "size": 260,
+      "executable": false
+    },
+    {
+      "path": "src/models/team.py",
+      "type": "file",
+      "sha256": "b21bff1cf0ab565b3429bbf16e9fd057aa74955f40428a8fa33c181863236203",
+      "size": 181,
+      "executable": false
+    },
+    {
+      "path": "src/repositories/player_repository.py",
+      "type": "file",
+      "sha256": "1d03ae916a2700f1ab7c7899c2548981a6eae73781bccd903ac8febc1e10c7b4",
+      "size": 248,
+      "executable": false
+    }
   ],
   "deletedPaths": []
 }

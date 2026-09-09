@@ -1,4 +1,5 @@
 import type {
+  CandidateResolutionAudit,
   CandidateFinding,
   EvidenceRecord,
   EvidenceResolutionOutcome,
@@ -92,21 +93,33 @@ export interface ReviewProjection {
 export interface ReviewWorkItem {
   id: string;
   kind: "local" | "interaction";
+  /** One-based position assigned by Ranking and preserved into Selection. */
+  rank?: number;
   priority?: number;
   primarySymbols: GraphSymbol[];
   relatedSymbols: GraphSymbol[];
   code: ProjectedSnippet[];
+  /** Canonical changed regions owned by this unit before prompt packing. */
+  changedRegions?: Array<{ file: string; start: number; end: number }>;
+  /** Exact source ranges visible to the candidate model after packing. */
+  promptVisibleRanges?: Array<{ file: string; start: number; end: number }>;
   graphEdges: GraphContextEdge[];
   rules: RenderedRule[];
   deterministicReport?: string;
   contextSummaries?: string[];
   estimatedTokens: number;
   rankFactors?: {
+    semanticRisk?: number;
     edgeRisk: number;
     changedEndpoints: number;
     productionSurface: number;
     changedLines: number;
     graphDegree: number;
+    fanIn?: number;
+    fanOut?: number;
+    neighborDegree?: number;
+    directedIncidentDegree?: number;
+    degreeContribution?: number;
   };
   selectionReason?: string;
 }
@@ -206,6 +219,10 @@ export interface RouteDecision {
 }
 
 export interface EngineExecution {
+  rankingConfig?: {
+    maxDegreeBoost: number;
+    degreeCap: number;
+  };
   graphSnapshot: GraphSnapshot;
   graphManifest?: {
     changedSymbols: GraphSymbol[];
@@ -219,6 +236,10 @@ export interface EngineExecution {
   route: RouteDecision;
   modelProfiles: { candidate: ModelProfile; scout?: ModelProfile; verifier: ModelProfile };
   projection: ReviewProjection;
+  /** Repository-wide projection used to plan/rank review work. */
+  sourceProjection?: ReviewProjection;
+  /** Union of the exact snippets visible to selected candidate calls. */
+  candidateProjection?: ReviewProjection;
   compactProjection?: ReviewProjection;
   scout?: {
     prompt: string;
@@ -236,6 +257,7 @@ export interface EngineExecution {
   evidence: Record<string, EvidenceRecord[]>;
   evidenceOutcomes?: Record<string, EvidenceResolutionOutcome[]>;
   verification: VerificationResult[];
+  candidateResolutions: CandidateResolutionAudit[];
   providerFailures?: ProviderFailureDiagnostic[];
   providerDiagnostics?: ProviderFailureDiagnostic[];
   coverage: ReviewCoverage;
@@ -249,6 +271,8 @@ export interface EngineExecution {
       | "graph"
       | "projection"
       | "planning"
+      | "ranking"
+      | "selection"
       | "candidateGeneration"
       | "evidence"
       | "verification"
@@ -260,6 +284,7 @@ export interface EngineExecution {
   plannerManifest?: Array<{
     id: string;
     kind: ReviewWorkItem["kind"];
+    rank?: number;
     priority: number;
     estimatedTokens: number;
     selected: boolean;
@@ -267,6 +292,8 @@ export interface EngineExecution {
     files: string[];
     symbols: string[];
     edges: string[];
+    changedRegions?: ReviewWorkItem["changedRegions"];
+    promptVisibleRanges?: ReviewWorkItem["promptVisibleRanges"];
     rankFactors?: ReviewWorkItem["rankFactors"];
     selectionReason?: string;
   }>;

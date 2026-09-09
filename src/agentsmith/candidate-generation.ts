@@ -75,6 +75,14 @@ const verificationSchema = z.object({
   reasoningSummary: z.string().optional(),
   supportingEvidenceIds: z.array(z.string()).default([]),
 });
+const citationSelectionSchema = z.object({
+  citations: z.array(
+    z.object({
+      requestId: z.string().min(1),
+      evidenceId: z.string().min(1),
+    }),
+  ),
+});
 
 function structuredSource(raw: string): string {
   const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(raw);
@@ -330,7 +338,7 @@ function workItemText(item: ReviewWorkItem) {
 
 function candidateInstructions(maxCandidates: number, includeSummary = false) {
   const empty = includeSummary ? '{"summary":"concise review summary","c":[]}' : '{"c":[]}';
-  return `You are generating candidate code-review defects. Inspect concrete runtime behavior, value flow, failure paths, boundary conditions, and contracts. For interaction work, compare callers, callees, producers, consumers, schemas, types, configuration, and tests across both sides of each supplied relationship. For finite or discriminated contract values, enumerate the supplied values and check whether changed branching preserves each value's observable meaning. Every candidate must identify the triggering input or value, the violated contract or invariant, and the observable outcome. A partial string-label mapping is not by itself a runtime exception. Be permissive enough to preserve recall, but never report repository instructions, filenames alone, style preferences, missing tests without a demonstrated defect, or hypothetical risks without an executable failure or contract mismatch. Generate zero to ${maxCandidates} distinct candidates anchored to supplied changed code. Supporting unchanged code may be requested as evidence. Use one short sentence per text field; set q to confidence from 0 to 1 as a decimal, never a percentage. Request at most two evidence items using {"k":"kind","m":"symbol or literal","v":"required symbol or literal","p":"optional repository path","r":"short reason"}; v is always required. Use m=symbol for exact definitions/callers/callees/types/usages and m=literal when implementation or test evidence must locate a concrete value such as an enum member. Every request is a required fact for adjudication. Claims about callers, consumers, downstream behavior, assumptions, or expectations must request callers or usage evidence for the exact producer symbol. Never request evidence for text that appears only in review instructions or deterministic-gate context. Return only the compact JSON object required by the schema, with no prose or Markdown, and use ${empty} when no concrete candidate exists.`;
+  return `You are generating candidate code-review defects. Inspect concrete runtime behavior, value flow, failure paths, boundary conditions, and contracts. For interaction work, compare callers, callees, producers, consumers, schemas, types, configuration, and tests across both sides of each supplied relationship. For finite or discriminated contract values, enumerate the supplied values and check whether changed branching preserves each value's observable meaning. When changed code maps a typed or discriminated value to a label, status, category, or other user-visible representation, inspect every declared variant and report a concrete contract mismatch when any variant is collapsed, relabeled, or made indistinguishable. If several mappings occur in one changed function, inspect each mapping and prioritize a concrete producer/consumer value mismatch over cosmetic or layout-only label behavior. If the supplied producer or type context names a concrete variant, use that actual variant in the title and description; do not replace it with a hypothetical future value. Anchor the finding to the smallest changed line that performs the defective mapping or emits its incorrect result, not an earlier supporting declaration. Prefer that evidence-backed mismatch over hypothetical numeric, nullability, or runtime concerns. Every candidate must identify the triggering input or value, the violated contract or invariant, and the observable outcome. A partial string-label mapping is not by itself a runtime exception. Be permissive enough to preserve recall, but never report repository instructions, filenames alone, style preferences, missing tests without a demonstrated defect, or hypothetical risks without an executable failure or contract mismatch. Generate zero to ${maxCandidates} distinct candidates anchored to supplied changed code. Supporting unchanged code may be requested as evidence. Use one short sentence per text field; set q to confidence from 0 to 1 as a decimal, never a percentage. Request at most two evidence items using {"k":"kind","m":"symbol or literal","v":"required symbol or literal","p":"optional repository path","r":"short reason"}; v is always required. Use m=symbol for canonical symbol names only; never use a source expression, type union, path:line locator, boolean expression, or call expression as a symbol. Use m=literal for concrete value text or enum members. For a finite-value mapping, prefer a literal request for the exact discriminant or emitted value, plus a canonical producer or consumer symbol when relationship evidence is required; do not encode the field access or mapping expression as a symbol. Every request is a required fact for adjudication. Claims about callers, consumers, downstream behavior, assumptions, or expectations must request callers or usage evidence for the exact producer symbol. Never request evidence for text that appears only in review instructions or deterministic-gate context. Return only the compact JSON object required by the schema, with no prose or Markdown, and use ${empty} when no concrete candidate exists.`;
 }
 
 export async function generateSpecialistCandidates(opts: {
@@ -522,20 +530,48 @@ export async function verifyCandidateWithModel(opts: {
       ...first.response.usage,
     };
   const firstCitationDiagnostic = diagnostic(first.response, prompt, 1, firstErrors);
-  const requiredCitationGroups = Object.entries(opts.requiredEvidenceIdsByRequest ?? {})
-    .map(([requestId, ids]) => `- request ${requestId}: include at least one of ${ids.join(", ")}`)
+  const initialExactIds = first.parsed.supportingEvidenceIds
+    .map(normalizeId)
+    .filter((id) => opts.evidenceIds.includes(id));
+  const missingGroups = Object.entries(opts.requiredEvidenceIdsByRequest ?? {}).filter(
+    ([, ids]) => !ids.some((id) => initialExactIds.includes(id)),
+  );
+  if (first.parsed.verdict !== "insufficient_evidence" && !initialExactIds.length && !missingGroups.length)
+    missingGroups.push(["verdict-citation", opts.evidenceIds]);
+  const requiredCitationGroups = missingGroups
+    .map(([requestId, ids]) => `- request ${requestId}: choose exactly one of ${ids.join(", ")}`)
     .join("\n");
-  const repairPrompt = `${VERIFICATION_INSTRUCTIONS}\n\nCorrect only the citation contract in the previous verdict. Preserve its verdict and reasoning. Allowed evidence IDs: ${opts.evidenceIds.join(", ") || "none"}. Required citation groups:\n${requiredCitationGroups || "(none)"}\nCitation errors: ${firstErrors.join("; ")}. Return the complete corrected JSON object with exact raw IDs and no prose.\nPrevious response:\n${first.response.raw.slice(0, 12_000)}`;
+  const repairPrompt = `Select citations only. Do not restate or change the verdict, confidence, or reasoning. For every listed request, choose one exact allowed evidence ID. Return only {"citations":[{"requestId":"...","evidenceId":"..."}]}.\n\nMissing citation groups:\n${requiredCitationGroups || "(none)"}`;
   const repaired = await invokeStructured({
     provider: opts.provider,
     profile: opts.profile,
     sourceId: opts.candidate.id,
-    outputKind: "verification",
+    outputKind: "citation-selection",
     prompt: repairPrompt,
     signal: opts.signal,
-    validate: (value) => verificationSchema.parse(value),
+    validate: (value) => citationSelectionSchema.parse(value),
   });
-  const repairedErrors = citationErrors(repaired.parsed);
+  const allowedByRequest = new Map(missingGroups);
+  const selectedIds: string[] = [];
+  const selectionErrors: string[] = [];
+  for (const citation of repaired.parsed.citations) {
+    const evidenceId = normalizeId(citation.evidenceId);
+    const allowed = allowedByRequest.get(citation.requestId);
+    if (!allowed) selectionErrors.push(`unknown citation request ${citation.requestId}`);
+    else if (!allowed.includes(evidenceId))
+      selectionErrors.push(`evidence ${evidenceId} is not allowed for request ${citation.requestId}`);
+    else selectedIds.push(evidenceId);
+  }
+  for (const [requestId, ids] of missingGroups)
+    if (
+      !repaired.parsed.citations.some(
+        (item) => item.requestId === requestId && ids.includes(normalizeId(item.evidenceId)),
+      )
+    )
+      selectionErrors.push(`required request ${requestId} is not cited`);
+  const mergedIds = [...new Set([...initialExactIds, ...selectedIds])];
+  const repairedVerdict = { ...first.parsed, supportingEvidenceIds: mergedIds };
+  const repairedErrors = [...selectionErrors, ...citationErrors(repairedVerdict)];
   const diagnostics = [
     ...first.diagnostics,
     firstCitationDiagnostic,
@@ -569,11 +605,11 @@ export async function verifyCandidateWithModel(opts: {
   return {
     result: {
       candidateId: opts.candidate.id,
-      ...repaired.parsed,
+      ...first.parsed,
       rawVerdict: first.parsed.verdict,
       rawConfidence: first.parsed.confidence,
       rawSupportingEvidenceIds: first.parsed.supportingEvidenceIds,
-      supportingEvidenceIds: repaired.parsed.supportingEvidenceIds.map(normalizeId),
+      supportingEvidenceIds: mergedIds,
       prompt: repairPrompt,
       raw: repaired.response.raw,
       completion: repaired.response.completion,

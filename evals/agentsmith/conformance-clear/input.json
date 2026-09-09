@@ -11,23 +11,84 @@
     "version": "conformance-clear",
     "root": "<repo>",
     "base": null,
-    "diff": "diff --git a/src/calculator.ts b/src/calculator.ts\n--- a/src/calculator.ts\n+++ b/src/calculator.ts\n@@ -1 +1 @@\n-export function add(a: number, b: number) { return a + b; }\n+export const add = (a: number, b: number) => a + b;\n",
-    "changedFiles": ["src/calculator.ts"],
-    "fileContents": { "src/calculator.ts": "export const add = (a: number, b: number) => a + b;\n" },
+    "diff": "diff --git a/src/calculator.ts b/src/calculator.ts\n--- a/src/calculator.ts\n+++ b/src/calculator.ts\n@@ -1,1 +1,1 @@\n-export function add(a: number, b: number) { return a + b; }\n+export const add = (a: number, b: number) => a + b;\n",
+    "changedFiles": [
+      "src/calculator.ts"
+    ],
+    "fileContents": {
+      "src/calculator.ts": "export const add = (a: number, b: number) => a + b;\n"
+    },
     "deletedFiles": {},
     "suppliedContext": {},
-    "manifest": [{ "path": "src/calculator.ts", "changeKind": "modified", "additions": 1, "deletions": 1, "language": "typescript", "generated": false, "binary": false }],
+    "manifest": [
+      {
+        "path": "src/calculator.ts",
+        "changeKind": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "language": "typescript",
+        "generated": false,
+        "binary": false
+      }
+    ],
     "omissions": [],
-    "languages": ["typescript"],
-    "metadata": { "fileCount": 1, "additions": 1, "deletions": 1, "capturedAt": "2026-08-24T00:00:00.000Z" }
+    "languages": [
+      "typescript"
+    ],
+    "metadata": {
+      "fileCount": 1,
+      "additions": 1,
+      "deletions": 1,
+      "capturedAt": "2026-08-24T00:00:00.000Z"
+    }
   },
   "deterministicReport": "PASS",
   "result": {
-    "schemaVersion": 3, "version": "conformance-clear", "snapshotId": "conformance-clear-scope",
-    "status": "completed", "outcome": "clear", "mode": "partitioned", "reviewPath": "generic", "findings": [],
-    "coverage": { "changedFiles": 1, "changedFilesReviewed": 1, "changedSymbols": 1, "changedSymbolsReviewed": 1, "localUnitsGenerated": 1, "localUnitsReviewed": 1, "interactionUnitsGenerated": 0, "interactionUnitsReviewed": 0, "dependencyEdgesIdentified": 0, "dependencyEdgesEligible": 0, "dependencyEdgesReviewed": 0, "evidenceRequests": 0, "evidenceResolved": 0, "evidenceGaps": 0, "globalScan": "none", "omissions": [] },
-    "summary": "No verified findings.", "timestamp": "2026-08-24T00:00:00.000Z", "reviewer": "AgentSmith",
-    "runtime": { "models": { "candidate": "qwen3.5:9b-q4_K_M", "verifier": "qwen3.5:9b-q4_K_M" }, "inputTokens": 0, "outputTokens": 0, "concurrency": 1 }
+    "schemaVersion": 3,
+    "version": "conformance-clear",
+    "snapshotId": "conformance-clear-scope",
+    "status": "completed",
+    "outcome": "clear",
+    "mode": "partitioned",
+    "reviewPath": "generic",
+    "findings": [],
+    "coverage": {
+      "changedFiles": 1,
+      "changedFilesReviewed": 1,
+      "changedSymbols": 1,
+      "changedSymbolsReviewed": 1,
+      "localUnitsGenerated": 1,
+      "localUnitsReviewed": 1,
+      "interactionUnitsGenerated": 0,
+      "interactionUnitsReviewed": 0,
+      "dependencyEdgesIdentified": 0,
+      "dependencyEdgesEligible": 0,
+      "dependencyEdgesReviewed": 0,
+      "evidenceRequests": 0,
+      "evidenceResolved": 0,
+      "evidenceGaps": 0,
+      "globalScan": "none",
+      "omissions": []
+    },
+    "summary": "No verified findings.",
+    "timestamp": "2026-08-24T00:00:00.000Z",
+    "reviewer": "AgentSmith",
+    "runtime": {
+      "models": {
+        "candidate": "qwen3.5:9b-q4_K_M",
+        "verifier": "qwen3.5:9b-q4_K_M"
+      },
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "concurrency": 1
+    }
   },
-  "decisionProvenance": { "publishedFindingIds": [], "rejectedCandidateIds": [], "likelyCandidateIds": [], "insufficientEvidenceCandidateIds": [], "aggregateRule": "verified only", "errors": [] }
+  "decisionProvenance": {
+    "publishedFindingIds": [],
+    "rejectedCandidateIds": [],
+    "likelyCandidateIds": [],
+    "insufficientEvidenceCandidateIds": [],
+    "aggregateRule": "verified only",
+    "errors": []
+  }
 }

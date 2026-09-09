@@ -61,10 +61,117 @@ describe("AgentSmith stage scorecards", () => {
       result: { findings: [], coverage: { candidateTokensEstimated: 200, candidateTokenBudget: 250 } } as any,
       tier: "stage", hermetic: true, planningWorkItems: [player, sibling],
     });
-    const planning = stages.find((stage) => stage.stage === "planning")!;
-    expect(planning.metrics.find((metric) => metric.name === "selectionExpectedRecall")?.value).toBe(1);
-    expect(planning.metrics.find((metric) => metric.name === "selectionWorkItemBudgetRespected")?.value).toBe(true);
-    expect(planning.metrics.find((metric) => metric.name === "selectionTokenBudgetRespected")?.value).toBe(true);
+    const selection = stages.find((stage) => stage.stage === "selection")!;
+    expect(selection.metrics.find((metric) => metric.name === "selectionExpectedRecall")?.value).toBe(1);
+    expect(selection.metrics.find((metric) => metric.name === "selectionWorkItemBudgetRespected")?.value).toBe(true);
+    expect(selection.metrics.find((metric) => metric.name === "selectionTokenBudgetRespected")?.value).toBe(true);
+  });
+
+  it("scores canonical graph adjacency and exact degree factors", () => {
+    const definition = {
+      expectations: {
+        graph: {
+          files: [], symbols: [], edges: ["a.ts:A->b.ts:B:calls", "a.ts:A->c.ts:C:references"],
+          forbiddenFiles: [], forbiddenSymbols: [], forbiddenEdges: [], paths: [],
+          graphScope: { exhaustiveNodes: ["a.ts:A"], highDegreeThreshold: 2 },
+          adjacency: [{ node: "a.ts:A", expectedNeighbors: ["b.ts:B", "c.ts:C"], exhaustive: true }],
+          graphFactors: [{ node: "a.ts:A", fanIn: 0, fanOut: 2, neighborDegree: 2, directedIncidentDegree: 2 }],
+        },
+      },
+    } as any;
+    const stages = evaluateStages({
+      definition,
+      trace: { scope: { changedFiles: [], manifest: [] } } as any,
+      execution: {
+        graphManifest: {
+          changedSymbols: [],
+          nodes: [],
+          edges: [
+            { source: "a.ts:A", target: "b.ts:B", targetText: "B", kind: "calls", confidence: "exact" },
+            { source: "a.ts:A", target: "b.ts:B", targetText: "B", kind: "calls", confidence: "syntactic" },
+            { source: "a.ts:A", target: "c.ts:C", targetText: "C", kind: "references", confidence: "exact" },
+          ],
+          selectedNodeKeys: [], omittedNodeKeys: [],
+        },
+        route: { mode: "partitioned" },
+        workItems: [], projection: { code: [], audit: [] }, candidates: [], verification: [], evidence: {},
+      } as any,
+      result: { findings: [], coverage: { candidateTokensEstimated: 0, candidateTokenBudget: 1 } } as any,
+      tier: "stage", hermetic: true,
+    });
+    const graph = stages.find((stage) => stage.stage === "graph")!;
+    const value = (name: string) => graph.metrics.find((item) => item.name === name)?.value;
+    expect(value("microEdgeRecall")).toBe(1);
+    expect(value("microEdgePrecision")).toBe(1);
+    expect(value("macroAdjacencyRecall")).toBe(1);
+    expect(value("minimumNodeAdjacencyRecall")).toBe(1);
+    expect(value("fanInAccuracy")).toBe(1);
+    expect(value("fanOutAccuracy")).toBe(1);
+    expect(value("neighborDegreeAccuracy")).toBe(1);
+    expect(value("directedIncidentDegreeAccuracy")).toBe(1);
+    expect(value("highDegreeNodeRecall")).toBe(1);
+  });
+
+  it("does not attribute an upstream graph failure to isolated Planning, Ranking, or Selection", () => {
+    const definition = {
+      expectations: {
+        graph: {
+          files: [], symbols: [], edges: ["missing.ts:M->target.ts:T:calls"],
+          forbiddenFiles: [], forbiddenSymbols: [], forbiddenEdges: [], paths: [],
+        },
+        planning: {
+          files: [], symbols: [], edges: [], forbiddenFiles: [], forbiddenSymbols: [], forbiddenEdges: [],
+          paths: [], route: "partitioned",
+          riskRanking: { ordered: ["M"], mustOutrank: [], expectedEdges: [], units: [] },
+          selection: { maxWorkItems: 1, maxTokens: 1000, selected: ["M"], requiredKinds: ["local"] },
+        },
+      },
+    } as any;
+    const workItem = unit("M", 1);
+    const stages = evaluateStages({
+      definition,
+      trace: { scope: { changedFiles: [], manifest: [] } } as any,
+      execution: {
+        graphManifest: { changedSymbols: [], nodes: [], edges: [], selectedNodeKeys: [], omittedNodeKeys: [] },
+        route: { mode: "partitioned" },
+        workItems: [workItem],
+        plannerManifest: [{ id: "M", kind: "local", priority: 1, files: ["M.ts"], symbols: ["M"], edges: [], rankFactors: workItem.rankFactors }],
+        projection: { code: [], audit: [] }, candidates: [], verification: [], evidence: {},
+      } as any,
+      result: { findings: [], coverage: { candidateTokensEstimated: 0, candidateTokenBudget: 1000 } } as any,
+      tier: "isolated", hermetic: true,
+    });
+    expect(stages.find((stage) => stage.stage === "graph")?.causalStatus).toBe("root-failure");
+    expect(stages.find((stage) => stage.stage === "planning")?.causalStatus).toBe("healthy");
+    expect(stages.find((stage) => stage.stage === "ranking")?.causalStatus).toBe("healthy");
+    expect(stages.find((stage) => stage.stage === "selection")?.causalStatus).toBe("healthy");
+  });
+
+  it("reports graph completeness as N/A when no exhaustive graph scope is labeled", () => {
+    const stages = evaluateStages({
+      definition: {
+        expectations: {
+          graph: {
+            files: [], symbols: [], edges: ["a.ts:A->b.ts:B:calls"],
+            forbiddenFiles: [], forbiddenSymbols: [], forbiddenEdges: [], paths: [],
+          },
+        },
+      } as any,
+      trace: { scope: { changedFiles: [], manifest: [] } } as any,
+      execution: {
+        graphManifest: {
+          changedSymbols: [], nodes: [],
+          edges: [{ source: "a.ts:A", target: "b.ts:B", targetText: "B", kind: "calls", confidence: "exact" }],
+          selectedNodeKeys: [], omittedNodeKeys: [],
+        },
+        workItems: [], projection: { code: [], audit: [] }, candidates: [], verification: [], evidence: {},
+      } as any,
+      result: { findings: [], coverage: {} } as any,
+      tier: "live", hermetic: false,
+    });
+    const graph = stages.find((stage) => stage.stage === "graph")!;
+    expect(graph.metrics.find((item) => item.name === "microEdgeRecall")?.value).toBeNull();
+    expect(graph.metrics.find((item) => item.name === "microEdgePrecision")?.value).toBeNull();
   });
 
   it("rejects malformed risk-ranking assertions", () => {
@@ -248,7 +355,7 @@ describe("AgentSmith stage scorecards", () => {
       tier: "live",
       hermetic: false,
     });
-    expect(stages.find((stage) => stage.stage === "snapshot")?.evaluation).toBe("not-evaluable");
+    expect(stages.find((stage) => stage.stage === "snapshot")?.evaluation).toBe("not-applicable");
     expect(
       stages
         .find((stage) => stage.stage === "candidates")
@@ -366,7 +473,7 @@ describe("AgentSmith stage scorecards", () => {
       evidenceRequests: [{ kind: "implementation", reason: "contract" }],
     };
     const candidateId = "golden-cash-source";
-    const make = (verification: Record<string, unknown>) =>
+    const make = (verification?: Record<string, unknown>) =>
       evaluateStages({
         definition: { expectations: { verification: { candidates: [expected] } } } as any,
         trace: { scope: { changedFiles: ["view.ts"], manifest: [], diff: "" } } as any,
@@ -377,7 +484,7 @@ describe("AgentSmith stage scorecards", () => {
           evidenceOutcomes: {
             [candidateId]: [{ request: { kind: "implementation" }, status: "satisfied", packedRecordIds: ["e-1"] }],
           },
-          verification: [{ candidateId, ...verification }],
+          verification: verification ? [{ candidateId, ...verification }] : [],
           graphSnapshot: { schemaVersion: 1, providerVersions: { ts: "1" } },
           modelProfiles: { candidate: {}, verifier: {} },
           projection: { code: [], audit: [] },
@@ -421,6 +528,10 @@ describe("AgentSmith stage scorecards", () => {
         .find((stage) => stage.stage === "verification")
         ?.diagnostics.some((d) => d.startsWith("hallucinated_grounding")),
     ).toBe(true);
+
+    const missing = make();
+    expect(value(missing, "verification_accuracy")).toBe(0);
+    expect(missing.find((stage) => stage.stage === "verification")?.causalStatus).toBe("root-failure");
   });
 
   it("excludes conformance fixtures from benchmark coverage", () => {

@@ -4,8 +4,10 @@ import type { EvalStage } from "./stage-score.js";
 const stages: EvalStage[] = [
   "snapshot",
   "graph",
-  "projection",
   "planning",
+  "ranking",
+  "selection",
+  "projection",
   "candidates",
   "evidence",
   "verification",
@@ -17,6 +19,7 @@ export function corpusCoverage(root: string) {
   const cases = listEvalCases(root, true).map((slug) => readEvalCase(root, slug).definition);
   const activeBenchmarks = cases.filter((item) => item.status === "active" && item.kind === "benchmark");
   const activeComponents = cases.filter((item) => item.status === "active" && item.suite === "component");
+  const suiteNames = [...new Set(cases.map((item) => item.suite))].sort();
   const discoveryClasses = Object.fromEntries(
     ["L0", "L1", "L2", "L3"].map((level) => [
       level,
@@ -43,12 +46,7 @@ export function corpusCoverage(root: string) {
     activeComponents: activeComponents.length,
     drafts: cases.filter((item) => item.status === "draft").length,
     conformance: cases.filter((item) => item.kind === "conformance").length,
-    suites: Object.fromEntries(
-      ["component", "conformance", "draft"].map((suite) => [
-        suite,
-        cases.filter((item) => item.suite === suite).length,
-      ]),
-    ),
+    suites: Object.fromEntries(suiteNames.map((suite) => [suite, cases.filter((item) => item.suite === suite).length])),
     withFrozenRepository: cases.filter((item) => Boolean(item.source.fixture)).length,
     discoveryClasses,
     outcomes,

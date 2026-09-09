@@ -16,6 +16,7 @@ import { toolVersion } from "./runner.js";
 import { formatAgentSmithReview, REVIEW_MARKDOWN_ARTIFACT } from "../agentsmith/report.js";
 import type { GateStatus, ReviewResult } from "./types.js";
 import { engineRuntimeIdentity } from "./runtime.js";
+import { isReviewApproval } from "./reviewer.js";
 
 function reviewPresentation(review: ReviewResult | null, gateStatus?: GateStatus) {
   return {
@@ -210,9 +211,9 @@ export function getQualityStatus(cwd: string): QualityStatus {
       reviewEnabled: reviewRequired,
       reviewAdvisory,
     });
-  if (reviewBlocksCompletion && (!review || review.status !== "completed" || Boolean(review.errors?.length)))
+  if (reviewBlocksCompletion && (!review || !isReviewApproval(review)))
     return blocked(
-      "AgentSmith review did not complete successfully. Resolve provider/review errors and run quality_run with mode=completion.",
+      "AgentSmith review did not produce a completed clear result with every candidate resolved. Resolve findings, unresolved candidates, or execution errors and run quality_run with mode=completion.",
       { reviewEnabled: reviewRequired, reviewAdvisory },
     );
   return {

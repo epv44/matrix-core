@@ -39,6 +39,47 @@ export function estimateTokens(value: string, profile: ModelProfile, code = true
   return Math.ceil(value.length / ratio);
 }
 
+export const MAX_DEGREE_BOOST = 20;
+export const DEGREE_CAP = 16;
+
+export interface CanonicalGraphFactors {
+  fanIn: number;
+  fanOut: number;
+  neighborDegree: number;
+  directedIncidentDegree: number;
+}
+
+function canonicalGraphFactors(edges: GraphContextEdge[], nodeKey: string): CanonicalGraphFactors {
+  const incoming = new Set<string>();
+  const outgoing = new Set<string>();
+  const seen = new Set<string>();
+  for (const edge of edges) {
+    if (!edge.target || edge.source === edge.target) continue;
+    const key = `${edge.kind}:${edge.source}:${edge.target}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (edge.target === nodeKey) incoming.add(edge.source);
+    if (edge.source === nodeKey) outgoing.add(edge.target);
+  }
+  return {
+    fanIn: incoming.size,
+    fanOut: outgoing.size,
+    neighborDegree: new Set([...incoming, ...outgoing]).size,
+    directedIncidentDegree: incoming.size + outgoing.size,
+  };
+}
+
+export function graphDegreeContribution(neighborDegree: number): number {
+  if (neighborDegree <= 0) return 0;
+  return MAX_DEGREE_BOOST * Math.min(Math.log1p(neighborDegree) / Math.log1p(DEGREE_CAP), 1);
+}
+
+export function riskScore(item: Pick<ReviewWorkItem, "priority" | "rankFactors">, includeDegree = true): number {
+  const semanticRisk = item.rankFactors?.semanticRisk ?? item.priority ?? 0;
+  const degree = item.rankFactors?.neighborDegree ?? item.rankFactors?.graphDegree ?? 0;
+  return semanticRisk + (includeDegree ? graphDegreeContribution(degree) : 0);
+}
+
 export const changedRanges = parseChangedRanges;
 
 function snippet(
@@ -404,6 +445,75 @@ function boundedSnippet(
   };
 }
 
+function boundedMultiRegionSnippets(
+  item: ProjectedSnippet,
+  budget: number,
+  profile: ModelProfile,
+  ranges: Array<{ start: number; end: number }> = item.changedLineRanges ?? [],
+): ProjectedSnippet[] {
+  if (item.estimatedTokens <= budget || !ranges.length) return [boundedSnippet(item, budget, profile, ranges[0])];
+  const ordered = [...ranges].sort((left, right) => left.start - right.start || left.end - right.end);
+  const perRegionBudget = Math.max(32, Math.floor(budget / ordered.length));
+  const snippets = ordered.map((range) => boundedSnippet(item, perRegionBudget, profile, range));
+  return [
+    ...new Map(
+      snippets.map((snippet) => [
+        `${snippet.file}:${snippet.startLine}:${snippet.endLine}:${snippet.content}`,
+        snippet,
+      ]),
+    ).values(),
+  ];
+}
+
+export function buildCandidateProjection(
+  source: ReviewProjection,
+  selected: ReviewWorkItem[],
+  profile: ModelProfile,
+): ReviewProjection {
+  if (!selected.length) return { ...source, kind: "work-item" };
+  const code = [
+    ...new Map(
+      selected
+        .flatMap((item) => item.code)
+        .map((snippet) => [`${snippet.file}:${snippet.startLine}:${snippet.endLine}:${snippet.content}`, snippet]),
+    ).values(),
+  ];
+  const files = new Set(code.map((snippet) => snippet.file));
+  const rules = [...new Map(selected.flatMap((item) => item.rules).map((rule) => [rule.id, rule])).values()];
+  const graphEdges = [
+    ...new Map(
+      selected
+        .flatMap((item) => item.graphEdges)
+        .map((edge) => [`${edge.kind}:${edge.source}:${edge.target ?? edge.targetText}`, edge]),
+    ).values(),
+  ];
+  const dependencySummary = [...new Set(selected.flatMap((item) => item.contextSummaries ?? []))];
+  const estimatedTokens =
+    code.reduce((sum, snippet) => sum + snippet.estimatedTokens, 0) +
+    rules.reduce((sum, rule) => sum + rule.estimatedTokens, 0) +
+    estimateTokens(dependencySummary.join("\n"), profile, false);
+  return {
+    ...source,
+    id: sha({ source: source.id, selected: selected.map((item) => item.id), code: code.map((item) => item.id) }),
+    kind: "work-item",
+    estimatedTokens,
+    manifest: source.manifest.filter((entry) => files.has(entry.path)),
+    rules,
+    code,
+    graphEdges,
+    dependencySummary,
+    audit: code.map((snippet) => ({
+      kind: "code",
+      id: snippet.id,
+      estimatedTokens: snippet.estimatedTokens,
+      score: snippet.score,
+      status: "selected",
+      reason: snippet.reason,
+    })),
+    omissions: [],
+  };
+}
+
 function symbolKey(symbol: GraphSymbol) {
   return `${symbol.file}:${symbol.qualifiedName}`;
 }
@@ -440,6 +550,13 @@ function interactionPriority(edge: GraphContextEdge, changed: Set<string>, hot: 
   );
 }
 
+function interactionFamily(kind: string): string {
+  if (["schema-user", "serialization", "producer-consumer", "config"].includes(kind)) return "contract";
+  if (["reads-type", "implements", "extends"].includes(kind)) return "type";
+  if (["calls", "references", "test-reference"].includes(kind)) return "flow";
+  return kind;
+}
+
 function filePriority(file: string) {
   if (/^(src|bin|scripts|plugins|integrations|hooks|packs|policy)\//.test(file)) return 100;
   if (/^(package\.json|package-lock\.json|quality\.ya?ml|tsconfig\.json|eslint\.config\.)/.test(file)) return 95;
@@ -461,7 +578,6 @@ function workItemRank(left: ReviewWorkItem, right: ReviewWorkItem) {
     (rightFactors?.productionSurface ?? 0) - (leftFactors?.productionSurface ?? 0) ||
     (rightFactors?.changedEndpoints ?? 0) - (leftFactors?.changedEndpoints ?? 0) ||
     (rightFactors?.edgeRisk ?? 0) - (leftFactors?.edgeRisk ?? 0) ||
-    (rightFactors?.graphDegree ?? 0) - (leftFactors?.graphDegree ?? 0) ||
     (rightFactors?.changedLines ?? 0) - (leftFactors?.changedLines ?? 0) ||
     left.kind.localeCompare(right.kind) ||
     workItemSemanticKey(left).localeCompare(workItemSemanticKey(right))
@@ -477,41 +593,41 @@ function workItemSemanticKey(item: ReviewWorkItem): string {
   ].join("|");
 }
 
-function subsystem(file: string): string {
-  return file.split("/").slice(0, 2).join("/");
-}
-
-function selectionNovelty(item: ReviewWorkItem, selected: ReviewWorkItem[]): number {
-  const selectedFiles = new Set(selected.flatMap((entry) => entry.primarySymbols.map((symbol) => symbol.file)));
-  const selectedSubsystems = new Set(
-    selected.flatMap((entry) => entry.primarySymbols.map((symbol) => subsystem(symbol.file))),
-  );
-  const selectedEdges = new Set(selected.flatMap((entry) => entry.graphEdges.map((edge) => edge.kind)));
-  const selectedSymbols = new Set(
-    selected.flatMap((entry) =>
-      [...entry.primarySymbols, ...entry.relatedSymbols].map((symbol) => `${symbol.file}#${symbol.qualifiedName}`),
-    ),
-  );
-  const primaryFiles = item.primarySymbols.map((symbol) => symbol.file);
-  const symbols = [...item.primarySymbols, ...item.relatedSymbols].map(
-    (symbol) => `${symbol.file}#${symbol.qualifiedName}`,
-  );
-  return (
-    (primaryFiles.some((file) => !selectedSubsystems.has(subsystem(file))) ? 4 : 0) +
-    (primaryFiles.some((file) => !selectedFiles.has(file)) ? 2 : 0) +
-    (item.graphEdges.some((edge) => !selectedEdges.has(edge.kind)) ? 1 : 0) +
-    (symbols.some((symbol) => !selectedSymbols.has(symbol)) ? 2 : 0)
-  );
-}
-
 function uniqueWorkItems(items: ReviewWorkItem[]): ReviewWorkItem[] {
   const values = new Map<string, ReviewWorkItem>();
   for (const item of items) if (!values.has(item.id)) values.set(item.id, item);
   return [...values.values()];
 }
 
+export function rankWorkItems(items: ReviewWorkItem[], options: { includeDegree?: boolean } = {}): ReviewWorkItem[] {
+  const includeDegree = options.includeDegree !== false;
+  const scored: ReviewWorkItem[] = uniqueWorkItems(items).map((item) => ({
+    ...item,
+    priority: riskScore(item, includeDegree),
+    rankFactors: item.rankFactors
+      ? {
+          ...item.rankFactors,
+          semanticRisk: item.rankFactors.semanticRisk ?? item.priority ?? 0,
+          graphDegree: item.rankFactors.graphDegree ?? item.rankFactors.neighborDegree ?? 0,
+          degreeContribution: includeDegree
+            ? graphDegreeContribution(item.rankFactors.neighborDegree ?? item.rankFactors.graphDegree ?? 0)
+            : 0,
+        }
+      : undefined,
+  }));
+  return scored.sort(workItemRank).map((item, index) => ({ ...item, rank: index + 1 }));
+}
+
 export function selectWorkItems(items: ReviewWorkItem[], limit: number, tokenBudget = Number.POSITIVE_INFINITY) {
-  const ranked = uniqueWorkItems(items).sort(workItemRank);
+  // Selection is a consumer of Ranking's ordered sequence. Callers that need
+  // ranking must do it explicitly before crossing this boundary.
+  const ranked = uniqueWorkItems(items).map((item) => ({
+    ...item,
+    rankFactors: item.rankFactors ? { ...item.rankFactors } : undefined,
+  }));
+  const incomingRank = new Map(ranked.map((item, index) => [item.id, item.rank ?? index + 1]));
+  const compareIncomingRank = (left: ReviewWorkItem, right: ReviewWorkItem) =>
+    (incomingRank.get(left.id) ?? Number.POSITIVE_INFINITY) - (incomingRank.get(right.id) ?? Number.POSITIVE_INFINITY);
   const selected: ReviewWorkItem[] = [];
   const omitted: ReviewWorkItem[] = [];
   const tokenOmitted: ReviewWorkItem[] = [];
@@ -530,7 +646,7 @@ export function selectWorkItems(items: ReviewWorkItem[], limit: number, tokenBud
       if (pair) break;
     }
     if (pair) {
-      selected.push(...pair.sort(workItemRank));
+      selected.push(...pair.sort(compareIncomingRank));
       for (const item of selected)
         item.selectionReason = `required-${item.kind}; priority=${item.priority ?? 0}; semantic=${workItemSemanticKey(item)}`;
       usedTokens = pair.reduce((sum, item) => sum + item.estimatedTokens, 0);
@@ -541,44 +657,8 @@ export function selectWorkItems(items: ReviewWorkItem[], limit: number, tokenBud
     const remaining = ranked.filter((item) => !selectedIds.has(item.id));
     const fitting = remaining.filter((item) => usedTokens + item.estimatedTokens <= tokenBudget);
     if (!fitting.length) break;
-    const highestPriority = fitting[0].priority ?? 0;
-    const riskBand = fitting.filter((item) => (item.priority ?? 0) === highestPriority);
-    let candidates = riskBand;
-    // Preserve bounded risk ordering while ensuring a constrained run does
-    // not spend every slot repeating the same interaction endpoint. Once an
-    // interaction is selected, prefer the highest-risk fitting item that
-    // introduces a new symbol; this keeps structural diversity observable
-    // under small work-item budgets.
-    if (selected.some((item) => item.kind === "interaction")) {
-      const selectedSymbols = new Set(
-        selected.flatMap((entry) =>
-          [...entry.primarySymbols, ...entry.relatedSymbols].map((symbol) => `${symbol.file}#${symbol.qualifiedName}`),
-        ),
-      );
-      const novel = fitting.filter((item) =>
-        [...item.primarySymbols, ...item.relatedSymbols].some(
-          (symbol) => !selectedSymbols.has(`${symbol.file}#${symbol.qualifiedName}`),
-        ),
-      );
-      const novelInteractions = fitting.filter((item) => {
-        if (item.kind !== "interaction") return false;
-        const selectedTargets = new Set(
-          selected.flatMap((entry) => entry.relatedSymbols.map((symbol) => `${symbol.file}#${symbol.qualifiedName}`)),
-        );
-        return item.relatedSymbols.some(
-          (symbol) => !selectedTargets.has(`${symbol.file}#${symbol.qualifiedName}`),
-        );
-      });
-      if (novelInteractions.length) candidates = novelInteractions;
-      else if (novel.length) candidates = novel;
-    }
-    candidates.sort(
-      (left, right) =>
-        selectionNovelty(right, selected) - selectionNovelty(left, selected) || workItemRank(left, right),
-    );
-    const item = candidates[0];
-    const novelty = selectionNovelty(item, selected);
-    item.selectionReason = `ranked-fill; priority=${item.priority ?? 0}; novelty=${novelty}; semantic=${workItemSemanticKey(item)}`;
+    const item = fitting[0];
+    item.selectionReason = `ranked-fill; rank=${item.rank ?? incomingRank.get(item.id) ?? "unknown"}; semantic=${workItemSemanticKey(item)}`;
     selected.push(item);
     selectedIds.add(item.id);
     usedTokens += item.estimatedTokens;
@@ -586,7 +666,12 @@ export function selectWorkItems(items: ReviewWorkItem[], limit: number, tokenBud
   const budgetLimited = selected.length < Math.max(0, limit);
   for (const item of ranked.filter((entry) => !selectedIds.has(entry.id))) {
     omitted.push(item);
-    if (budgetLimited && usedTokens + item.estimatedTokens > tokenBudget) tokenOmitted.push(item);
+    if (budgetLimited && usedTokens + item.estimatedTokens > tokenBudget) {
+      tokenOmitted.push(item);
+      item.selectionReason = `omitted-token-budget; rank=${item.rank ?? incomingRank.get(item.id) ?? "unknown"}`;
+    } else {
+      item.selectionReason = `omitted-lower-ranked; rank=${item.rank ?? incomingRank.get(item.id) ?? "unknown"}`;
+    }
   }
   return { selected, omitted, tokenOmitted, estimatedTokens: usedTokens };
 }
@@ -607,13 +692,21 @@ export function buildWorkItems(opts: {
       opts.graph.edges.map((edge) => [`${edge.kind}:${edge.source}:${edge.target ?? edge.targetText}`, edge]),
     ).values(),
   ];
-  const bySymbol = new Map(
-    opts.projection.code.filter((code) => code.symbol).map((code) => [`${code.file}:${code.symbol}`, code]),
-  );
+  const factorsFor = (nodeKey: string) => canonicalGraphFactors(graphEdges, nodeKey);
+  const bySymbol = new Map<string, ProjectedSnippet[]>();
+  for (const code of opts.projection.code.filter((entry) => entry.symbol)) {
+    const key = `${code.file}:${code.symbol}`;
+    const values = bySymbol.get(key) ?? [];
+    values.push(code);
+    bySymbol.set(key, values);
+  }
   const deterministicReport = opts.projection.deterministicReport?.slice(0, 2000);
   const overhead = 900 + estimateTokens(deterministicReport ?? "", opts.profile, false);
-  const ruleReserve = Math.min(1200, Math.floor(opts.inputBudgetTokens * 0.2));
-  const codeBudget = Math.max(128, opts.inputBudgetTokens - overhead - ruleReserve);
+  const ruleTokenReserve = [...opts.rules]
+    .map((rule) => Math.ceil(rule.short.length / 3))
+    .sort((left, right) => right - left)
+    .slice(0, opts.policy.maxRulesPerUnit)
+    .reduce((sum, value) => sum + value, 0);
   const hotspotSymbols = new Set(
     (opts.hotspots ?? []).flatMap((hotspot) => [...hotspot.symbols, ...hotspot.requestedInspection.symbols]),
   );
@@ -622,13 +715,21 @@ export function buildWorkItems(opts: {
   );
   const hasScoutTargets = Boolean(opts.hotspots?.length && (hotspotSymbols.size || hotspotEdgeKinds.size));
   const locals: ReviewWorkItem[] = [];
-  const addLocal = (item: ReviewWorkItem, source: ProjectedSnippet, focus?: { start: number; end: number }): void => {
-    item.rules = selectRules(opts.rules, item, opts.policy.maxRulesPerUnit);
-    const availableCodeTokens = Math.max(
-      64,
-      opts.inputBudgetTokens - overhead - item.rules.reduce((sum, rule) => sum + rule.estimatedTokens, 0),
+  const addLocal = (item: ReviewWorkItem, sources: ProjectedSnippet[]): void => {
+    const availableCodeTokens = Math.max(64, opts.inputBudgetTokens - overhead - ruleTokenReserve);
+    const perSourceBudget = Math.max(32, Math.floor(availableCodeTokens / Math.max(1, sources.length)));
+    item.code = sources.flatMap((source) =>
+      boundedMultiRegionSnippets(source, perSourceBudget, opts.profile, source.changedLineRanges ?? []),
     );
-    item.code = [boundedSnippet(source, availableCodeTokens, opts.profile, focus)];
+    item.changedRegions = sources.flatMap((source) =>
+      (source.changedLineRanges ?? []).map((range) => ({ file: source.file, ...range })),
+    );
+    item.promptVisibleRanges = item.code.map((snippet) => ({
+      file: snippet.file,
+      start: snippet.startLine,
+      end: snippet.endLine,
+    }));
+    item.rules = selectRules(opts.rules, item, opts.policy.maxRulesPerUnit);
     item.estimatedTokens =
       overhead +
       item.code.reduce((sum, code) => sum + code.estimatedTokens, 0) +
@@ -643,13 +744,12 @@ export function buildWorkItems(opts: {
       !hotspotSymbols.has(symbol.name)
     )
       continue;
-    const source = bySymbol.get(symbolKey(symbol));
-    if (!source) continue;
-    const slices =
-      source.estimatedTokens > codeBudget && source.changedLineRanges?.length ? source.changedLineRanges : [undefined];
-    for (const range of slices) {
+    const sources = bySymbol.get(symbolKey(symbol)) ?? [];
+    if (!sources.length) continue;
+    const factors = factorsFor(symbolKey(symbol));
+    {
       const item: ReviewWorkItem = {
-        id: `local:${sha({ symbol: symbolKey(symbol), range })}`,
+        id: `local:${sha({ symbol: symbolKey(symbol) })}`,
         kind: "local",
         priority: filePriority(symbol.file) + symbolPriority(symbol, opts.graph.nodes),
         primarySymbols: [symbol],
@@ -667,16 +767,19 @@ export function buildWorkItems(opts: {
         contextSummaries: [...opts.projection.dependencySummary, ...opts.projection.contextSummary],
         estimatedTokens: 0,
         rankFactors: {
+          semanticRisk: filePriority(symbol.file) + symbolPriority(symbol, opts.graph.nodes),
           edgeRisk: 0,
           changedEndpoints: 1,
           productionSurface: filePriority(symbol.file) >= 90 ? 1 : 0,
-          changedLines: (source.changedLineRanges ?? []).reduce((sum, value) => sum + value.end - value.start + 1, 0),
-          graphDegree: graphEdges.filter(
-            (edge) => edge.source === symbolKey(symbol) || edge.target === symbolKey(symbol),
-          ).length,
+          changedLines: sources
+            .flatMap((source) => source.changedLineRanges ?? [])
+            .reduce((sum, value) => sum + value.end - value.start + 1, 0),
+          graphDegree: factors.neighborDegree,
+          ...factors,
+          degreeContribution: graphDegreeContribution(factors.neighborDegree),
         },
       };
-      addLocal(item, source, range);
+      addLocal(item, sources);
     }
   }
   for (const code of opts.projection.code.filter((item) => item.changed && !item.symbol)) {
@@ -693,14 +796,20 @@ export function buildWorkItems(opts: {
       contextSummaries: [...opts.projection.dependencySummary, ...opts.projection.contextSummary],
       estimatedTokens: 0,
       rankFactors: {
+        semanticRisk: filePriority(code.file) + code.score,
         edgeRisk: 0,
         changedEndpoints: 1,
         productionSurface: filePriority(code.file) >= 90 ? 1 : 0,
         changedLines: (code.changedLineRanges ?? []).reduce((sum, value) => sum + value.end - value.start + 1, 0),
         graphDegree: 0,
+        fanIn: 0,
+        fanOut: 0,
+        neighborDegree: 0,
+        directedIncidentDegree: 0,
+        degreeContribution: 0,
       },
     };
-    addLocal(item, code);
+    addLocal(item, [code]);
   }
   const interactions: ReviewWorkItem[] = [];
   const fanout = new Map<string, number>();
@@ -709,16 +818,17 @@ export function buildWorkItems(opts: {
     return (
       interactionPriority(right, changed, hotspotSymbols) - interactionPriority(left, changed, hotspotSymbols) ||
       left.source.localeCompare(right.source) ||
-      (left.target ?? left.targetText).localeCompare(right.target ?? right.targetText)
+      (left.target ?? left.targetText).localeCompare(right.target ?? right.targetText) ||
+      left.kind.localeCompare(right.kind)
     );
   });
+  const neighborLimit = Math.min(
+    opts.policy.maxUnitsPerChangedSymbol,
+    opts.maxInteractionNeighborsPerSymbol ?? opts.policy.maxUnitsPerChangedSymbol,
+  );
+  const groups = new Map<string, GraphContextEdge[]>();
   for (const edge of rankedEdges) {
-    const primaryKey = changed.has(edge.source)
-      ? edge.source
-      : edge.target && changed.has(edge.target)
-        ? edge.target
-        : undefined;
-    if (!primaryKey || !edge.target) continue;
+    if (!edge.target) continue;
     if (
       hasScoutTargets &&
       !hotspotEdgeKinds.has(edge.kind) &&
@@ -726,68 +836,100 @@ export function buildWorkItems(opts: {
       !hotspotSymbols.has(edge.target)
     )
       continue;
-    const neighborLimit = Math.min(
-      opts.policy.maxUnitsPerChangedSymbol,
-      opts.maxInteractionNeighborsPerSymbol ?? opts.policy.maxUnitsPerChangedSymbol,
+    const changedEndpoints = [edge.source, edge.target].filter((endpoint): endpoint is string =>
+      Boolean(endpoint && changed.has(endpoint)),
     );
-    if ((fanout.get(primaryKey) ?? 0) >= neighborLimit) continue;
-    const primary = opts.graph.nodes.find((node) => symbolKey(node.symbol) === primaryKey)?.symbol;
-    const otherKey = edge.source === primaryKey ? edge.target : edge.source;
-    const related = opts.graph.nodes.find((node) => symbolKey(node.symbol) === otherKey)?.symbol;
-    const primaryCode = bySymbol.get(primaryKey);
-    const relatedCode = bySymbol.get(otherKey);
-    if (!primary || !related || !primaryCode || !relatedCode) continue;
-    const perSnippet = Math.max(128, Math.floor(codeBudget / 2));
+    if (!changedEndpoints.length) continue;
+    const clusterKey = `${[...changedEndpoints].sort()[0]}:${interactionFamily(edge.kind)}`;
+    const group = groups.get(clusterKey) ?? [];
+    if (group.length < neighborLimit) group.push(edge);
+    groups.set(clusterKey, group);
+  }
+  for (const edges of groups.values()) {
+    const primaryKeys = [
+      ...new Set(edges.flatMap((edge) => [edge.source, edge.target!]).filter((key) => changed.has(key))),
+    ];
+    if (!primaryKeys.length) continue;
+    if (primaryKeys.every((key) => (fanout.get(key) ?? 0) >= neighborLimit)) continue;
+    const allKeys = [...new Set(edges.flatMap((edge) => [edge.source, edge.target!]))];
+    const symbols = allKeys
+      .map((key) => opts.graph.nodes.find((node) => symbolKey(node.symbol) === key)?.symbol)
+      .filter((symbol): symbol is GraphSymbol => Boolean(symbol));
+    const primarySymbols = symbols.filter((symbol) => changed.has(symbolKey(symbol)));
+    const relatedSymbols = symbols.filter((symbol) => !changed.has(symbolKey(symbol)));
+    const orderedSymbols = [...primarySymbols, ...relatedSymbols];
+    const codes = orderedSymbols.flatMap((symbol) => bySymbol.get(symbolKey(symbol)) ?? []);
+    if (orderedSymbols.length < 2 || !codes.length) continue;
+    const edgeRisk = Math.max(...edges.map((edge) => interactionPriority(edge, changed, hotspotSymbols)));
+    const factors = symbols.reduce(
+      (current, symbol) => {
+        const value = factorsFor(symbolKey(symbol));
+        return {
+          fanIn: Math.max(current.fanIn, value.fanIn),
+          fanOut: Math.max(current.fanOut, value.fanOut),
+          neighborDegree: Math.max(current.neighborDegree, value.neighborDegree),
+          directedIncidentDegree: Math.max(current.directedIncidentDegree, value.directedIncidentDegree),
+        };
+      },
+      { fanIn: 0, fanOut: 0, neighborDegree: 0, directedIncidentDegree: 0 },
+    );
+    const semanticRisk = edgeRisk + Math.max(...symbols.map((symbol) => symbolPriority(symbol, opts.graph.nodes)));
     const item: ReviewWorkItem = {
-      id: `interaction:${sha({ primaryKey, otherKey, kind: edge.kind })}`,
+      id: `interaction:${sha({ edges: edges.map((edge) => `${edge.kind}:${edge.source}:${edge.target}`).sort() })}`,
       kind: "interaction",
-      priority:
-        interactionPriority(edge, changed, hotspotSymbols) +
-        symbolPriority(primary, opts.graph.nodes) +
-        symbolPriority(related, opts.graph.nodes),
-      primarySymbols: [primary],
-      relatedSymbols: [related],
-      code: [
-        boundedSnippet(primaryCode, perSnippet, opts.profile),
-        boundedSnippet(relatedCode, perSnippet, opts.profile),
-      ],
-      graphEdges: [edge],
+      priority: semanticRisk,
+      primarySymbols,
+      relatedSymbols,
+      code: [],
+      graphEdges: edges,
       rules: [],
       deterministicReport,
       contextSummaries: [...opts.projection.dependencySummary, ...opts.projection.contextSummary],
       estimatedTokens: 0,
       rankFactors: {
-        edgeRisk: interactionPriority(edge, changed, hotspotSymbols),
-        changedEndpoints: Number(changed.has(edge.source)) + Number(changed.has(edge.target)),
-        productionSurface: Number(filePriority(primary.file) >= 90) + Number(filePriority(related.file) >= 90),
-        changedLines: [primaryCode, relatedCode]
+        semanticRisk,
+        edgeRisk,
+        changedEndpoints: primarySymbols.length,
+        productionSurface: Number(symbols.some((symbol) => filePriority(symbol.file) >= 90)),
+        changedLines: codes
           .flatMap((code) => code.changedLineRanges ?? [])
           .reduce((sum, value) => sum + value.end - value.start + 1, 0),
-        graphDegree: graphEdges.filter(
-          (candidate) =>
-            candidate.source === primaryKey ||
-            candidate.target === primaryKey ||
-            candidate.source === otherKey ||
-            candidate.target === otherKey,
-        ).length,
+        graphDegree: factors.neighborDegree,
+        ...factors,
+        degreeContribution: graphDegreeContribution(factors.neighborDegree),
       },
     };
-    item.rules = selectRules(opts.rules, item, opts.policy.maxRulesPerUnit);
-    const availableCodeTokens = Math.max(
-      128,
-      opts.inputBudgetTokens - overhead - item.rules.reduce((sum, rule) => sum + rule.estimatedTokens, 0),
+    const availableCodeTokens = Math.max(128, opts.inputBudgetTokens - overhead - ruleTokenReserve);
+    const symbolWeights = new Map(
+      orderedSymbols.map((symbol) => [
+        symbolKey(symbol),
+        primarySymbols.some((primary) => symbolKey(primary) === symbolKey(symbol)) ? 1 : 3,
+      ]),
     );
-    const availablePerSnippet = Math.max(64, Math.floor(availableCodeTokens / 2));
-    item.code = [
-      boundedSnippet(primaryCode, availablePerSnippet, opts.profile),
-      boundedSnippet(relatedCode, availablePerSnippet, opts.profile),
-    ];
+    const totalWeight = codes.reduce(
+      (sum, code) => sum + (symbolWeights.get(code.symbol ? `${code.file}:${code.symbol}` : "") ?? 1),
+      0,
+    );
+    item.code = codes.flatMap((code) => {
+      const weight = symbolWeights.get(code.symbol ? `${code.file}:${code.symbol}` : "") ?? 1;
+      const budget = Math.max(64, Math.floor((availableCodeTokens * weight) / totalWeight));
+      return boundedMultiRegionSnippets(code, budget, opts.profile, code.changedLineRanges ?? []);
+    });
+    item.changedRegions = codes.flatMap((code) =>
+      (code.changedLineRanges ?? []).map((range) => ({ file: code.file, ...range })),
+    );
+    item.promptVisibleRanges = item.code.map((snippet) => ({
+      file: snippet.file,
+      start: snippet.startLine,
+      end: snippet.endLine,
+    }));
+    item.rules = selectRules(opts.rules, item, opts.policy.maxRulesPerUnit);
     item.estimatedTokens =
       overhead +
       item.code.reduce((sum, value) => sum + value.estimatedTokens, 0) +
       item.rules.reduce((sum, rule) => sum + rule.estimatedTokens, 0);
     interactions.push(item);
-    fanout.set(primaryKey, (fanout.get(primaryKey) ?? 0) + 1);
+    for (const key of primaryKeys) fanout.set(key, (fanout.get(key) ?? 0) + 1);
   }
   return uniqueWorkItems([...locals, ...interactions]);
 }

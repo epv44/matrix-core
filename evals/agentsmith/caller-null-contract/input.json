@@ -6,30 +6,107 @@
   "packageVersion": "0.5.1",
   "root": "<repo>",
   "version": "caller-null-contract-fixture-v1",
-  "sourceSnapshot": { "schemaVersion": 1, "manifestHash": "042678c938193b110fe1ed549a6950dfef7916f54e5248cb9e6688ac4550b228", "fileCount": 4, "totalBytes": 353, "complete": true, "portable": true, "captureDurationMs": 0, "warnings": [] },
+  "sourceSnapshot": {
+    "schemaVersion": 1,
+    "manifestHash": "042678c938193b110fe1ed549a6950dfef7916f54e5248cb9e6688ac4550b228",
+    "fileCount": 4,
+    "totalBytes": 353,
+    "complete": true,
+    "portable": true,
+    "captureDurationMs": 0,
+    "warnings": []
+  },
   "scope": {
     "id": "caller-null-contract-scope-v1",
     "version": "caller-null-contract-fixture-v1",
     "root": "<repo>",
     "base": null,
     "diff": "diff --git a/src/profile.ts b/src/profile.ts\n--- a/src/profile.ts\n+++ b/src/profile.ts\n@@ -2,6 +2,6 @@\n   name: string;\n }\n \n-export function loadProfile(id: string): Profile {\n-  return id === \"known\" ? { name: \"Ada\" } : { name: \"Guest\" };\n+export function loadProfile(id: string): Profile | null {\n+  return id === \"known\" ? { name: \"Ada\" } : null;\n }\n",
-    "changedFiles": ["src/profile.ts"],
-    "changeSources": { "src/profile.ts": ["working-tree"] },
+    "changedFiles": [
+      "src/profile.ts"
+    ],
+    "changeSources": {
+      "src/profile.ts": [
+        "working-tree"
+      ]
+    },
     "deletedFiles": [],
-    "fileContents": { "src/profile.ts": "export interface Profile {\n  name: string;\n}\n\nexport function loadProfile(id: string): Profile | null {\n  return id === \"known\" ? { name: \"Ada\" } : null;\n}\n" },
-    "suppliedContext": { "src/display.ts": "import { loadProfile } from \"./profile.js\";\n\nexport function displayName(id: string): string {\n  return loadProfile(id).name;\n}\n" },
-    "manifest": [{ "path": "src/profile.ts", "changeKind": "modified", "additions": 2, "deletions": 2, "language": "typescript", "generated": false, "binary": false, "sizeBytes": 156 }],
+    "fileContents": {
+      "src/profile.ts": "export interface Profile {\n  name: string;\n}\n\nexport function loadProfile(id: string): Profile | null {\n  return id === \"known\" ? { name: \"Ada\" } : null;\n}\n"
+    },
+    "suppliedContext": {
+      "src/display.ts": "import { loadProfile } from \"./profile.js\";\n\nexport function displayName(id: string): string {\n  return loadProfile(id).name;\n}\n"
+    },
+    "manifest": [
+      {
+        "path": "src/profile.ts",
+        "changeKind": "modified",
+        "additions": 2,
+        "deletions": 2,
+        "language": "typescript",
+        "generated": false,
+        "binary": false,
+        "sizeBytes": 156
+      }
+    ],
     "omissions": [],
-    "languages": ["typescript"],
-    "metadata": { "fileCount": 1, "additions": 2, "deletions": 2, "capturedAt": "2026-08-28T00:00:00.000Z" }
+    "languages": [
+      "typescript"
+    ],
+    "metadata": {
+      "fileCount": 1,
+      "additions": 2,
+      "deletions": 2,
+      "capturedAt": "2026-08-28T00:00:00.000Z"
+    }
   },
   "deterministicReport": "PASS",
   "result": {
-    "schemaVersion": 3, "version": "caller-null-contract-fixture-v1", "snapshotId": "caller-null-contract-scope-v1",
-    "status": "completed", "outcome": "findings", "mode": "partitioned", "reviewPath": "generic", "findings": [],
-    "coverage": { "changedFiles": 1, "changedFilesReviewed": 1, "changedSymbols": 1, "changedSymbolsReviewed": 1, "localUnitsGenerated": 1, "localUnitsReviewed": 1, "interactionUnitsGenerated": 1, "interactionUnitsReviewed": 1, "dependencyEdgesIdentified": 1, "dependencyEdgesEligible": 1, "dependencyEdgesReviewed": 1, "evidenceRequests": 1, "evidenceResolved": 1, "evidenceGaps": 0, "globalScan": "none", "omissions": [] },
-    "summary": "Draft synthetic trace; expected labels are stored in case.yaml.", "timestamp": "2026-08-28T00:00:00.000Z", "reviewer": "AgentSmith",
-    "runtime": { "models": { "candidate": "qwen3.5:9b-q4_K_M", "verifier": "qwen3.5:9b-q4_K_M" }, "inputTokens": 0, "outputTokens": 0, "concurrency": 1 }
+    "schemaVersion": 3,
+    "version": "caller-null-contract-fixture-v1",
+    "snapshotId": "caller-null-contract-scope-v1",
+    "status": "completed",
+    "outcome": "findings",
+    "mode": "partitioned",
+    "reviewPath": "generic",
+    "findings": [],
+    "coverage": {
+      "changedFiles": 1,
+      "changedFilesReviewed": 1,
+      "changedSymbols": 1,
+      "changedSymbolsReviewed": 1,
+      "localUnitsGenerated": 1,
+      "localUnitsReviewed": 1,
+      "interactionUnitsGenerated": 1,
+      "interactionUnitsReviewed": 1,
+      "dependencyEdgesIdentified": 1,
+      "dependencyEdgesEligible": 1,
+      "dependencyEdgesReviewed": 1,
+      "evidenceRequests": 1,
+      "evidenceResolved": 1,
+      "evidenceGaps": 0,
+      "globalScan": "none",
+      "omissions": []
+    },
+    "summary": "Draft synthetic trace; expected labels are stored in case.yaml.",
+    "timestamp": "2026-08-28T00:00:00.000Z",
+    "reviewer": "AgentSmith",
+    "runtime": {
+      "models": {
+        "candidate": "qwen3.5:9b-q4_K_M",
+        "verifier": "qwen3.5:9b-q4_K_M"
+      },
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "concurrency": 1
+    }
   },
-  "decisionProvenance": { "publishedFindingIds": [], "rejectedCandidateIds": [], "likelyCandidateIds": [], "insufficientEvidenceCandidateIds": [], "aggregateRule": "verified only", "errors": [] }
+  "decisionProvenance": {
+    "publishedFindingIds": [],
+    "rejectedCandidateIds": [],
+    "likelyCandidateIds": [],
+    "insufficientEvidenceCandidateIds": [],
+    "aggregateRule": "verified only",
+    "errors": []
+  }
 }

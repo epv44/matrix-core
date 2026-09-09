@@ -6,25 +6,119 @@
   "packageVersion": "0.5.1",
   "root": "<repo>",
   "version": "fantasybotcrawler-player-identity-edges-fixture-v1",
-  "sourceSnapshot": { "schemaVersion": 1, "manifestHash": "fe2d35e4247164bb2362a3f5113b5a71676b0ffce0c72f994e5715c8039b7d65", "fileCount": 7, "totalBytes": 1440, "complete": true, "portable": true, "captureDurationMs": 0, "warnings": [] },
+  "sourceSnapshot": {
+    "schemaVersion": 1,
+    "manifestHash": "fe2d35e4247164bb2362a3f5113b5a71676b0ffce0c72f994e5715c8039b7d65",
+    "fileCount": 7,
+    "totalBytes": 1440,
+    "complete": true,
+    "portable": true,
+    "captureDurationMs": 0,
+    "warnings": []
+  },
   "scope": {
     "id": "fantasybotcrawler-player-identity-edges-scope-v1",
     "version": "fantasybotcrawler-player-identity-edges-fixture-v1",
     "root": "<repo>",
     "base": null,
-    "diff": "diff --git a/fantasy_bot_crawler/models/player.py b/fantasy_bot_crawler/models/player.py\n--- a/fantasy_bot_crawler/models/player.py\n+++ b/fantasy_bot_crawler/models/player.py\n@@ -3,6 +3,7 @@\n @dataclass(frozen=True, slots=True)\n class Player:\n+    # Shared player domain symbol.\n     id: str\n     name: str\n     name_key: str\n\ndiff --git a/fantasy_bot_crawler/models/team.py b/fantasy_bot_crawler/models/team.py\n--- a/fantasy_bot_crawler/models/team.py\n+++ b/fantasy_bot_crawler/models/team.py\n@@ -3,4 +3,5 @@\n @dataclass(frozen=True, slots=True)\n class Team:\n+    # Unreferenced sibling control.\n     team_id: str\n\ndiff --git a/fantasy_bot_crawler/repositories/player_repository.py b/fantasy_bot_crawler/repositories/player_repository.py\n--- a/fantasy_bot_crawler/repositories/player_repository.py\n+++ b/fantasy_bot_crawler/repositories/player_repository.py\n@@ -1,5 +1,5 @@\n-from fantasy_bot_crawler.models.player import Player\n+from fantasy_bot_crawler.models.player import ExternalIdentity, Player\n\n\n class PlayerRepository:\n\ndiff --git a/fantasy_bot_crawler/providers/espn/fantasy_models.py b/fantasy_bot_crawler/providers/espn/fantasy_models.py\n--- a/fantasy_bot_crawler/providers/espn/fantasy_models.py\n+++ b/fantasy_bot_crawler/providers/espn/fantasy_models.py\n@@ -4,6 +4,7 @@\n from fantasy_bot_crawler.models.player import ExternalIdentity, Player\n\n\n def to_player(player: Any) -> Player:\n+    # Provider conversion feeds the shared player model.\n     name = getattr(player, \"name\", \"Unknown\") or \"Unknown\"\n\ndiff --git a/fantasy_bot_crawler/crawler_factory.py b/fantasy_bot_crawler/crawler_factory.py\n--- a/fantasy_bot_crawler/crawler_factory.py\n+++ b/fantasy_bot_crawler/crawler_factory.py\n@@ -6,6 +6,7 @@\n\n\n def build_player_repository() -> PlayerRepository:\n+    # Factory materializes the shared identities.\n     return PlayerRepository()\n",
-    "changedFiles": ["fantasy_bot_crawler/models/player.py", "fantasy_bot_crawler/models/team.py", "fantasy_bot_crawler/repositories/player_repository.py", "fantasy_bot_crawler/providers/espn/fantasy_models.py", "fantasy_bot_crawler/crawler_factory.py"],
-    "changeSources": {}, "deletedFiles": [],
+    "diff": "diff --git a/fantasy_bot_crawler/models/player.py b/fantasy_bot_crawler/models/player.py\n--- a/fantasy_bot_crawler/models/player.py\n+++ b/fantasy_bot_crawler/models/player.py\n@@ -3,5 +3,6 @@\n @dataclass(frozen=True, slots=True)\n class Player:\n+    # Shared player domain symbol.\n     id: str\n     name: str\n     name_key: str\n\ndiff --git a/fantasy_bot_crawler/models/team.py b/fantasy_bot_crawler/models/team.py\n--- a/fantasy_bot_crawler/models/team.py\n+++ b/fantasy_bot_crawler/models/team.py\n@@ -3,3 +3,4 @@\n @dataclass(frozen=True, slots=True)\n class Team:\n+    # Unreferenced sibling control.\n     team_id: str\n\ndiff --git a/fantasy_bot_crawler/repositories/player_repository.py b/fantasy_bot_crawler/repositories/player_repository.py\n--- a/fantasy_bot_crawler/repositories/player_repository.py\n+++ b/fantasy_bot_crawler/repositories/player_repository.py\n@@ -1,4 +1,4 @@\n-from fantasy_bot_crawler.models.player import Player\n+from fantasy_bot_crawler.models.player import ExternalIdentity, Player\n\n\n class PlayerRepository:\n\ndiff --git a/fantasy_bot_crawler/providers/espn/fantasy_models.py b/fantasy_bot_crawler/providers/espn/fantasy_models.py\n--- a/fantasy_bot_crawler/providers/espn/fantasy_models.py\n+++ b/fantasy_bot_crawler/providers/espn/fantasy_models.py\n@@ -3,5 +3,6 @@\n from fantasy_bot_crawler.models.player import ExternalIdentity, Player\n\n\n def to_player(player: Any) -> Player:\n+    # Provider conversion feeds the shared player model.\n     name = getattr(player, \"name\", \"Unknown\") or \"Unknown\"\n\ndiff --git a/fantasy_bot_crawler/crawler_factory.py b/fantasy_bot_crawler/crawler_factory.py\n--- a/fantasy_bot_crawler/crawler_factory.py\n+++ b/fantasy_bot_crawler/crawler_factory.py\n@@ -5,2 +5,3 @@\n\n\n def build_player_repository() -> PlayerRepository:\n+    # Factory materializes the shared identities.\n     return PlayerRepository()\n",
+    "changedFiles": [
+      "fantasy_bot_crawler/models/player.py",
+      "fantasy_bot_crawler/models/team.py",
+      "fantasy_bot_crawler/repositories/player_repository.py",
+      "fantasy_bot_crawler/providers/espn/fantasy_models.py",
+      "fantasy_bot_crawler/crawler_factory.py"
+    ],
+    "changeSources": {},
+    "deletedFiles": [],
     "fileContents": {
-      "fantasy_bot_crawler/models/player.py": "from dataclasses import dataclass\n\n\n@dataclass(frozen=True, slots=True)\nclass Player:\n    id: str\n    name: str\n    name_key: str\n\n\n@dataclass(frozen=True, slots=True)\nclass ExternalIdentity:\n    provider: str\n    external_id: str\n\n",
-      "fantasy_bot_crawler/models/team.py": "from dataclasses import dataclass\n\n\n@dataclass(frozen=True, slots=True)\nclass Team:\n    team_id: str\n\n",
+      "fantasy_bot_crawler/models/player.py": "from dataclasses import dataclass\n\n@dataclass(frozen=True, slots=True)\nclass Player:\n    # Shared player domain symbol.\n    id: str\n    name: str\n    name_key: str\n\n\n@dataclass(frozen=True, slots=True)\nclass ExternalIdentity:\n    provider: str\n    external_id: str\n",
+      "fantasy_bot_crawler/models/team.py": "from dataclasses import dataclass\n\n@dataclass(frozen=True, slots=True)\nclass Team:\n    # Unreferenced sibling control.\n    team_id: str\n",
       "fantasy_bot_crawler/repositories/player_repository.py": "from fantasy_bot_crawler.models.player import ExternalIdentity, Player\n\n\nclass PlayerRepository:\n    def save(self, player: Player, identity: ExternalIdentity) -> tuple[str, str]:\n        return player.id, identity.external_id\n\n",
-      "fantasy_bot_crawler/providers/espn/fantasy_models.py": "from typing import Any\n\nfrom fantasy_bot_crawler.models.player import ExternalIdentity, Player\n\n\ndef to_player(player: Any) -> Player:\n    name = getattr(player, \"name\", \"Unknown\") or \"Unknown\"\n    return Player(id=f\"plr_{name.lower()}\", name=name, name_key=name.lower().strip())\n\n\ndef to_external_identity(player: Any) -> ExternalIdentity:\n    return ExternalIdentity(provider=\"ESPN\", external_id=str(player.playerId))\n\n",
-      "fantasy_bot_crawler/crawler_factory.py": "from fantasy_bot_crawler.models.player import ExternalIdentity, Player\nfrom fantasy_bot_crawler.repositories.player_repository import PlayerRepository\n\n\ndef build_player_repository() -> PlayerRepository:\n    return PlayerRepository()\n\n\ndef materialize_identity(player: Player, identity: ExternalIdentity) -> tuple[str, str]:\n    return player.id, identity.external_id\n\n"
+      "fantasy_bot_crawler/providers/espn/fantasy_models.py": "from typing import Any\n\nfrom fantasy_bot_crawler.models.player import ExternalIdentity, Player\n\n\ndef to_player(player: Any) -> Player:\n    # Provider conversion feeds the shared player model.\n    name = getattr(player, \"name\", \"Unknown\") or \"Unknown\"\n    return Player(id=f\"plr_{name.lower()}\", name=name, name_key=name.lower().strip())\n\n\ndef to_external_identity(player: Any) -> ExternalIdentity:\n    return ExternalIdentity(provider=\"ESPN\", external_id=str(player.playerId))\n",
+      "fantasy_bot_crawler/crawler_factory.py": "from fantasy_bot_crawler.models.player import ExternalIdentity, Player\nfrom fantasy_bot_crawler.repositories.player_repository import PlayerRepository\n\n\ndef build_player_repository() -> PlayerRepository:\n    # Factory materializes the shared identities.\n    return PlayerRepository()\n\n\ndef materialize_identity(player: Player, identity: ExternalIdentity) -> tuple[str, str]:\n    return player.id, identity.external_id\n"
     },
-    "suppliedContext": {}, "manifest": [{"path":"fantasy_bot_crawler/models/player.py","changeKind":"modified"},{"path":"fantasy_bot_crawler/models/team.py","changeKind":"modified"},{"path":"fantasy_bot_crawler/repositories/player_repository.py","changeKind":"modified"},{"path":"fantasy_bot_crawler/providers/espn/fantasy_models.py","changeKind":"modified"},{"path":"fantasy_bot_crawler/crawler_factory.py","changeKind":"modified"}], "omissions": [], "languages": ["python"], "metadata": { "fileCount": 5, "additions": 7, "deletions": 3, "capturedAt": "2026-08-29T00:00:00.000Z" }
+    "suppliedContext": {},
+    "manifest": [
+      {
+        "path": "fantasy_bot_crawler/models/player.py",
+        "changeKind": "modified"
+      },
+      {
+        "path": "fantasy_bot_crawler/models/team.py",
+        "changeKind": "modified"
+      },
+      {
+        "path": "fantasy_bot_crawler/repositories/player_repository.py",
+        "changeKind": "modified"
+      },
+      {
+        "path": "fantasy_bot_crawler/providers/espn/fantasy_models.py",
+        "changeKind": "modified"
+      },
+      {
+        "path": "fantasy_bot_crawler/crawler_factory.py",
+        "changeKind": "modified"
+      }
+    ],
+    "omissions": [],
+    "languages": [
+      "python"
+    ],
+    "metadata": {
+      "fileCount": 5,
+      "additions": 7,
+      "deletions": 3,
+      "capturedAt": "2026-08-29T00:00:00.000Z"
+    }
   },
   "deterministicReport": "PASS",
-  "result": { "schemaVersion": 3, "version": "fantasybotcrawler-player-identity-edges-fixture-v1", "snapshotId": "fantasybotcrawler-player-identity-edges-scope-v1", "status": "completed", "outcome": "clear", "mode": "partitioned", "reviewPath": "generic", "findings": [], "coverage": { "changedFiles": 5, "changedFilesReviewed": 5, "changedSymbols": 5, "changedSymbolsReviewed": 5, "localUnitsGenerated": 5, "localUnitsReviewed": 5, "interactionUnitsGenerated": 6, "interactionUnitsReviewed": 6, "dependencyEdgesIdentified": 6, "dependencyEdgesEligible": 6, "dependencyEdgesReviewed": 6, "evidenceRequests": 0, "evidenceResolved": 0, "evidenceGaps": 0, "globalScan": "none", "omissions": [] }, "summary": "Deterministic structural-risk trace.", "timestamp": "2026-08-29T00:00:00.000Z", "reviewer": "AgentSmith", "runtime": { "models": { "candidate": "fixture", "verifier": "fixture" }, "inputTokens": 0, "outputTokens": 0, "concurrency": 1 } },
-  "decisionProvenance": { "publishedFindingIds": [], "rejectedCandidateIds": [], "likelyCandidateIds": [], "insufficientEvidenceCandidateIds": [], "aggregateRule": "verified only", "errors": [] }
+  "result": {
+    "schemaVersion": 3,
+    "version": "fantasybotcrawler-player-identity-edges-fixture-v1",
+    "snapshotId": "fantasybotcrawler-player-identity-edges-scope-v1",
+    "status": "completed",
+    "outcome": "clear",
+    "mode": "partitioned",
+    "reviewPath": "generic",
+    "findings": [],
+    "coverage": {
+      "changedFiles": 5,
+      "changedFilesReviewed": 5,
+      "changedSymbols": 5,
+      "changedSymbolsReviewed": 5,
+      "localUnitsGenerated": 5,
+      "localUnitsReviewed": 5,
+      "interactionUnitsGenerated": 6,
+      "interactionUnitsReviewed": 6,
+      "dependencyEdgesIdentified": 6,
+      "dependencyEdgesEligible": 6,
+      "dependencyEdgesReviewed": 6,
+      "evidenceRequests": 0,
+      "evidenceResolved": 0,
+      "evidenceGaps": 0,
+      "globalScan": "none",
+      "omissions": []
+    },
+    "summary": "Deterministic structural-risk trace.",
+    "timestamp": "2026-08-29T00:00:00.000Z",
+    "reviewer": "AgentSmith",
+    "runtime": {
+      "models": {
+        "candidate": "fixture",
+        "verifier": "fixture"
+      },
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "concurrency": 1
+    }
+  },
+  "decisionProvenance": {
+    "publishedFindingIds": [],
+    "rejectedCandidateIds": [],
+    "likelyCandidateIds": [],
+    "insufficientEvidenceCandidateIds": [],
+    "aggregateRule": "verified only",
+    "errors": []
+  }
 }

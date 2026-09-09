@@ -192,7 +192,7 @@ function omissionsByReason(coverage: ReviewCoverage, reason: string) {
 }
 
 function verifyResultShape(result: ReviewResult) {
-  expect(result.schemaVersion).toBe(3);
+  expect(result.schemaVersion).toBe(4);
   expect(result.coverage.callsStarted ?? 0).toBeGreaterThanOrEqual(0);
   expect(result.coverage.callsCompleted ?? 0).toBeGreaterThanOrEqual(0);
   expect(result.coverage.callsCancelled ?? 0).toBeGreaterThanOrEqual(0);

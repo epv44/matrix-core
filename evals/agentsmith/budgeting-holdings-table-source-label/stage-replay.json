@@ -47,5 +47,71 @@
       ],
       "candidateConfidence": 1
     }
-  ]
+  ],
+  "componentInputs": {
+    "rankingWorkItems": [
+      {
+        "id": "interaction:a97c50858d9654b85586",
+        "kind": "interaction",
+        "rank": 1,
+        "priority": 356.9270364184109,
+        "symbols": [
+          "frontend/src/components/InvestmentView.tsx#HoldingsCard",
+          "frontend/src/lib/api.ts#AssetAllocation",
+          "frontend/src/lib/api.ts#InvestmentDashboard",
+          "frontend/src/components/InvestmentView.tsx#Holding"
+        ],
+        "edges": [
+          "frontend/src/components/InvestmentView.tsx:HoldingsCard->frontend/src/lib/api.ts:InvestmentDashboard:reads-type"
+        ],
+        "rankFactors": { "edgeRisk": 210, "changedEndpoints": 1, "productionSurface": 1, "changedLines": 78, "graphDegree": 10 }
+      },
+      {
+        "id": "interaction:553c1609e85875f845b4",
+        "kind": "interaction",
+        "rank": 3,
+        "priority": 232.6482495431343,
+        "symbols": [
+          "frontend/src/components/InvestmentView.tsx#instrument",
+          "frontend/src/components/InvestmentView.tsx#assetLabel"
+        ],
+        "edges": [],
+        "rankFactors": { "edgeRisk": 90, "changedEndpoints": 1, "productionSurface": 1, "changedLines": 5, "graphDegree": 5 }
+      },
+      {
+        "id": "local:38238196fc3f3cb19cf4",
+        "kind": "local",
+        "rank": 5,
+        "priority": 232.6482495431343,
+        "symbols": [
+          "frontend/src/components/InvestmentView.tsx#HoldingsCard",
+          "frontend/src/components/InvestmentView.tsx#source"
+        ],
+        "edges": [],
+        "rankFactors": { "edgeRisk": 0, "changedEndpoints": 1, "productionSurface": 1, "changedLines": 78, "graphDegree": 5 }
+      }
+    ],
+    "selection": {
+      "rankedWorkItemIds": [
+        "interaction:a97c50858d9654b85586",
+        "interaction:5909458f4c1aea2748d7",
+        "interaction:553c1609e85875f845b4",
+        "interaction:43f5789d6cebb47104f5",
+        "local:38238196fc3f3cb19cf4",
+        "local:65ae02250c8c1faf6f7c",
+        "local:90fa7da05be6aa9abe67",
+        "local:7769bcd38b922b231170",
+        "interaction:e2f1d1b672a6c69f1732",
+        "local:6e14e367d6b4fa963f8a",
+        "local:344a709e4859960d12d8",
+        "local:bc6f1c596a0debfd9e96",
+        "local:2fbb1e2fadf1a338920c",
+        "local:65177642fc599344fe16",
+        "local:ea2b9429d8c3338d325d",
+        "local:d40ad2034cc3be5d3f92",
+        "local:fa1c3a1e11aeeda7a30e",
+        "local:6c89c4209dcd759bfc8f"
+      ]
+    }
+  }
 }

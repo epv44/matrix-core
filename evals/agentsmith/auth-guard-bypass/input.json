@@ -6,26 +6,107 @@
   "packageVersion": "0.5.1",
   "root": "<repo>",
   "version": "auth-guard-bypass-fixture-v1",
-  "sourceSnapshot": { "schemaVersion": 1, "manifestHash": "462820155f19c18c540e8b5da6972bf601431cbd2002d7d60a0a1224d3acb1a0", "fileCount": 4, "totalBytes": 390, "complete": true, "portable": true, "captureDurationMs": 0, "warnings": [] },
+  "sourceSnapshot": {
+    "schemaVersion": 1,
+    "manifestHash": "462820155f19c18c540e8b5da6972bf601431cbd2002d7d60a0a1224d3acb1a0",
+    "fileCount": 4,
+    "totalBytes": 390,
+    "complete": true,
+    "portable": true,
+    "captureDurationMs": 0,
+    "warnings": []
+  },
   "scope": {
-    "id": "auth-guard-bypass-scope-v1", "version": "auth-guard-bypass-fixture-v1", "root": "<repo>", "base": null,
+    "id": "auth-guard-bypass-scope-v1",
+    "version": "auth-guard-bypass-fixture-v1",
+    "root": "<repo>",
+    "base": null,
     "diff": "diff --git a/src/routes.ts b/src/routes.ts\n--- a/src/routes.ts\n+++ b/src/routes.ts\n@@ -1,6 +1,7 @@\n import type { Session } from \"./auth.js\";\n \n export function deleteUser(session: Session | null, userId: string): string {\n-  if (!session || session.role !== \"admin\") throw new Error(\"forbidden\");\n+  const role = session?.role;\n+  if (!session && role !== \"admin\") throw new Error(\"forbidden\");\n   return `deleted:${userId}`;\n }\n",
-    "changedFiles": ["src/routes.ts"],
-    "changeSources": { "src/routes.ts": ["working-tree"] },
+    "changedFiles": [
+      "src/routes.ts"
+    ],
+    "changeSources": {
+      "src/routes.ts": [
+        "working-tree"
+      ]
+    },
     "deletedFiles": [],
-    "fileContents": { "src/routes.ts": "import type { Session } from \"./auth.js\";\n\nexport function deleteUser(session: Session | null, userId: string): string {\n  const role = session?.role;\n  if (!session && role !== \"admin\") throw new Error(\"forbidden\");\n  return `deleted:${userId}`;\n}\n" },
-    "suppliedContext": { "src/auth.ts": "export interface Session {\n  userId: string;\n  role: \"admin\" | \"member\";\n}\n" },
-    "manifest": [{ "path": "src/routes.ts", "changeKind": "modified", "additions": 2, "deletions": 1, "language": "typescript", "generated": false, "binary": false, "sizeBytes": 249 }],
-    "omissions": [], "languages": ["typescript"],
-    "metadata": { "fileCount": 1, "additions": 2, "deletions": 1, "capturedAt": "2026-08-28T00:00:00.000Z" }
+    "fileContents": {
+      "src/routes.ts": "import type { Session } from \"./auth.js\";\n\nexport function deleteUser(session: Session | null, userId: string): string {\n  const role = session?.role;\n  if (!session && role !== \"admin\") throw new Error(\"forbidden\");\n  return `deleted:${userId}`;\n}\n"
+    },
+    "suppliedContext": {
+      "src/auth.ts": "export interface Session {\n  userId: string;\n  role: \"admin\" | \"member\";\n}\n"
+    },
+    "manifest": [
+      {
+        "path": "src/routes.ts",
+        "changeKind": "modified",
+        "additions": 2,
+        "deletions": 1,
+        "language": "typescript",
+        "generated": false,
+        "binary": false,
+        "sizeBytes": 249
+      }
+    ],
+    "omissions": [],
+    "languages": [
+      "typescript"
+    ],
+    "metadata": {
+      "fileCount": 1,
+      "additions": 2,
+      "deletions": 1,
+      "capturedAt": "2026-08-28T00:00:00.000Z"
+    }
   },
   "deterministicReport": "PASS",
   "result": {
-    "schemaVersion": 3, "version": "auth-guard-bypass-fixture-v1", "snapshotId": "auth-guard-bypass-scope-v1",
-    "status": "completed", "outcome": "findings", "mode": "partitioned", "reviewPath": "generic", "findings": [],
-    "coverage": { "changedFiles": 1, "changedFilesReviewed": 1, "changedSymbols": 1, "changedSymbolsReviewed": 1, "localUnitsGenerated": 1, "localUnitsReviewed": 1, "interactionUnitsGenerated": 1, "interactionUnitsReviewed": 1, "dependencyEdgesIdentified": 1, "dependencyEdgesEligible": 1, "dependencyEdgesReviewed": 1, "evidenceRequests": 1, "evidenceResolved": 1, "evidenceGaps": 0, "globalScan": "none", "omissions": [] },
-    "summary": "Draft synthetic trace; expected labels are stored in case.yaml.", "timestamp": "2026-08-28T00:00:00.000Z", "reviewer": "AgentSmith",
-    "runtime": { "models": { "candidate": "qwen3.5:9b-q4_K_M", "verifier": "qwen3.5:9b-q4_K_M" }, "inputTokens": 0, "outputTokens": 0, "concurrency": 1 }
+    "schemaVersion": 3,
+    "version": "auth-guard-bypass-fixture-v1",
+    "snapshotId": "auth-guard-bypass-scope-v1",
+    "status": "completed",
+    "outcome": "findings",
+    "mode": "partitioned",
+    "reviewPath": "generic",
+    "findings": [],
+    "coverage": {
+      "changedFiles": 1,
+      "changedFilesReviewed": 1,
+      "changedSymbols": 1,
+      "changedSymbolsReviewed": 1,
+      "localUnitsGenerated": 1,
+      "localUnitsReviewed": 1,
+      "interactionUnitsGenerated": 1,
+      "interactionUnitsReviewed": 1,
+      "dependencyEdgesIdentified": 1,
+      "dependencyEdgesEligible": 1,
+      "dependencyEdgesReviewed": 1,
+      "evidenceRequests": 1,
+      "evidenceResolved": 1,
+      "evidenceGaps": 0,
+      "globalScan": "none",
+      "omissions": []
+    },
+    "summary": "Draft synthetic trace; expected labels are stored in case.yaml.",
+    "timestamp": "2026-08-28T00:00:00.000Z",
+    "reviewer": "AgentSmith",
+    "runtime": {
+      "models": {
+        "candidate": "qwen3.5:9b-q4_K_M",
+        "verifier": "qwen3.5:9b-q4_K_M"
+      },
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "concurrency": 1
+    }
   },
-  "decisionProvenance": { "publishedFindingIds": [], "rejectedCandidateIds": [], "likelyCandidateIds": [], "insufficientEvidenceCandidateIds": [], "aggregateRule": "verified only", "errors": [] }
+  "decisionProvenance": {
+    "publishedFindingIds": [],
+    "rejectedCandidateIds": [],
+    "likelyCandidateIds": [],
+    "insufficientEvidenceCandidateIds": [],
+    "aggregateRule": "verified only",
+    "errors": []
+  }
 }

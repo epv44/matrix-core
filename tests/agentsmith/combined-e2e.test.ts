@@ -65,7 +65,7 @@ describe("combined review e2e with fake provider", () => {
       const first = await runQualityReview({ cwd: root, mode: "full", base: "main", provider });
       expect(first.gate.status).toBe("PASS");
       expect(first.review).toMatchObject({
-        schemaVersion: 3,
+        schemaVersion: 4,
         reviewPath: "generic",
         mode: "partitioned",
         outcome: "findings",

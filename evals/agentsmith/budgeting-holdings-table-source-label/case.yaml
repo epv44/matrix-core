@@ -1,4 +1,4 @@
-schemaVersion: 7
+schemaVersion: 9
 id: budgeting-holdings-table-source-label
 status: active
 kind: benchmark
@@ -54,8 +54,10 @@ groundTruth:
   exhaustiveCandidates: true
 stageReplay:
   path: stage-replay.json
-  sha256: d18a50b6baff78ead99cc9e47545367c37cc7c303b8e7f663cdc2dce31b1e303
+  sha256: fa6cc2520827c943b55134a100b8b782ca9b99b8e86dc6538b21804521c1592f
   reviewed: true
+evaluationScope:
+  stages: [snapshot, graph, planning, ranking, selection, projection, candidates, evidence, verification, aggregation, reporting]
 expectations:
   snapshot:
     files:
@@ -97,6 +99,24 @@ expectations:
     edges:
       - frontend/src/components/InvestmentView.tsx:HoldingsCard->frontend/src/lib/api.ts:InvestmentDashboard:reads-type
     forbiddenFiles: [package-lock.json]
+  ranking:
+    mustOutrank:
+      - { higher: frontend/src/components/InvestmentView.tsx#HoldingsCard, lower: frontend/src/components/InvestmentView.tsx#instrument }
+    degreePairs:
+      - { higher: frontend/src/components/InvestmentView.tsx#HoldingsCard, lower: frontend/src/components/InvestmentView.tsx#instrument }
+    expectedEdges:
+      - { source: frontend/src/components/InvestmentView.tsx:HoldingsCard, target: frontend/src/lib/api.ts:InvestmentDashboard, kind: reads-type }
+    units:
+      - id: frontend/src/components/InvestmentView.tsx#HoldingsCard
+        factors: { changedEndpoints: 1, graphDegree: 1 }
+  selection:
+    maxWorkItems: 4
+    maxTokens: 10000
+    selected: [frontend/src/components/InvestmentView.tsx#HoldingsCard, frontend/src/lib/api.ts#InvestmentDashboard]
+    expectedEligible: [frontend/src/components/InvestmentView.tsx#HoldingsCard, frontend/src/lib/api.ts#InvestmentDashboard]
+    expectedFeasible: [frontend/src/components/InvestmentView.tsx#HoldingsCard, frontend/src/lib/api.ts#InvestmentDashboard]
+    requiredReserved: [local, interaction]
+    requiredKinds: [local, interaction]
   candidates:
     items: &expected_candidates
       - id: cash-snapshot-source-label

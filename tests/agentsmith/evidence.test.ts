@@ -170,7 +170,7 @@ describe("candidate evidence resolution", () => {
     });
   });
 
-  it("uses the candidate file for an exact structural-type locator", () => {
+  it("rejects expression-shaped symbol locators instead of broadening them", () => {
     const candidate: CandidateFinding = {
       id: "structural",
       sourceWorkItemIds: ["local:1"],
@@ -220,8 +220,8 @@ describe("candidate evidence resolution", () => {
       },
       policy: { maxRequestsPerCandidate: 2, maxParallelResolutions: 1, maxSnippetLines: 20 },
     });
-    expect(resolved.gaps).toEqual([]);
-    expect(resolved.records[0]).toMatchObject({ file: "src/a.ts", startLine: 1 });
+    expect(resolved.records).toEqual([]);
+    expect(resolved.outcomes[0]).toMatchObject({ status: "unresolved" });
   });
 
   it("reports an unusable same-file semantic locator instead of substituting the changed anchor", () => {
@@ -271,7 +271,7 @@ describe("candidate evidence resolution", () => {
       policy: { maxRequestsPerCandidate: 2, maxParallelResolutions: 1, maxSnippetLines: 20 },
     });
     expect(resolved.records).toEqual([]);
-    expect(resolved.gaps).toEqual([expect.stringContaining("no exact evidence matched")]);
+    expect(resolved.gaps).toEqual([expect.stringContaining("invalid expression-shaped symbol locator")]);
     expect(resolved.outcomes).toEqual([expect.objectContaining({ status: "unresolved", records: [] })]);
   });
 

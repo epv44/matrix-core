@@ -1,4 +1,4 @@
-schemaVersion: 7
+schemaVersion: 9
 id: producer-consumer-unit-mismatch
 status: active
 kind: benchmark
@@ -23,6 +23,8 @@ groundTruth:
   reviewedAt: "2026-08-29T00:00:00.000Z"
   contractFamily: python-timeout-unit-conversion
   exhaustiveCandidates: true
+evaluationScope:
+  stages: [snapshot, graph, planning, projection, candidates, verification, aggregation, reporting]
 expectations:
   snapshot:
     files:

@@ -6,26 +6,107 @@
   "packageVersion": "0.5.1",
   "root": "<repo>",
   "version": "producer-consumer-unit-mismatch-fixture-v1",
-  "sourceSnapshot": { "schemaVersion": 1, "manifestHash": "d00724213598bbf8da9308f726d8fb6bfa78425e33337564fcf0500e7f776e58", "fileCount": 4, "totalBytes": 312, "complete": true, "portable": true, "captureDurationMs": 0, "warnings": [] },
+  "sourceSnapshot": {
+    "schemaVersion": 1,
+    "manifestHash": "d00724213598bbf8da9308f726d8fb6bfa78425e33337564fcf0500e7f776e58",
+    "fileCount": 4,
+    "totalBytes": 312,
+    "complete": true,
+    "portable": true,
+    "captureDurationMs": 0,
+    "warnings": []
+  },
   "scope": {
-    "id": "producer-consumer-unit-mismatch-scope-v1", "version": "producer-consumer-unit-mismatch-fixture-v1", "root": "<repo>", "base": null,
+    "id": "producer-consumer-unit-mismatch-scope-v1",
+    "version": "producer-consumer-unit-mismatch-fixture-v1",
+    "root": "<repo>",
+    "base": null,
     "diff": "diff --git a/src/settings.py b/src/settings.py\n--- a/src/settings.py\n+++ b/src/settings.py\n@@ -1,2 +1,2 @@\n def load_timeout_ms(config: dict[str, int]) -> int:\n-    return config[\"timeout_seconds\"]\n+    return config[\"timeout_ms\"]\n",
-    "changedFiles": ["src/settings.py"],
-    "changeSources": { "src/settings.py": ["working-tree"] },
+    "changedFiles": [
+      "src/settings.py"
+    ],
+    "changeSources": {
+      "src/settings.py": [
+        "working-tree"
+      ]
+    },
     "deletedFiles": [],
-    "fileContents": { "src/settings.py": "def load_timeout_ms(config: dict[str, int]) -> int:\n    return config[\"timeout_ms\"]\n" },
-    "suppliedContext": { "src/client.py": "import time\n\nfrom .settings import load_timeout_ms\n\n\ndef wait_before_retry(config: dict[str, int]) -> None:\n    time.sleep(load_timeout_ms(config))\n" },
-    "manifest": [{ "path": "src/settings.py", "changeKind": "modified", "additions": 1, "deletions": 1, "language": "python", "generated": false, "binary": false, "sizeBytes": 84 }],
-    "omissions": [], "languages": ["python"],
-    "metadata": { "fileCount": 1, "additions": 1, "deletions": 1, "capturedAt": "2026-08-28T00:00:00.000Z" }
+    "fileContents": {
+      "src/settings.py": "def load_timeout_ms(config: dict[str, int]) -> int:\n    return config[\"timeout_ms\"]\n"
+    },
+    "suppliedContext": {
+      "src/client.py": "import time\n\nfrom .settings import load_timeout_ms\n\n\ndef wait_before_retry(config: dict[str, int]) -> None:\n    time.sleep(load_timeout_ms(config))\n"
+    },
+    "manifest": [
+      {
+        "path": "src/settings.py",
+        "changeKind": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "language": "python",
+        "generated": false,
+        "binary": false,
+        "sizeBytes": 84
+      }
+    ],
+    "omissions": [],
+    "languages": [
+      "python"
+    ],
+    "metadata": {
+      "fileCount": 1,
+      "additions": 1,
+      "deletions": 1,
+      "capturedAt": "2026-08-28T00:00:00.000Z"
+    }
   },
   "deterministicReport": "PASS",
   "result": {
-    "schemaVersion": 3, "version": "producer-consumer-unit-mismatch-fixture-v1", "snapshotId": "producer-consumer-unit-mismatch-scope-v1",
-    "status": "completed", "outcome": "findings", "mode": "partitioned", "reviewPath": "generic", "findings": [],
-    "coverage": { "changedFiles": 1, "changedFilesReviewed": 1, "changedSymbols": 1, "changedSymbolsReviewed": 1, "localUnitsGenerated": 1, "localUnitsReviewed": 1, "interactionUnitsGenerated": 1, "interactionUnitsReviewed": 1, "dependencyEdgesIdentified": 1, "dependencyEdgesEligible": 1, "dependencyEdgesReviewed": 1, "evidenceRequests": 1, "evidenceResolved": 1, "evidenceGaps": 0, "globalScan": "none", "omissions": [] },
-    "summary": "Draft synthetic trace; expected labels are stored in case.yaml.", "timestamp": "2026-08-28T00:00:00.000Z", "reviewer": "AgentSmith",
-    "runtime": { "models": { "candidate": "qwen3.5:9b-q4_K_M", "verifier": "qwen3.5:9b-q4_K_M" }, "inputTokens": 0, "outputTokens": 0, "concurrency": 1 }
+    "schemaVersion": 3,
+    "version": "producer-consumer-unit-mismatch-fixture-v1",
+    "snapshotId": "producer-consumer-unit-mismatch-scope-v1",
+    "status": "completed",
+    "outcome": "findings",
+    "mode": "partitioned",
+    "reviewPath": "generic",
+    "findings": [],
+    "coverage": {
+      "changedFiles": 1,
+      "changedFilesReviewed": 1,
+      "changedSymbols": 1,
+      "changedSymbolsReviewed": 1,
+      "localUnitsGenerated": 1,
+      "localUnitsReviewed": 1,
+      "interactionUnitsGenerated": 1,
+      "interactionUnitsReviewed": 1,
+      "dependencyEdgesIdentified": 1,
+      "dependencyEdgesEligible": 1,
+      "dependencyEdgesReviewed": 1,
+      "evidenceRequests": 1,
+      "evidenceResolved": 1,
+      "evidenceGaps": 0,
+      "globalScan": "none",
+      "omissions": []
+    },
+    "summary": "Draft synthetic trace; expected labels are stored in case.yaml.",
+    "timestamp": "2026-08-28T00:00:00.000Z",
+    "reviewer": "AgentSmith",
+    "runtime": {
+      "models": {
+        "candidate": "qwen3.5:9b-q4_K_M",
+        "verifier": "qwen3.5:9b-q4_K_M"
+      },
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "concurrency": 1
+    }
   },
-  "decisionProvenance": { "publishedFindingIds": [], "rejectedCandidateIds": [], "likelyCandidateIds": [], "insufficientEvidenceCandidateIds": [], "aggregateRule": "verified only", "errors": [] }
+  "decisionProvenance": {
+    "publishedFindingIds": [],
+    "rejectedCandidateIds": [],
+    "likelyCandidateIds": [],
+    "insufficientEvidenceCandidateIds": [],
+    "aggregateRule": "verified only",
+    "errors": []
+  }
 }

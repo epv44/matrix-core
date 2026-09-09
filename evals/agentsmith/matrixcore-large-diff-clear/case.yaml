@@ -2,7 +2,7 @@ schemaVersion: 5
 id: matrixcore-large-diff-clear
 status: draft
 kind: benchmark
-suite: draft
+suite: component
 source:
   traceId: 2026-08-22T04-14-53-168Z-7df84d4b-5967-4bd8-9f6e-5ceb338229d6
   traceSchemaVersion: 2

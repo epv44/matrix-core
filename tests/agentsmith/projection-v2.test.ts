@@ -2,8 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   buildProjection,
   buildWorkItems,
+  DEGREE_CAP,
+  graphDegreeContribution,
+  MAX_DEGREE_BOOST,
   extensionLanguage,
   projectionBudget,
+  rankWorkItems,
+  riskScore,
   routeReview,
   selectWorkItems,
 } from "../../src/agentsmith/projection.js";
@@ -124,6 +129,47 @@ const rules = [
 ];
 
 describe("adaptive projection planning", () => {
+  it("uses a bounded monotonic degree contribution in ranking priority", () => {
+    expect(graphDegreeContribution(0)).toBe(0);
+    expect(graphDegreeContribution(1)).toBeGreaterThan(0);
+    expect(graphDegreeContribution(4)).toBeGreaterThan(graphDegreeContribution(1));
+    expect(graphDegreeContribution(DEGREE_CAP)).toBe(MAX_DEGREE_BOOST);
+    expect(graphDegreeContribution(DEGREE_CAP + 100)).toBe(MAX_DEGREE_BOOST);
+    const item = (id: string, degree: number): ReviewWorkItem => ({
+      id,
+      kind: "local",
+      priority: 100,
+      primarySymbols: [changed], relatedSymbols: [], code: [], graphEdges: [], rules: [], estimatedTokens: 1,
+      rankFactors: { edgeRisk: 0, changedEndpoints: 1, productionSurface: 1, changedLines: 1, graphDegree: degree, degreeContribution: graphDegreeContribution(degree) },
+    });
+    expect(rankWorkItems([item("low", 1), item("high", 4)]).map((entry) => entry.id)).toEqual(["high", "low"]);
+    expect(rankWorkItems([item("low", 1), item("high", 4)]).map((entry) => entry.rank)).toEqual([1, 2]);
+    expect(rankWorkItems([item("low", 1), item("high", 4)], { includeDegree: false }).map((entry) => entry.id)).toEqual([
+      "low",
+      "high",
+    ]);
+    const genericHub = item("hub", DEGREE_CAP);
+    const critical = { ...item("critical", 0), priority: 125, rankFactors: { ...item("critical", 0).rankFactors, semanticRisk: 125 } };
+    expect(riskScore(critical)).toBeGreaterThan(riskScore(genericHub));
+  });
+
+  it("selection consumes an incoming ranked sequence without reranking it", () => {
+    const make = (id: string): ReviewWorkItem => ({
+      id,
+      kind: "local",
+      priority: id === "high" ? 100 : 10,
+      primarySymbols: [changed],
+      relatedSymbols: [],
+      code: [],
+      graphEdges: [],
+      rules: [],
+      estimatedTokens: 1,
+      rankFactors: { edgeRisk: 0, changedEndpoints: 1, productionSurface: 1, changedLines: 1, graphDegree: 0 },
+    });
+    const ranked = [{ ...make("low"), rank: 1 }, { ...make("high"), rank: 2 }];
+    expect(selectWorkItems(ranked, 1, 10_000).selected.map((entry) => entry.id)).toEqual(["low"]);
+  });
+
   it("maps changed symbols into deterministic local units with bounded token accounting", () => {
     const projection = buildProjection({ scope, graph, profile: small, rules, kind: "full" });
     const budget = projectionBudget(small, routing).inputBudgetTokens;
@@ -187,7 +233,7 @@ describe("adaptive projection planning", () => {
     expect(items.map((item) => item.kind)).toEqual(["local", "interaction"]);
     expect(items.every((item) => item.estimatedTokens <= budget)).toBe(true);
     expect(items[1].code.map((code) => code.file)).toEqual(["api.ts", "consumer.ts"]);
-    const selection = selectWorkItems(items, 1);
+    const selection = selectWorkItems(rankWorkItems(items), 1);
     expect(selection.selected).toHaveLength(1);
     expect(selection.selected[0].kind).toBe("interaction");
     expect(selection.omitted).toHaveLength(1);
@@ -300,7 +346,7 @@ describe("adaptive projection planning", () => {
     expect(fallback?.content).toContain("toHaveCount");
   });
 
-  it("uses semantic ranking and subsystem diversity instead of hash identifiers", () => {
+  it("preserves the incoming ranking while satisfying the local/interaction reservation", () => {
     const workSymbol = (file: string, name: string) => ({ ...changed, file, name, qualifiedName: name });
     const workItem = (id: string, kind: ReviewWorkItem["kind"], file: string, name: string): ReviewWorkItem => ({
       id,
@@ -326,7 +372,7 @@ describe("adaptive projection planning", () => {
     const pack = workItem("interaction:zzzz", "interaction", "src/packs/c.ts", "c");
     const selected = selectWorkItems([coreB, pack, local, coreA], 3, 1000).selected;
     expect(selected.map((item) => item.primarySymbols[0].file)).toEqual([
-      "src/core/a.ts",
+      "src/core/b.ts",
       "src/core/local.ts",
       "src/packs/c.ts",
     ]);

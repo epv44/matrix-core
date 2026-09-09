@@ -60,7 +60,7 @@ function legacyFinding() {
 
 describe("AgentSmith eval schema v7", () => {
   it("accepts reviewed v7 gold findings with explicit small-model and minimum-evidence labels", () => {
-    expect(EVAL_CASE_SCHEMA_VERSION).toBe(7);
+    expect(EVAL_CASE_SCHEMA_VERSION).toBe(9);
     const parsed = evalCaseSchema.parse(
       activeCase(7, {
         ...legacyFinding(),

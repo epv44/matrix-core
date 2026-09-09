@@ -7,8 +7,14 @@ import { compareEvalReports, runEvalCases, type EvalMode, type EvalReplayMode } 
 import { corpusCoverage } from "./coverage.js";
 import { attachFixture, corpusHash, curateTrace, inventory, listEvalCases, validateEvalCases } from "./case.js";
 import type { EvalStage } from "./stage-score.js";
-import { runCanonicalEvalSuite } from "./suite.js";
+import {
+  htmlCompanionJsonPath,
+  runEvalSuite,
+  type EvalSuiteBaseline,
+  type EvalSuiteOutputFormat,
+} from "./suite.js";
 import { renderEvalHtml } from "./html-report.js";
+import { findLatestSuiteStatus, readSuiteRunStatus } from "./suite-status.js";
 import {
   readStage1Baseline,
   summarizeStage1Baseline,
@@ -18,7 +24,7 @@ import {
 } from "./stage-1.js";
 
 const program = new Command();
-program.name("eval:agentsmith").description("Repository-only AgentSmith diagnostic evaluation lab");
+program.name("eval").description("Repository-only AgentSmith diagnostic evaluation lab");
 
 function root(value: string): string {
   return resolveConfig({ cwd: value }).configRoot;
@@ -78,6 +84,40 @@ program
   .option("--root <path>", "MatrixCore repository root", process.cwd())
   .action((opts) => console.log(JSON.stringify(corpusCoverage(root(opts.root)), null, 2)));
 
+program
+  .command("status")
+  .description("Inspect a running or completed registered suite")
+  .argument("[run-id]", "Suite run ID (defaults to the most recently updated run)")
+  .option("--root <path>", "MatrixCore repository root", process.cwd())
+  .option("--json", "Print JSON instead of a human-readable summary", false)
+  .action((runId: string | undefined, opts) => {
+    const repositoryRoot = root(opts.root);
+    const selected = runId
+      ? (() => {
+          const file = path.join(repositoryRoot, ".quality", "evals", "suites", runId, "status.json");
+          return fs.existsSync(file) ? { path: file, status: readSuiteRunStatus(file) } : null;
+        })()
+      : findLatestSuiteStatus(repositoryRoot);
+    if (!selected) throw new Error(runId ? `Suite status not found: ${runId}` : "No suite status files found");
+    if (opts.json) {
+      console.log(JSON.stringify({ ...selected.status, statusPath: selected.path }, null, 2));
+      return;
+    }
+    const current = selected.status.current;
+    console.log(
+      [
+        `Suite ${selected.status.runId}: ${selected.status.state}`,
+        `Progress: ${selected.status.completedRuns}/${selected.status.plannedRuns} completed; ${selected.status.remainingRuns} remaining`,
+        `Elapsed: ${(selected.status.elapsedMs / 1000).toFixed(1)}s; tokens ${selected.status.totals.inputTokens + selected.status.totals.outputTokens}; model calls ${selected.status.totals.modelCalls}`,
+        current
+          ? `Current: ${current.tier} · ${current.caseId} · ${current.mode} · repetition ${current.iteration + 1}`
+          : "Current: not started",
+        `Status file: ${selected.path}`,
+        ...(selected.status.lastError ? [`Last error: ${selected.status.lastError}`] : []),
+      ].join("\n"),
+    );
+  });
+
 const modes: EvalMode[] = [
   "holistic",
   "partitioned-local",
@@ -88,14 +128,100 @@ const modes: EvalMode[] = [
 const stages: EvalStage[] = [
   "snapshot",
   "graph",
-  "projection",
   "planning",
+  "ranking",
+  "selection",
+  "projection",
   "candidates",
   "evidence",
   "verification",
   "aggregation",
   "reporting",
 ];
+
+async function runTargetEval(opts: {
+  target?: string;
+  suite?: string;
+  model: "small" | "large";
+  format: EvalSuiteOutputFormat;
+  output?: string;
+  baseline?: string;
+  createBaseline?: string;
+  root: string;
+  progress?: boolean;
+}) {
+  if (opts.target !== "agentsmith") throw new Error(`Unsupported eval target: ${opts.target ?? "<missing>"}`);
+  if (!opts.suite) throw new Error("--suite is required");
+  if (opts.baseline && opts.createBaseline) throw new Error("--baseline cannot be combined with --create-baseline");
+  const repositoryRoot = root(opts.root);
+  const baselinePath = opts.baseline ? path.resolve(repositoryRoot, opts.baseline) : null;
+  if (baselinePath && !fs.existsSync(baselinePath)) throw new Error(`Baseline file not found: ${baselinePath}`);
+  const baseline = baselinePath
+    ? (JSON.parse(fs.readFileSync(baselinePath, "utf8")) as EvalSuiteBaseline)
+    : undefined;
+  const htmlOutput =
+    opts.format === "html"
+      ? path.resolve(repositoryRoot, opts.output ?? path.join(".quality", "evals", "report.html"))
+      : null;
+  const jsonOutput = htmlOutput ? htmlCompanionJsonPath(htmlOutput) : opts.output;
+  const suite = await runEvalSuite({
+    root: repositoryRoot,
+    suite: opts.suite,
+    modelTarget: opts.model,
+    output: jsonOutput,
+    baseline,
+    baselineOutput: opts.createBaseline,
+    onStart: (status) =>
+      console.error(
+        `Suite ${status.suite} (${status.modelTarget}) ${status.runId} started\nStatus: ${suiteStatusPathForCli(repositoryRoot, status.runId)}`,
+      ),
+    onProgress: opts.progress === false ? undefined : (status, event) =>
+      console.error(
+        `[${status.completedRuns}/${status.plannedRuns}] ${event.caseId} · ${event.mode} · ${event.status}`,
+      ),
+  });
+  if (htmlOutput) {
+    fs.mkdirSync(path.dirname(htmlOutput), { recursive: true });
+    fs.writeFileSync(
+      htmlOutput,
+      renderEvalHtml({ run: suite, suite: suite.suite, baseline: suite.baseline?.definition, comparison: suite.comparison }),
+    );
+    console.log(
+      [
+        `HTML: ${htmlOutput}`,
+        `Companion JSON: ${suite.output}`,
+        ...(suite.baselineOutput ? [`Baseline: ${suite.baselineOutput}`] : []),
+        ...(suite.baselineError ? [`Baseline error: ${suite.baselineError}`] : []),
+      ].join("\n"),
+    );
+  } else if (opts.format === "json") console.log(JSON.stringify(suite, null, 2));
+  else if (opts.createBaseline)
+    console.log(
+      [
+        `Result JSON: ${suite.output}`,
+        ...(suite.baselineOutput ? [`Baseline: ${suite.baselineOutput}`] : []),
+        ...(suite.baselineError ? [`Baseline error: ${suite.baselineError}`] : []),
+      ].join("\n"),
+    );
+  else
+    console.log(
+      [
+        `AgentSmith suite: ${suite.suite}`,
+        `Model: ${suite.modelTarget}`,
+        `Eval status: ${suite.evalStatus}`,
+        `Execution status: ${suite.executionStatus}`,
+        `Cases: ${suite.corpus.activeCount}`,
+        `Result JSON: ${suite.output}`,
+        ...(suite.baselineOutput ? [`Baseline: ${suite.baselineOutput}`] : []),
+      ].join("\n"),
+    );
+  if (suite.baselineError || (opts.createBaseline && !suite.baselineOutput)) process.exitCode = 1;
+  else if (!opts.createBaseline && (suite.evalStatus !== "pass" || suite.baseline?.validation?.ok === false)) process.exitCode = 1;
+}
+
+function suiteStatusPathForCli(repositoryRoot: string, runId: string): string {
+  return path.join(repositoryRoot, ".quality", "evals", "suites", runId, "status.json");
+}
 
 program
   .command("run")
@@ -137,46 +263,14 @@ program
   });
 
 program
-  .command("suite")
-  .description("Run the canonical active and diagnostic AgentSmith eval matrix")
-  .option("--root <path>", "MatrixCore repository root", process.cwd())
-  .option("--stage <stage...>", "Selected pipeline stages")
-  .option("--label <name>", "Human-readable run label")
-  .option("--output <path>", "Suite JSON output path")
-  .option("--json", "Print the complete suite JSON", false)
-  .action(async (opts) => {
-    const repositoryRoot = root(opts.root);
-    const selectedStages = opts.stage as EvalStage[] | undefined;
-    if (selectedStages?.some((stage) => !stages.includes(stage))) throw new Error("Invalid pipeline stage");
-    const suite = await runCanonicalEvalSuite({
-      root: repositoryRoot,
-      stages: selectedStages,
-      label: opts.label,
-      output: opts.output,
-    });
-    console.log(
-      opts.json
-        ? JSON.stringify(suite, null, 2)
-        : [
-            `AgentSmith canonical suite: ${suite.status}`,
-            `Active cases: ${suite.corpus.activeCount}; diagnostic drafts: ${suite.corpus.draftCount}`,
-            `Promotion eligible: ${suite.promotable ? "yes" : "no"}`,
-            `Result: ${suite.output}`,
-          ].join("\n"),
-    );
-    if (suite.status !== "pass") process.exitCode = 1;
-  });
-
-program
   .command("html <input>")
   .description("Render a suite or eval JSON artifact as a self-contained HTML walkthrough")
-  .option("--root <path>", "MatrixCore repository root", process.cwd())
-  .option("--output <path>", "HTML output path", "eval-report.html")
-  .action((input, opts) => {
-    const repositoryRoot = root(opts.root);
+  .action((input, _opts, command) => {
+    const opts = command.optsWithGlobals();
+    const repositoryRoot = root(opts.root ?? process.cwd());
     const source = path.resolve(repositoryRoot, input);
     const report = JSON.parse(fs.readFileSync(source, "utf8"));
-    const output = path.resolve(repositoryRoot, opts.output);
+    const output = path.resolve(repositoryRoot, opts.output ?? "eval-report.html");
     fs.mkdirSync(path.dirname(output), { recursive: true });
     fs.writeFileSync(output, renderEvalHtml(report));
     console.log(output);
@@ -224,6 +318,23 @@ baseline
     });
     console.log(JSON.stringify({ stage: 1, baseline: baselinePath, activeCases, ...validation }, null, 2));
     if (!validation.ok) process.exitCode = 1;
+  });
+
+program
+  .option("--target <target>", "Evaluation target (agentsmith)")
+  .option("--suite <suite>", "One registered AgentSmith eval suite")
+  .option("--model <model>", "Model target: small or large", "small")
+  .option("--format <format>", "Output format: text, json, or html", "text")
+  .option("--output <path>", "JSON or HTML output path")
+  .option("--baseline <path>", "Suite/model baseline to compare")
+  .option("--create-baseline <path>", "Create an observational baseline from a complete suite run")
+  .option("--root <path>", "MatrixCore repository root", process.cwd())
+  .option("--no-progress", "Disable live progress updates")
+  .action(async (opts) => {
+    if (!opts.target && !opts.suite) throw new Error("--target agentsmith and --suite <registered-suite> are required");
+    if (opts.model !== "small" && opts.model !== "large") throw new Error(`Invalid model target: ${opts.model}`);
+    if (!["text", "json", "html"].includes(opts.format)) throw new Error(`Invalid eval format: ${opts.format}`);
+    await runTargetEval({ ...opts, model: opts.model, format: opts.format });
   });
 
 await program.parseAsync(process.argv);

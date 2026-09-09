@@ -2,9 +2,26 @@ import type { ReviewResult } from "../core/types.js";
 
 export interface ShadowComparison {
   schemaVersion: 1;
-  old: { status: ReviewResult["status"]; outcome: ReviewResult["outcome"]; findings: number; verifiedPrecision: number };
-  next: { status: ReviewResult["status"]; outcome: ReviewResult["outcome"]; findings: number; verifiedPrecision: number };
-  deltas: { findings: number; verifiedPrecision: number; inputTokens: number; outputTokens: number; calls: number; partial: number };
+  old: {
+    status: ReviewResult["status"];
+    outcome: ReviewResult["outcome"];
+    findings: number;
+    verifiedPrecision: number;
+  };
+  next: {
+    status: ReviewResult["status"];
+    outcome: ReviewResult["outcome"];
+    findings: number;
+    verifiedPrecision: number;
+  };
+  deltas: {
+    findings: number;
+    verifiedPrecision: number;
+    inputTokens: number;
+    outputTokens: number;
+    calls: number;
+    partial: number;
+  };
   findingIdsAdded: string[];
   findingIdsRemoved: string[];
 }
@@ -49,9 +66,15 @@ export function buildShadowComparison(oldResult: ReviewResult, nextResult: Revie
 
 export function escalationSignals(result: ReviewResult): string[] {
   const signals: string[] = [];
-  if (result.status === "partial" || result.outcome === "incomplete") signals.push("partial-execution");
-  if (result.coverage.tokenBudgetOmissions && result.coverage.tokenBudgetOmissions > 0) signals.push("budget-exhausted");
+  if (result.status === "partial") signals.push("partial-execution");
+  if (result.coverage.tokenBudgetOmissions && result.coverage.tokenBudgetOmissions > 0)
+    signals.push("budget-exhausted");
   if (result.coverage.timeoutOmissions && result.coverage.timeoutOmissions > 0) signals.push("timeout");
-  if (result.incompleteReasons?.some((reason) => reason.kind === "insufficient-evidence")) signals.push("insufficient-context");
+  if (
+    result.candidateResolutions.some(
+      (candidate) => candidate.resolution === "unproven" || candidate.resolution === "missed",
+    )
+  )
+    signals.push("insufficient-context");
   return signals;
 }

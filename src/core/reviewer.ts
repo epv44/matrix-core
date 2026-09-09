@@ -2,6 +2,22 @@ import type { ReviewCoverage, ReviewResult, ReviewStatus } from "./types.js";
 
 export const AGENT_SMITH = "AgentSmith";
 
+export function hasUnresolvedCandidateResolutions(review: ReviewResult): boolean {
+  return review.candidateResolutions.some(
+    (candidate) => candidate.resolution === "unproven" || candidate.resolution === "missed",
+  );
+}
+
+export function isReviewApproval(review: ReviewResult): boolean {
+  return (
+    review.migratedFromSchemaVersion !== 3 &&
+    review.status === "completed" &&
+    review.outcome === "clear" &&
+    !hasUnresolvedCandidateResolutions(review) &&
+    !review.errors?.length
+  );
+}
+
 export interface Reviewer {
   readonly name: string;
   review(input: { version: string; cwd: string }): Promise<ReviewResult>;
@@ -60,7 +76,7 @@ export function noReviewResult(
   options: { message?: string; errors?: string[] } = {},
 ): ReviewResult {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     version,
     status,
     outcome: "incomplete",
@@ -71,6 +87,7 @@ export function noReviewResult(
     summary: options.message ?? "Review unavailable.",
     timestamp: new Date().toISOString(),
     reviewer: AGENT_SMITH,
+    candidateResolutions: [],
     errors: options.errors,
   };
 }

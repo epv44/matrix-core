@@ -1,6 +1,6 @@
 import type { AgentSmithConfig, ModelProfile } from "../core/types.js";
 
-export type ReviewOutputKind = "candidates" | "specialist" | "scout" | "verification";
+export type ReviewOutputKind = "candidates" | "specialist" | "scout" | "verification" | "citation-selection";
 
 export interface ProviderUsage {
   inputTokens: number;
@@ -78,6 +78,11 @@ function compactCandidateProperties(allowedFiles?: string[]) {
             maxLength: 240,
             description: "Required symbol for semantic lookups or literal value for search/config/test/schema lookups.",
           },
+          m: {
+            type: "string",
+            enum: ["symbol", "literal"],
+            description: "Whether v is a canonical symbol locator or an exact literal value.",
+          },
           p: { type: "string", maxLength: 240, description: "Optional repository-relative path hint." },
           r: { type: "string", minLength: 1, maxLength: 120, description: "Why this evidence is needed." },
         },
@@ -87,6 +92,26 @@ function compactCandidateProperties(allowedFiles?: string[]) {
 }
 
 function outputSchema(kind: ReviewOutputKind, allowedFiles?: string[], maxCandidates = 2) {
+  if (kind === "citation-selection")
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["citations"],
+      properties: {
+        citations: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["requestId", "evidenceId"],
+            properties: {
+              requestId: { type: "string" },
+              evidenceId: { type: "string" },
+            },
+          },
+        },
+      },
+    };
   if (kind === "verification")
     return {
       type: "object",

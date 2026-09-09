@@ -3,6 +3,8 @@ import path from "node:path";
 import type {
   AgentSmithConfig,
   CandidateFinding,
+  CandidateResolutionAudit,
+  CandidateResolutionReasonCode,
   EvidenceRecord,
   EvidenceResolutionOutcome,
   ModelProfile,
@@ -17,9 +19,13 @@ import type { ReviewScope } from "./scope.js";
 import { loadStructuredRules } from "./rules.js";
 import {
   buildProjection,
+  buildCandidateProjection,
   buildWorkItems,
+  DEGREE_CAP,
   estimateTokens,
+  MAX_DEGREE_BOOST,
   projectionBudget,
+  rankWorkItems,
   routeReview,
   selectWorkItems,
 } from "./projection.js";
@@ -169,8 +175,38 @@ function anchorRecord(candidate: CandidateFinding, scope: ReviewScope): Evidence
   };
 }
 
+export function compactEvidenceRecord(record: EvidenceRecord, maxChars: number): EvidenceRecord {
+  if (record.snippet.length <= maxChars) return record;
+  const lines = record.snippet.split("\n");
+  const locator = record.matchedLocator?.trim();
+  const matchIndex = locator ? lines.findIndex((line) => line.includes(locator)) : -1;
+  const target = matchIndex >= 0 ? matchIndex : Math.floor(lines.length / 2);
+  let start = Math.max(0, target - Math.floor(lines.length / 2));
+  let end = Math.min(lines.length, start + lines.length);
+  let snippet = lines.slice(start, end).join("\n");
+  while (snippet.length > maxChars && end - start > 1) {
+    if (target - start > end - target - 1) start += 1;
+    else end -= 1;
+    snippet = lines.slice(start, end).join("\n");
+  }
+  if (snippet.length > maxChars) {
+    const center = matchIndex >= 0 ? lines[matchIndex] : lines[target];
+    snippet = center.slice(0, maxChars);
+  }
+  return {
+    ...record,
+    startLine: record.startLine + start,
+    endLine: record.startLine + end - 1,
+    snippet,
+  };
+}
+
 function candidateKey(candidate: CandidateFinding) {
-  return `${candidate.file}:${candidate.primarySymbol ?? candidate.line}:${candidate.category}:${candidate.ruleId ?? candidate.title.toLowerCase().replace(/\W+/g, "-")}`;
+  // Keep findings anchored to distinct changed regions distinct. A rule and
+  // primary symbol can legitimately occur in multiple work items; merging on
+  // those fields alone can replace the evidence and line anchor for one
+  // defect with another defect discovered in a neighboring unit.
+  return `${candidate.file}:${candidate.line}:${candidate.endLine ?? candidate.line}:${candidate.primarySymbol ?? ""}:${candidate.category}:${candidate.ruleId ?? candidate.title.toLowerCase().replace(/\W+/g, "-")}`;
 }
 
 function evidenceRequestKey(request: CandidateFinding["evidenceRequests"][number]) {
@@ -300,6 +336,158 @@ type VerificationPreflight =
       estimatedTokens: number;
     };
 
+function candidateResolutionReason(opts: {
+  candidate: CandidateFinding;
+  verification?: VerificationResult;
+  evidenceOutcomes: EvidenceResolutionOutcome[];
+  providerDiagnostics: NonNullable<EngineExecution["providerDiagnostics"]>;
+  tokenOmitted: boolean;
+  timedOut: boolean;
+}): { reasonCode?: CandidateResolutionReasonCode; detail: string } {
+  const { verification } = opts;
+  if (verification?.verdict === "verified") return { detail: "Candidate was proven by the verifier." };
+  if (verification?.verdict === "rejected")
+    return {
+      reasonCode: "verification-rejection",
+      detail: verification.reasoningSummary ?? "Candidate was disproven by the verifier.",
+    };
+  if (verification?.verdict === "likely")
+    return {
+      reasonCode: "verifier-likely-unpublished",
+      detail: verification.reasoningSummary ?? "Candidate remained plausible but was not proven.",
+    };
+  if (opts.timedOut)
+    return { reasonCode: "timeout", detail: "Candidate verification did not finish before the review deadline." };
+  if (opts.tokenOmitted)
+    return {
+      reasonCode: "evidence-packing-budget",
+      detail: "Candidate did not fit the aggregate verification token budget.",
+    };
+  if (!verification)
+    return {
+      reasonCode: "selection-miss",
+      detail: "Candidate was generated but did not enter the verification shortlist.",
+    };
+
+  const diagnostics = [
+    ...(verification.diagnostics ?? []),
+    ...opts.providerDiagnostics.filter((diagnostic) => diagnostic.sourceId === opts.candidate.id),
+  ];
+  if (
+    verification.citationRepairAttempted &&
+    diagnostics.some((diagnostic) => diagnostic.failureKind === "citation-validation")
+  )
+    return {
+      reasonCode: "citation-validation-failure",
+      detail: verification.reasoningSummary ?? "Verifier citations remained invalid after repair.",
+    };
+  if (verification.reasoningSummary === "verifier failed")
+    return { reasonCode: "provider-failure", detail: "The verifier provider failed before adjudication." };
+  if (
+    opts.evidenceOutcomes.some(
+      (outcome) => outcome.reason?.includes("verifier token budget") || outcome.reason?.includes("verifier context"),
+    )
+  )
+    return {
+      reasonCode: "evidence-packing-budget",
+      detail: verification.reasoningSummary ?? "Required evidence did not fit the verifier context.",
+    };
+  if (
+    opts.evidenceOutcomes.some((outcome) =>
+      outcome.reason?.includes("candidate omitted required evidence from an actual caller or consumer"),
+    )
+  )
+    return {
+      reasonCode: "verifier-evidence-demand",
+      detail: verification.reasoningSummary ?? "The candidate omitted a claim-directed evidence request.",
+    };
+  if (
+    opts.evidenceOutcomes.some(
+      (outcome) => outcome.reason?.includes("ambiguous locator") || outcome.reason?.includes("missing locator"),
+    )
+  )
+    return {
+      reasonCode: "locator-resolution-failure",
+      detail: verification.reasoningSummary ?? "A required evidence locator could not be resolved deterministically.",
+    };
+  if (opts.evidenceOutcomes.some((outcome) => outcome.reason?.includes("no exact evidence matched")))
+    return {
+      reasonCode: "retrieval-miss",
+      detail: verification.reasoningSummary ?? "No exact evidence matched a required request.",
+    };
+  return {
+    reasonCode: "verifier-insufficient-evidence",
+    detail: verification.reasoningSummary ?? "The verifier could not prove or disprove the candidate.",
+  };
+}
+
+function buildCandidateResolutionAudits(opts: {
+  candidates: CandidateFinding[];
+  verificationById: Map<string, VerificationResult>;
+  evidenceOutcomes: Record<string, EvidenceResolutionOutcome[]>;
+  providerDiagnostics: NonNullable<EngineExecution["providerDiagnostics"]>;
+  tokenOmittedCandidateIds: Set<string>;
+  timedOutCandidateIds: Set<string>;
+}): CandidateResolutionAudit[] {
+  return opts.candidates.map((candidate) => {
+    const verification = opts.verificationById.get(candidate.id);
+    const outcomes = opts.evidenceOutcomes[candidate.id] ?? [];
+    const resolution = verification
+      ? verification.verdict === "verified"
+        ? "proven"
+        : verification.verdict === "rejected"
+          ? "disproven"
+          : "unproven"
+      : "unproven";
+    const { reasonCode, detail } = candidateResolutionReason({
+      candidate,
+      verification,
+      evidenceOutcomes: outcomes,
+      providerDiagnostics: opts.providerDiagnostics,
+      tokenOmitted: opts.tokenOmittedCandidateIds.has(candidate.id),
+      timedOut: opts.timedOutCandidateIds.has(candidate.id),
+    });
+    const resolvedRecordIds = [
+      ...new Set(outcomes.flatMap((outcome) => outcome.records.map((record) => record.id))),
+    ].sort();
+    const packedRecordIds = [...new Set(outcomes.flatMap((outcome) => outcome.packedRecordIds ?? []))].sort();
+    const diagnostics = [
+      ...(verification?.diagnostics ?? []),
+      ...opts.providerDiagnostics.filter((diagnostic) => diagnostic.sourceId === candidate.id),
+    ];
+    return {
+      candidateId: candidate.id,
+      resolution,
+      ...(reasonCode ? { reasonCode } : {}),
+      detail,
+      sourceWorkItemIds: [...candidate.sourceWorkItemIds].sort(),
+      sourceReviewers: [...candidate.sourceReviewers].sort(),
+      evidence: {
+        requestOutcomes: outcomes.map((outcome) => ({
+          requestId: outcome.requestId,
+          kind: outcome.request.kind,
+          status: outcome.status,
+          recordIds: outcome.records.map((record) => record.id).sort(),
+          packedRecordIds: [...(outcome.packedRecordIds ?? [])].sort(),
+          ...(outcome.resolverRoute ? { resolverRoute: outcome.resolverRoute } : {}),
+          ...(outcome.consideredRecords !== undefined ? { consideredRecords: outcome.consideredRecords } : {}),
+          ...(outcome.reason ? { reason: outcome.reason } : {}),
+        })),
+        resolvedRecordIds,
+        packedRecordIds,
+      },
+      verifier: {
+        verdict: verification?.verdict ?? "not_run",
+        ...(verification ? { confidence: verification.confidence } : {}),
+        ...(verification?.reasoningSummary ? { reasoningSummary: verification.reasoningSummary } : {}),
+        supportingEvidenceIds: [...(verification?.supportingEvidenceIds ?? [])].sort(),
+        failureKinds: [...new Set(diagnostics.map((diagnostic) => diagnostic.failureKind))].sort(),
+        ...(verification?.citationRepairAttempted ? { citationRepairAttempted: true } : {}),
+      },
+    };
+  });
+}
+
 export async function executeReviewEngine(opts: {
   root: string;
   version: string;
@@ -420,6 +608,11 @@ export async function executeReviewEngine(opts: {
     opts.variant?.includeInteractions === false
       ? plannedWorkItems.filter((item) => item.kind === "local")
       : plannedWorkItems;
+  stageTimingsMs.planning = Date.now() - stageStarted;
+  stageStarted = Date.now();
+  const rankedWorkItems = rankWorkItems(eligibleWorkItems);
+  stageTimingsMs.ranking = Date.now() - stageStarted;
+  stageStarted = Date.now();
   const candidateInputBudget =
     opts.config.partitioned.maxCandidateInputTokens ?? Math.floor(route.candidateBudget.inputBudgetTokens * 2);
   const selection =
@@ -430,11 +623,13 @@ export async function executeReviewEngine(opts: {
           tokenOmitted: [] as typeof eligibleWorkItems,
           estimatedTokens: 0,
         }
-      : selectWorkItems(eligibleWorkItems, opts.config.partitioned.maxCandidateWorkItems ?? 4, candidateInputBudget);
+      : selectWorkItems(rankedWorkItems, opts.config.partitioned.maxCandidateWorkItems ?? 4, candidateInputBudget);
   const selectedWorkItems = selection.selected;
+  const candidateProjection =
+    route.mode === "holistic" ? full : buildCandidateProjection(full, selectedWorkItems, candidateProfile);
   const omittedWorkItems = selection.omitted;
   const tokenOmittedWorkItems = selection.tokenOmitted;
-  stageTimingsMs.planning = Date.now() - stageStarted;
+  stageTimingsMs.selection = Date.now() - stageStarted;
   stageStarted = Date.now();
   const candidateBatches: CandidateBatch[] = [];
   if (opts.variant?.seedCandidates) {
@@ -621,14 +816,34 @@ export async function executeReviewEngine(opts: {
               `[${item.id}]${item.requestId ? ` request=${item.requestId}` : " anchor"} ${item.file}:${item.startLine}-${item.endLine}\n${item.snippet}`,
           )
           .join("\n\n");
-      for (const record of resolved.records) {
-        const proposed = [...packedRecords, record];
+      // Pack evidence by request group in round-robin order. This reserves
+      // the minimum one-record witness for every satisfied request before a
+      // large early group can consume the verifier budget.
+      const fairRecords: EvidenceRecord[] = [];
+      const groupedRecords = resolved.outcomes
+        .filter((outcome) => outcome.status === "satisfied")
+        .map((outcome) => outcome.records);
+      const maxGroupRecords = Math.max(0, ...groupedRecords.map((group) => group.length));
+      for (let round = 0; round < maxGroupRecords; round++)
+        for (const group of groupedRecords) if (group[round]) fairRecords.push(group[round]);
+      for (const record of fairRecords) {
+        const currentTokens =
+          fixedTokens +
+          estimateTokens(boundedOriginating, verifierProfile, true) +
+          estimateTokens(renderEvidence(packedRecords), verifierProfile, true);
+        const remainingTokens = Math.max(0, verifierCallBudget - currentTokens);
+        const maxSnippetChars = Math.max(
+          96,
+          Math.floor(remainingTokens * verifierProfile.tokenizer.codeCharsPerToken * 0.8),
+        );
+        const boundedRecord = compactEvidenceRecord(record, maxSnippetChars);
+        const proposed = [...packedRecords, boundedRecord];
         const proposedText = renderEvidence(proposed);
         const proposedTokens =
           fixedTokens +
           estimateTokens(boundedOriginating, verifierProfile, true) +
           estimateTokens(proposedText, verifierProfile, true);
-        if (proposedTokens <= verifierCallBudget) packedRecords.push(record);
+        if (proposedTokens <= verifierCallBudget) packedRecords.push(boundedRecord);
         else packingGaps.push(`${record.requestKind}: resolved evidence omitted by verifier token budget`);
       }
       const evidenceText = renderEvidence(packedRecords);
@@ -959,6 +1174,15 @@ export async function executeReviewEngine(opts: {
     ...candidateBatches.flatMap((batch) => batch.diagnostics ?? []),
     ...verification.flatMap((item) => item.diagnostics ?? []),
   ];
+  const resolutionDiagnostics = [...providerDiagnostics, ...providerFailures];
+  const candidateResolutions = buildCandidateResolutionAudits({
+    candidates: rankedCandidates,
+    verificationById,
+    evidenceOutcomes,
+    providerDiagnostics: resolutionDiagnostics,
+    tokenOmittedCandidateIds: new Set(tokenOmittedCandidates.map((candidate) => candidate.id)),
+    timedOutCandidateIds: new Set(timedOutCandidates.map((candidate) => candidate.id)),
+  });
   const cacheStatuses = [
     scoutTrace?.cacheStatus,
     ...candidateBatches.map((batch) => batch.cacheStatus),
@@ -1015,18 +1239,19 @@ export async function executeReviewEngine(opts: {
         ? "Shortlisted candidate did not fit the aggregate verification token budget."
         : `${candidate.severity} candidate fell outside the verification shortlist.`,
     });
-  for (const outcome of verification) {
-    if (outcome.verdict === "insufficient_evidence")
+  for (const resolution of candidateResolutions) {
+    if (resolution.resolution !== "unproven") continue;
+    if (resolution.reasonCode === "evidence-packing-budget")
       incompleteReasons.push({
-        kind: "insufficient-evidence",
-        id: outcome.candidateId,
-        detail: outcome.reasoningSummary ?? "Candidate could not be resolved with available evidence.",
+        kind: "evidence-packing-budget",
+        id: resolution.candidateId,
+        detail: resolution.detail,
       });
-    if (outcome.verdict === "likely")
+    if (resolution.reasonCode === "citation-validation-failure")
       incompleteReasons.push({
-        kind: "likely-unpublished",
-        id: outcome.candidateId,
-        detail: outcome.reasoningSummary ?? "Likely candidate was not proven and cannot be published.",
+        kind: "citation-validation-failure",
+        id: resolution.candidateId,
+        detail: resolution.detail,
       });
   }
   for (const omission of coverage.omissions.filter(
@@ -1042,7 +1267,10 @@ export async function executeReviewEngine(opts: {
       incompleteReasons.map((reason) => [`${reason.kind}:${reason.id ?? ""}:${reason.detail}`, reason]),
     ).values(),
   ];
-  const incomplete = uniqueIncompleteReasons.length > 0;
+  const executionIncomplete = uniqueIncompleteReasons.length > 0;
+  const unresolvedCandidates = candidateResolutions.filter(
+    (resolution) => resolution.resolution === "unproven" || resolution.resolution === "missed",
+  );
   const shortlistIds = new Set([
     ...candidatesForVerification.map((candidate) => candidate.id),
     ...preflightOutcomes.map((outcome) => outcome.candidateId),
@@ -1074,18 +1302,23 @@ export async function executeReviewEngine(opts: {
       : undefined;
   const completedSpecialists = specialistResults?.filter((item) => item.status === "completed").length ?? 0;
   const result: ReviewResult = {
-    schemaVersion: 3,
+    schemaVersion: 4,
     version: opts.version,
     snapshotId: opts.scope.id,
-    status: stale ? "stale" : incomplete ? "partial" : "completed",
-    outcome: incomplete ? "incomplete" : verified.length ? "findings" : "clear",
+    status: stale ? "stale" : executionIncomplete ? "partial" : "completed",
+    outcome:
+      executionIncomplete || (!verified.length && unresolvedCandidates.length)
+        ? "incomplete"
+        : verified.length
+          ? "findings"
+          : "clear",
     mode: route.mode,
     reviewPath,
     findings: verified,
     coverage,
     summary: stale
       ? "Workspace changed during review; result is stale."
-      : incomplete
+      : executionIncomplete
         ? executionBudget.timedOut()
           ? "Review timed out before completing the selected scope; partial result, not approval."
           : errors.length > 0
@@ -1094,13 +1327,17 @@ export async function executeReviewEngine(opts: {
                 .slice(0, 3)
                 .map((reason) => reason.detail)
                 .join(" ")}`
-        : reviewPath === "specialist"
-          ? `${completedSpecialists}/4 specialist reviews completed. ${verified.length ? `${verified.length} verified finding${verified.length === 1 ? "" : "s"}.` : "No verified findings."}`
-          : verified.length
-            ? `${verified.length} verified finding${verified.length === 1 ? "" : "s"}${coverage.selection === "bounded" ? " in the selected risk-ranked review scope" : ""}.`
-            : coverage.selection === "bounded"
-              ? "No verified findings in the selected risk-ranked review scope."
-              : "No verified findings.",
+        : unresolvedCandidates.length
+          ? verified.length
+            ? `${verified.length} verified finding${verified.length === 1 ? "" : "s"}; ${unresolvedCandidates.length} candidate${unresolvedCandidates.length === 1 ? " remains" : "s remain"} unproven.`
+            : `Review execution completed, but ${unresolvedCandidates.length} candidate${unresolvedCandidates.length === 1 ? " remains" : "s remain"} unproven; not approval.`
+          : reviewPath === "specialist"
+            ? `${completedSpecialists}/4 specialist reviews completed. ${verified.length ? `${verified.length} verified finding${verified.length === 1 ? "" : "s"}.` : "No verified findings."}`
+            : verified.length
+              ? `${verified.length} verified finding${verified.length === 1 ? "" : "s"}${coverage.selection === "bounded" ? " in the selected risk-ranked review scope" : ""}.`
+              : coverage.selection === "bounded"
+                ? "No verified findings in the selected risk-ranked review scope."
+                : "No verified findings.",
     timestamp: new Date().toISOString(),
     reviewer: "AgentSmith",
     candidates: {
@@ -1113,6 +1350,7 @@ export async function executeReviewEngine(opts: {
       rejected: verification.filter((item) => item.verdict === "rejected").length,
       insufficientEvidence: verification.filter((item) => item.verdict === "insufficient_evidence").length,
     },
+    candidateResolutions,
     incompleteReasons: uniqueIncompleteReasons,
     ...(specialistResults ? { specialists: specialistResults } : {}),
     errors,
@@ -1132,9 +1370,10 @@ export async function executeReviewEngine(opts: {
   stageTimingsMs.aggregation = Date.now() - stageStarted;
   const selectedWorkItemIds = new Set(selectedWorkItems.map((item) => item.id));
   const tokenOmittedWorkItemIds = new Set(tokenOmittedWorkItems.map((item) => item.id));
-  const plannerManifest: NonNullable<EngineExecution["plannerManifest"]> = eligibleWorkItems.map((item) => ({
+  const plannerManifest: NonNullable<EngineExecution["plannerManifest"]> = rankedWorkItems.map((item) => ({
     id: item.id,
     kind: item.kind,
+    rank: item.rank,
     priority: item.priority ?? 0,
     estimatedTokens: item.estimatedTokens,
     selected: selectedWorkItemIds.has(item.id),
@@ -1146,12 +1385,15 @@ export async function executeReviewEngine(opts: {
       ),
     ],
     edges: item.graphEdges.map((edge) => `${edge.source}->${edge.target ?? edge.targetText}:${edge.kind}`),
+    changedRegions: item.changedRegions,
+    promptVisibleRanges: item.promptVisibleRanges,
     rankFactors: item.rankFactors,
     selectionReason: item.selectionReason,
   }));
   return {
     result,
     execution: {
+      rankingConfig: { maxDegreeBoost: MAX_DEGREE_BOOST, degreeCap: DEGREE_CAP },
       graphSnapshot: graph.snapshot,
       graphManifest: {
         changedSymbols: graph.changedSymbols,
@@ -1165,6 +1407,8 @@ export async function executeReviewEngine(opts: {
       route,
       modelProfiles: { candidate: candidateProfile, scout: scoutProfile, verifier: verifierProfile },
       projection: full,
+      sourceProjection: full,
+      candidateProjection,
       compactProjection: route.mode === "hybrid" ? compact : undefined,
       scout: scoutTrace,
       workItems: selectedWorkItems,
@@ -1173,6 +1417,7 @@ export async function executeReviewEngine(opts: {
       evidence,
       evidenceOutcomes,
       verification,
+      candidateResolutions,
       ...(providerFailures.length ? { providerFailures } : {}),
       ...(providerDiagnostics.length ? { providerDiagnostics } : {}),
       coverage,

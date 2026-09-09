@@ -6,21 +6,61 @@
   "packageVersion": "0.5.1",
   "root": "<repo>",
   "version": "noisy-high-risk-contract-fixture-v1",
-  "sourceSnapshot": { "schemaVersion": 1, "manifestHash": "2ff2b3c57a7af0afaa9c2cd187255b09467d1f43cc5c70dffe7191e11f4cf850", "fileCount": 13, "totalBytes": 935, "complete": true, "portable": true, "captureDurationMs": 0, "warnings": [] },
+  "sourceSnapshot": {
+    "schemaVersion": 1,
+    "manifestHash": "2ff2b3c57a7af0afaa9c2cd187255b09467d1f43cc5c70dffe7191e11f4cf850",
+    "fileCount": 13,
+    "totalBytes": 935,
+    "complete": true,
+    "portable": true,
+    "captureDurationMs": 0,
+    "warnings": []
+  },
   "scope": {
-    "id": "noisy-high-risk-contract-scope-v1", "version": "noisy-high-risk-contract-fixture-v1", "root": "<repo>", "base": null,
-    "diff": "diff --git a/src/invoice-api.ts b/src/invoice-api.ts\n--- a/src/invoice-api.ts\n+++ b/src/invoice-api.ts\n@@ -1,5 +1,5 @@\n import type { InvoiceSummary } from \"./contracts.js\";\n \n export function invoiceSummary(record: { totalCents: number }): InvoiceSummary {\n-  return { totalDollars: record.totalCents / 100 };\n+  return { totalDollars: record.totalCents };\n }\ndiff --git a/src/noise/telemetry-01.ts b/src/noise/telemetry-01.ts\n--- a/src/noise/telemetry-01.ts\n+++ b/src/noise/telemetry-01.ts\n@@ -1 +1 @@\n-export const telemetryEvent01 = \"checkout-opened\";\n+export const telemetryEvent01 = \"checkout-opened-v2\";\ndiff --git a/src/noise/telemetry-02.ts b/src/noise/telemetry-02.ts\n--- a/src/noise/telemetry-02.ts\n+++ b/src/noise/telemetry-02.ts\n@@ -1 +1 @@\n-export const telemetryEvent02 = \"checkout-rendered\";\n+export const telemetryEvent02 = \"checkout-rendered-v2\";\ndiff --git a/src/noise/telemetry-03.ts b/src/noise/telemetry-03.ts\n--- a/src/noise/telemetry-03.ts\n+++ b/src/noise/telemetry-03.ts\n@@ -1 +1 @@\n-export const telemetryEvent03 = \"checkout-submitted\";\n+export const telemetryEvent03 = \"checkout-submitted-v2\";\ndiff --git a/src/noise/telemetry-04.ts b/src/noise/telemetry-04.ts\n--- a/src/noise/telemetry-04.ts\n+++ b/src/noise/telemetry-04.ts\n@@ -1 +1 @@\n-export const telemetryEvent04 = \"checkout-confirmed\";\n+export const telemetryEvent04 = \"checkout-confirmed-v2\";\ndiff --git a/src/noise/telemetry-05.ts b/src/noise/telemetry-05.ts\n--- a/src/noise/telemetry-05.ts\n+++ b/src/noise/telemetry-05.ts\n@@ -1 +1 @@\n-export const telemetryEvent05 = \"invoice-opened\";\n+export const telemetryEvent05 = \"invoice-opened-v2\";\ndiff --git a/src/noise/telemetry-06.ts b/src/noise/telemetry-06.ts\n--- a/src/noise/telemetry-06.ts\n+++ b/src/noise/telemetry-06.ts\n@@ -1 +1 @@\n-export const telemetryEvent06 = \"invoice-rendered\";\n+export const telemetryEvent06 = \"invoice-rendered-v2\";\ndiff --git a/src/noise/telemetry-07.ts b/src/noise/telemetry-07.ts\n--- a/src/noise/telemetry-07.ts\n+++ b/src/noise/telemetry-07.ts\n@@ -1 +1 @@\n-export const telemetryEvent07 = \"invoice-exported\";\n+export const telemetryEvent07 = \"invoice-exported-v2\";\ndiff --git a/src/noise/telemetry-08.ts b/src/noise/telemetry-08.ts\n--- a/src/noise/telemetry-08.ts\n+++ b/src/noise/telemetry-08.ts\n@@ -1 +1 @@\n-export const telemetryEvent08 = \"invoice-emailed\";\n+export const telemetryEvent08 = \"invoice-emailed-v2\";\n",
-    "changedFiles": ["src/invoice-api.ts", "src/noise/telemetry-01.ts", "src/noise/telemetry-02.ts", "src/noise/telemetry-03.ts", "src/noise/telemetry-04.ts", "src/noise/telemetry-05.ts", "src/noise/telemetry-06.ts", "src/noise/telemetry-07.ts", "src/noise/telemetry-08.ts"],
+    "id": "noisy-high-risk-contract-scope-v1",
+    "version": "noisy-high-risk-contract-fixture-v1",
+    "root": "<repo>",
+    "base": null,
+    "diff": "diff --git a/src/invoice-api.ts b/src/invoice-api.ts\n--- a/src/invoice-api.ts\n+++ b/src/invoice-api.ts\n@@ -1,5 +1,5 @@\n import type { InvoiceSummary } from \"./contracts.js\";\n \n export function invoiceSummary(record: { totalCents: number }): InvoiceSummary {\n-  return { totalDollars: record.totalCents / 100 };\n+  return { totalDollars: record.totalCents };\n }\ndiff --git a/src/noise/telemetry-01.ts b/src/noise/telemetry-01.ts\n--- a/src/noise/telemetry-01.ts\n+++ b/src/noise/telemetry-01.ts\n@@ -1,1 +1,1 @@\n-export const telemetryEvent01 = \"checkout-opened\";\n+export const telemetryEvent01 = \"checkout-opened-v2\";\ndiff --git a/src/noise/telemetry-02.ts b/src/noise/telemetry-02.ts\n--- a/src/noise/telemetry-02.ts\n+++ b/src/noise/telemetry-02.ts\n@@ -1,1 +1,1 @@\n-export const telemetryEvent02 = \"checkout-rendered\";\n+export const telemetryEvent02 = \"checkout-rendered-v2\";\ndiff --git a/src/noise/telemetry-03.ts b/src/noise/telemetry-03.ts\n--- a/src/noise/telemetry-03.ts\n+++ b/src/noise/telemetry-03.ts\n@@ -1,1 +1,1 @@\n-export const telemetryEvent03 = \"checkout-submitted\";\n+export const telemetryEvent03 = \"checkout-submitted-v2\";\ndiff --git a/src/noise/telemetry-04.ts b/src/noise/telemetry-04.ts\n--- a/src/noise/telemetry-04.ts\n+++ b/src/noise/telemetry-04.ts\n@@ -1,1 +1,1 @@\n-export const telemetryEvent04 = \"checkout-confirmed\";\n+export const telemetryEvent04 = \"checkout-confirmed-v2\";\ndiff --git a/src/noise/telemetry-05.ts b/src/noise/telemetry-05.ts\n--- a/src/noise/telemetry-05.ts\n+++ b/src/noise/telemetry-05.ts\n@@ -1,1 +1,1 @@\n-export const telemetryEvent05 = \"invoice-opened\";\n+export const telemetryEvent05 = \"invoice-opened-v2\";\ndiff --git a/src/noise/telemetry-06.ts b/src/noise/telemetry-06.ts\n--- a/src/noise/telemetry-06.ts\n+++ b/src/noise/telemetry-06.ts\n@@ -1,1 +1,1 @@\n-export const telemetryEvent06 = \"invoice-rendered\";\n+export const telemetryEvent06 = \"invoice-rendered-v2\";\ndiff --git a/src/noise/telemetry-07.ts b/src/noise/telemetry-07.ts\n--- a/src/noise/telemetry-07.ts\n+++ b/src/noise/telemetry-07.ts\n@@ -1,1 +1,1 @@\n-export const telemetryEvent07 = \"invoice-exported\";\n+export const telemetryEvent07 = \"invoice-exported-v2\";\ndiff --git a/src/noise/telemetry-08.ts b/src/noise/telemetry-08.ts\n--- a/src/noise/telemetry-08.ts\n+++ b/src/noise/telemetry-08.ts\n@@ -1,1 +1,1 @@\n-export const telemetryEvent08 = \"invoice-emailed\";\n+export const telemetryEvent08 = \"invoice-emailed-v2\";\n",
+    "changedFiles": [
+      "src/invoice-api.ts",
+      "src/noise/telemetry-01.ts",
+      "src/noise/telemetry-02.ts",
+      "src/noise/telemetry-03.ts",
+      "src/noise/telemetry-04.ts",
+      "src/noise/telemetry-05.ts",
+      "src/noise/telemetry-06.ts",
+      "src/noise/telemetry-07.ts",
+      "src/noise/telemetry-08.ts"
+    ],
     "changeSources": {
-      "src/invoice-api.ts": ["working-tree"],
-      "src/noise/telemetry-01.ts": ["working-tree"],
-      "src/noise/telemetry-02.ts": ["working-tree"],
-      "src/noise/telemetry-03.ts": ["working-tree"],
-      "src/noise/telemetry-04.ts": ["working-tree"],
-      "src/noise/telemetry-05.ts": ["working-tree"],
-      "src/noise/telemetry-06.ts": ["working-tree"],
-      "src/noise/telemetry-07.ts": ["working-tree"],
-      "src/noise/telemetry-08.ts": ["working-tree"]
+      "src/invoice-api.ts": [
+        "working-tree"
+      ],
+      "src/noise/telemetry-01.ts": [
+        "working-tree"
+      ],
+      "src/noise/telemetry-02.ts": [
+        "working-tree"
+      ],
+      "src/noise/telemetry-03.ts": [
+        "working-tree"
+      ],
+      "src/noise/telemetry-04.ts": [
+        "working-tree"
+      ],
+      "src/noise/telemetry-05.ts": [
+        "working-tree"
+      ],
+      "src/noise/telemetry-06.ts": [
+        "working-tree"
+      ],
+      "src/noise/telemetry-07.ts": [
+        "working-tree"
+      ],
+      "src/noise/telemetry-08.ts": [
+        "working-tree"
+      ]
     },
     "deletedFiles": [],
     "fileContents": {
@@ -39,26 +79,161 @@
       "src/checkout.ts": "import { invoiceSummary } from \"./invoice-api.js\";\n\nexport function chargeAmount(record: { totalCents: number }): number {\n  return invoiceSummary(record).totalDollars * 100;\n}\n"
     },
     "manifest": [
-      { "path": "src/invoice-api.ts", "changeKind": "modified", "additions": 1, "deletions": 1, "language": "typescript", "generated": false, "binary": false, "sizeBytes": 184 },
-      { "path": "src/noise/telemetry-01.ts", "changeKind": "modified", "additions": 1, "deletions": 1, "language": "typescript", "generated": false, "binary": false, "sizeBytes": 54 },
-      { "path": "src/noise/telemetry-02.ts", "changeKind": "modified", "additions": 1, "deletions": 1, "language": "typescript", "generated": false, "binary": false, "sizeBytes": 56 },
-      { "path": "src/noise/telemetry-03.ts", "changeKind": "modified", "additions": 1, "deletions": 1, "language": "typescript", "generated": false, "binary": false, "sizeBytes": 57 },
-      { "path": "src/noise/telemetry-04.ts", "changeKind": "modified", "additions": 1, "deletions": 1, "language": "typescript", "generated": false, "binary": false, "sizeBytes": 57 },
-      { "path": "src/noise/telemetry-05.ts", "changeKind": "modified", "additions": 1, "deletions": 1, "language": "typescript", "generated": false, "binary": false, "sizeBytes": 53 },
-      { "path": "src/noise/telemetry-06.ts", "changeKind": "modified", "additions": 1, "deletions": 1, "language": "typescript", "generated": false, "binary": false, "sizeBytes": 55 },
-      { "path": "src/noise/telemetry-07.ts", "changeKind": "modified", "additions": 1, "deletions": 1, "language": "typescript", "generated": false, "binary": false, "sizeBytes": 55 },
-      { "path": "src/noise/telemetry-08.ts", "changeKind": "modified", "additions": 1, "deletions": 1, "language": "typescript", "generated": false, "binary": false, "sizeBytes": 54 }
+      {
+        "path": "src/invoice-api.ts",
+        "changeKind": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "language": "typescript",
+        "generated": false,
+        "binary": false,
+        "sizeBytes": 184
+      },
+      {
+        "path": "src/noise/telemetry-01.ts",
+        "changeKind": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "language": "typescript",
+        "generated": false,
+        "binary": false,
+        "sizeBytes": 54
+      },
+      {
+        "path": "src/noise/telemetry-02.ts",
+        "changeKind": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "language": "typescript",
+        "generated": false,
+        "binary": false,
+        "sizeBytes": 56
+      },
+      {
+        "path": "src/noise/telemetry-03.ts",
+        "changeKind": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "language": "typescript",
+        "generated": false,
+        "binary": false,
+        "sizeBytes": 57
+      },
+      {
+        "path": "src/noise/telemetry-04.ts",
+        "changeKind": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "language": "typescript",
+        "generated": false,
+        "binary": false,
+        "sizeBytes": 57
+      },
+      {
+        "path": "src/noise/telemetry-05.ts",
+        "changeKind": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "language": "typescript",
+        "generated": false,
+        "binary": false,
+        "sizeBytes": 53
+      },
+      {
+        "path": "src/noise/telemetry-06.ts",
+        "changeKind": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "language": "typescript",
+        "generated": false,
+        "binary": false,
+        "sizeBytes": 55
+      },
+      {
+        "path": "src/noise/telemetry-07.ts",
+        "changeKind": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "language": "typescript",
+        "generated": false,
+        "binary": false,
+        "sizeBytes": 55
+      },
+      {
+        "path": "src/noise/telemetry-08.ts",
+        "changeKind": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "language": "typescript",
+        "generated": false,
+        "binary": false,
+        "sizeBytes": 54
+      }
     ],
-    "omissions": [], "languages": ["typescript"],
-    "metadata": { "fileCount": 9, "additions": 9, "deletions": 9, "capturedAt": "2026-08-28T00:00:00.000Z" }
+    "omissions": [],
+    "languages": [
+      "typescript"
+    ],
+    "metadata": {
+      "fileCount": 9,
+      "additions": 9,
+      "deletions": 9,
+      "capturedAt": "2026-08-28T00:00:00.000Z"
+    }
   },
   "deterministicReport": "PASS",
   "result": {
-    "schemaVersion": 3, "version": "noisy-high-risk-contract-fixture-v1", "snapshotId": "noisy-high-risk-contract-scope-v1",
-    "status": "completed", "outcome": "findings", "mode": "partitioned", "reviewPath": "generic", "findings": [],
-    "coverage": { "changedFiles": 9, "changedFilesReviewed": 3, "changedSymbols": 9, "changedSymbolsReviewed": 3, "localUnitsGenerated": 9, "localUnitsReviewed": 2, "interactionUnitsGenerated": 2, "interactionUnitsReviewed": 1, "dependencyEdgesIdentified": 2, "dependencyEdgesEligible": 2, "dependencyEdgesReviewed": 2, "evidenceRequests": 2, "evidenceResolved": 2, "evidenceGaps": 0, "globalScan": "none", "omissions": [{ "kind": "unit", "id": "telemetry-noise", "reason": "work-item-budget" }] },
-    "summary": "Draft synthetic trace; expected labels are stored in case.yaml.", "timestamp": "2026-08-28T00:00:00.000Z", "reviewer": "AgentSmith",
-    "runtime": { "models": { "candidate": "qwen3.5:9b-q4_K_M", "verifier": "qwen3.5:9b-q4_K_M" }, "inputTokens": 0, "outputTokens": 0, "concurrency": 1 }
+    "schemaVersion": 3,
+    "version": "noisy-high-risk-contract-fixture-v1",
+    "snapshotId": "noisy-high-risk-contract-scope-v1",
+    "status": "completed",
+    "outcome": "findings",
+    "mode": "partitioned",
+    "reviewPath": "generic",
+    "findings": [],
+    "coverage": {
+      "changedFiles": 9,
+      "changedFilesReviewed": 3,
+      "changedSymbols": 9,
+      "changedSymbolsReviewed": 3,
+      "localUnitsGenerated": 9,
+      "localUnitsReviewed": 2,
+      "interactionUnitsGenerated": 2,
+      "interactionUnitsReviewed": 1,
+      "dependencyEdgesIdentified": 2,
+      "dependencyEdgesEligible": 2,
+      "dependencyEdgesReviewed": 2,
+      "evidenceRequests": 2,
+      "evidenceResolved": 2,
+      "evidenceGaps": 0,
+      "globalScan": "none",
+      "omissions": [
+        {
+          "kind": "unit",
+          "id": "telemetry-noise",
+          "reason": "work-item-budget"
+        }
+      ]
+    },
+    "summary": "Draft synthetic trace; expected labels are stored in case.yaml.",
+    "timestamp": "2026-08-28T00:00:00.000Z",
+    "reviewer": "AgentSmith",
+    "runtime": {
+      "models": {
+        "candidate": "qwen3.5:9b-q4_K_M",
+        "verifier": "qwen3.5:9b-q4_K_M"
+      },
+      "inputTokens": 0,
+      "outputTokens": 0,
+      "concurrency": 1
+    }
   },
-  "decisionProvenance": { "publishedFindingIds": [], "rejectedCandidateIds": [], "likelyCandidateIds": [], "insufficientEvidenceCandidateIds": [], "aggregateRule": "verified only", "errors": [] }
+  "decisionProvenance": {
+    "publishedFindingIds": [],
+    "rejectedCandidateIds": [],
+    "likelyCandidateIds": [],
+    "insufficientEvidenceCandidateIds": [],
+    "aggregateRule": "verified only",
+    "errors": []
+  }
 }

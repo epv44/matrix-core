@@ -532,6 +532,55 @@ export interface ReviewCoverage {
 
 export type ReviewStatus = "completed" | "partial" | "error" | "stale";
 export type AdvisoryReviewStatus = "completed" | "partial" | "provider_error" | "timeout" | "disabled";
+export type CandidateResolution = "proven" | "disproven" | "unproven" | "missed";
+export type CandidateResolutionReasonCode =
+  | "candidate-miss"
+  | "selection-miss"
+  | "verifier-evidence-demand"
+  | "locator-resolution-failure"
+  | "retrieval-miss"
+  | "evidence-packing-budget"
+  | "citation-validation-failure"
+  | "verifier-insufficient-evidence"
+  | "verifier-likely-unpublished"
+  | "verification-rejection"
+  | "false-positive"
+  | "timeout"
+  | "provider-failure"
+  | "fixture-invalid"
+  | "unknown";
+
+export interface CandidateResolutionAudit {
+  candidateId: string;
+  resolution: CandidateResolution;
+  reasonCode?: CandidateResolutionReasonCode;
+  detail: string;
+  sourceWorkItemIds: string[];
+  sourceReviewers: SpecialistReviewerId[];
+  evidence: {
+    requestOutcomes: Array<{
+      requestId: string;
+      kind: EvidenceRequestKind;
+      status: EvidenceResolutionOutcome["status"];
+      recordIds: string[];
+      packedRecordIds: string[];
+      resolverRoute?: NonNullable<EvidenceResolutionOutcome["resolverRoute"]>;
+      consideredRecords?: number;
+      reason?: string;
+    }>;
+    resolvedRecordIds: string[];
+    packedRecordIds: string[];
+  };
+  verifier?: {
+    verdict: "verified" | "likely" | "rejected" | "insufficient_evidence" | "not_run";
+    confidence?: number;
+    reasoningSummary?: string;
+    supportingEvidenceIds: string[];
+    failureKinds: Array<"json-syntax" | "schema-validation" | "citation-validation">;
+    citationRepairAttempted?: boolean;
+  };
+}
+
 export interface ReviewIncompleteReason {
   kind:
     | "stale-workspace"
@@ -539,6 +588,8 @@ export interface ReviewIncompleteReason {
     | "timeout"
     | "unfinished-work-item"
     | "unadjudicated-candidate"
+    | "evidence-packing-budget"
+    | "citation-validation-failure"
     | "insufficient-evidence"
     | "likely-unpublished"
     | "material-omission";
@@ -547,7 +598,9 @@ export interface ReviewIncompleteReason {
 }
 
 export interface ReviewResult {
-  schemaVersion: 3;
+  schemaVersion: 4;
+  /** Present only when a persisted v3 artifact was conservatively adapted for read-only presentation. */
+  migratedFromSchemaVersion?: 3;
   version: string;
   snapshotId?: string;
   status: ReviewStatus;
@@ -569,6 +622,7 @@ export interface ReviewResult {
     rejected: number;
     insufficientEvidence: number;
   };
+  candidateResolutions: CandidateResolutionAudit[];
   incompleteReasons?: ReviewIncompleteReason[];
   specialists?: SpecialistReview[];
   errors?: string[];

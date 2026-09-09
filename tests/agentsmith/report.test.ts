@@ -7,7 +7,7 @@ import { writeResult } from "../../src/agentsmith/scripts/run-review.js";
 import type { ReviewResult } from "../../src/core/types.js";
 
 const result: ReviewResult = {
-  schemaVersion: 3,
+  schemaVersion: 4,
   version: "workspace-v2",
   status: "completed",
   outcome: "findings",
@@ -80,6 +80,7 @@ const result: ReviewResult = {
     rejected: 1,
     insufficientEvidence: 0,
   },
+  candidateResolutions: [],
   profileHash: "internal-profile-hash",
   strategyHash: "internal-strategy-hash",
   traceId: "internal-trace-id",
@@ -218,7 +219,7 @@ AgentSmith is advisory. Select verified finding IDs explicitly before running \`
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrix report v2 "));
     try {
       writeResult(root, result, "PASS");
-      expect(fs.readFileSync(path.join(root, ".quality/review-result.yaml"), "utf8")).toContain("schemaVersion: 3");
+      expect(fs.readFileSync(path.join(root, ".quality/review-result.yaml"), "utf8")).toContain("schemaVersion: 4");
       const markdown = fs.readFileSync(path.join(root, ".quality/review-result.md"), "utf8");
       expect(markdown).toBe(
         formatAgentSmithReview(result, { gateStatus: "PASS", artifact: ".quality/review-result.md" }),

@@ -10,6 +10,7 @@ import type {
 import type { GraphContext } from "../core/graph/types.js";
 import type { ReviewScope } from "./scope.js";
 import { changedRanges } from "./projection.js";
+import { parseAddedLineRanges } from "../core/diff.js";
 import { sha256Json } from "../core/hash.js";
 import { discoverGraphFiles } from "../core/graph/providers.js";
 
@@ -27,6 +28,7 @@ export function evidenceLocatorParts(request: EvidenceRequest): {
   pathHint?: string;
   symbolCandidates: string[];
   textQueries: string[];
+  symbolLocatorValid: boolean;
 } {
   const locator = (request.symbol ?? request.query ?? "").trim().replace(/^`|`$/g, "");
   const embeddedPath = locator.match(
@@ -45,9 +47,11 @@ export function evidenceLocatorParts(request: EvidenceRequest): {
   const beforeDescription = withoutPath
     .replace(/\s+(?:return|parameter|property|field|function|method)\s+type\b.*$/i, "")
     .trim();
-  const beforeCall = beforeDescription.replace(/\(.*$/, "").trim();
+  const emptyCallNormalized = beforeDescription.replace(/\(\s*\)$/, "").trim();
+  const expressionShaped = /[()=,+*?\[\]{}'"`]/.test(emptyCallNormalized);
+  const beforeCall = expressionShaped ? "" : emptyCallNormalized;
   const identifiers = beforeCall.match(/[A-Za-z_$][\w$]*/g) ?? [];
-  const symbolCandidates = [locator, beforeDescription, beforeCall, identifiers.at(-1) ?? ""]
+  const symbolCandidates = [beforeCall, identifiers.at(-1) ?? ""]
     .map((value) => value.trim())
     .filter((value) => Boolean(value) && !value.startsWith("{") && !value.includes(" "));
   const textQueries = [locator, beforeDescription, beforeCall, identifiers.at(-1) ?? ""]
@@ -57,6 +61,7 @@ export function evidenceLocatorParts(request: EvidenceRequest): {
     pathHint: pathHint ? normalizedRepositoryPath(pathHint) : undefined,
     symbolCandidates: [...new Set(symbolCandidates)],
     textQueries: [...new Set(textQueries)],
+    symbolLocatorValid: !expressionShaped && symbolCandidates.length > 0,
   };
 }
 
@@ -173,12 +178,15 @@ export function candidateAnchorIssue(candidate: CandidateFinding, scope: ReviewS
   if (content === undefined) return "changed file content is unavailable";
   if (candidate.line < 1 || candidate.line > content.split("\n").length)
     return "finding line is outside the changed file";
-  const ranges = changedRanges(scope.diff).filter((range) => range.file === candidate.file);
+  const exactRanges = parseAddedLineRanges(scope.diff).filter((range) => range.file === candidate.file);
+  const ranges = exactRanges.length ? exactRanges : changedRanges(scope.diff).filter((range) => range.file === candidate.file);
   if (
     ranges.length &&
     !ranges.some((range) => candidate.line <= range.end && (candidate.endLine ?? candidate.line) >= range.start)
   )
-    return "finding does not overlap a changed hunk";
+    return exactRanges.length
+      ? "finding does not overlap an added or replaced line"
+      : "finding does not overlap a changed hunk";
   return undefined;
 }
 
@@ -202,9 +210,14 @@ export function resolveEvidenceRequests(opts: {
       ]),
     ).values(),
   ].slice(0, opts.policy.maxRequestsPerCandidate);
-  for (const request of requests) {
+  for (const [requestIndex, request] of requests.entries()) {
     const requestId = evidenceRequestId(request);
-    if (records.length >= maxPerCandidate) {
+    const remainingRequestGroups = requests.length - requestIndex - 1;
+    const requestRecordLimit = Math.min(
+      maxPerRequest,
+      Math.max(0, maxPerCandidate - records.length - remainingRequestGroups),
+    );
+    if (requestRecordLimit < 1) {
       const reason = "candidate evidence record limit reached";
       outcomes.push({ requestId, request, status: "unresolved", records: [], reason });
       gaps.push(`${request.kind}: ${reason}`);
@@ -215,6 +228,12 @@ export function resolveEvidenceRequests(opts: {
     let consideredRecords = 0;
     const locator = evidenceLocatorParts(request);
     const literalMode = request.locatorMode === "literal";
+    if (!literalMode && request.symbol && !locator.symbolLocatorValid) {
+      const reason = "invalid expression-shaped symbol locator; use a canonical symbol or literal mode";
+      outcomes.push({ requestId, request, status: "unresolved", records: [], reason });
+      gaps.push(`${request.kind}: ${reason}`);
+      continue;
+    }
     const matchedSymbols = literalMode
       ? []
       : symbols.filter((symbol) => {
@@ -241,6 +260,7 @@ export function resolveEvidenceRequests(opts: {
       continue;
     }
     const selectedSymbols = new Map<string, (typeof symbols)[number]>();
+    const strictRelation = request.kind === "callers" || request.kind === "callees";
     if (["callers", "callees", "usage"].includes(request.kind)) {
       const matchedKeys = new Set(matchedSymbols.map((symbol) => `${symbol.file}:${symbol.qualifiedName}`));
       for (const edge of opts.graph.edges) {
@@ -265,11 +285,19 @@ export function resolveEvidenceRequests(opts: {
     } else {
       for (const symbol of matchedSymbols) selectedSymbols.set(`${symbol.file}:${symbol.qualifiedName}`, symbol);
     }
-    for (const symbol of [...selectedSymbols.values()].slice(0, maxPerRequest)) {
+    for (const symbol of [...selectedSymbols.values()].slice(0, requestRecordLimit)) {
       const lines = readLines(opts.scope, symbol.file);
       if (!lines.length) continue;
-      const start = Math.max(1, symbol.startLine);
-      const end = Math.min(lines.length, symbol.endLine, start + opts.policy.maxSnippetLines - 1);
+      const symbolStart = Math.max(1, symbol.startLine);
+      const symbolEnd = Math.min(lines.length, symbol.endLine);
+      const locatorName = locator.symbolCandidates.at(-1);
+      const matchedLine = locatorName
+        ? lines.findIndex((line, index) => index + 1 >= symbolStart && index + 1 <= symbolEnd && line.includes(locatorName)) + 1
+        : 0;
+      const center = matchedLine >= symbolStart ? matchedLine : symbolStart;
+      const snippetLines = Math.min(48, opts.policy.maxSnippetLines);
+      const start = Math.max(symbolStart, center - 12);
+      const end = Math.min(symbolEnd, start + snippetLines - 1);
       requestRecords.push(
         record(
           requestId,
@@ -283,10 +311,10 @@ export function resolveEvidenceRequests(opts: {
         ),
       );
       resolverRoute = "graph-symbol";
-      if (records.length + requestRecords.length >= maxPerCandidate || requestRecords.length >= maxPerRequest) break;
+      if (records.length + requestRecords.length >= maxPerCandidate || requestRecords.length >= requestRecordLimit) break;
     }
     const fallbackPath = locator.pathHint ?? opts.candidate.file;
-    if (!literalMode && !requestRecords.length && fallbackPath && records.length < maxPerCandidate) {
+    if (!strictRelation && !literalMode && !requestRecords.length && fallbackPath && records.length < maxPerCandidate) {
       const resolved = safePath(opts.scope.root, fallbackPath);
       const lines = resolved ? readLines(opts.scope, resolved.relative) : [];
       if (resolved && lines.length) {
@@ -337,10 +365,10 @@ export function resolveEvidenceRequests(opts: {
           ),
         );
         resolverRoute = "path-search";
-        if (records.length + requestRecords.length >= maxPerCandidate || requestRecords.length >= maxPerRequest) break;
+          if (records.length + requestRecords.length >= maxPerCandidate || requestRecords.length >= requestRecordLimit) break;
       }
     }
-    if (!requestRecords.length) {
+    if (!strictRelation && !requestRecords.length) {
       const query =
         request.query?.trim() ||
         locator.textQueries.find((value) => value.length >= 3) ||
@@ -391,7 +419,7 @@ export function resolveEvidenceRequests(opts: {
           resolverRoute = "repository-literal";
           if (
             records.length + requestRecords.length >= maxPerCandidate ||
-            requestRecords.length >= (literalMode ? 1 : maxPerRequest)
+            requestRecords.length >= (literalMode ? 1 : requestRecordLimit)
           )
             break;
         }

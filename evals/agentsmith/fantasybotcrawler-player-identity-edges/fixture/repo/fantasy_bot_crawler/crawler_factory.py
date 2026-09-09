@@ -3,9 +3,9 @@ from fantasy_bot_crawler.repositories.player_repository import PlayerRepository
 
 
 def build_player_repository() -> PlayerRepository:
+    # Factory materializes the shared identities.
     return PlayerRepository()
 
 
 def materialize_identity(player: Player, identity: ExternalIdentity) -> tuple[str, str]:
     return player.id, identity.external_id
-

@@ -15,6 +15,7 @@ import { captureSourceSnapshot, sourceManifestHash, type CapturedSourceSnapshot 
 import { formatAgentSmithReview, REVIEW_MARKDOWN_ARTIFACT } from "../report.js";
 import { hashDiff } from "./hash-diff.js";
 import { AGENTSMITH_STRATEGY_HASH } from "../strategy.js";
+import { isCurrentReviewResult } from "../review-store.js";
 
 export interface RunReviewOptions {
   cwd: string;
@@ -96,7 +97,7 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
   const cacheKey = hashDiff({
     diff: scope.diff,
     config: JSON.stringify({
-      schemaVersion: 3,
+      schemaVersion: 4,
       scopeId: scope.id,
       profileHash: policy.agentSmith.hash,
       strategyHash: AGENTSMITH_STRATEGY_HASH,
@@ -107,8 +108,8 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
   const cacheFile = path.join(resolved.configRoot, ".quality", "cache", "agentsmith-v4", `${cacheKey}.yaml`);
   try {
     if (config.cache && fs.existsSync(cacheFile)) {
-      const cached = yaml.load(fs.readFileSync(cacheFile, "utf8")) as ReviewResult;
-      if (cached?.schemaVersion === 3) {
+      const cached = yaml.load(fs.readFileSync(cacheFile, "utf8"));
+      if (isCurrentReviewResult(cached)) {
         const result = materializeCachedReview(cached, { version: opts.version, timestamp, scopeId: scope.id });
         const recorded = writeAgentSmithTrace(resolved.configRoot, {
           packageVersion: ENGINE_VERSION,
@@ -180,7 +181,8 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
         rejectedCandidateIds: rejected,
         likelyCandidateIds: likely,
         insufficientEvidenceCandidateIds: insufficient,
-        aggregateRule: "only verifier-confirmed candidates are published; incomplete work prevents a clear outcome",
+        aggregateRule:
+          "only verifier-confirmed candidates are published; unresolved candidates prevent approval while execution completeness is reported separately",
         errors: result.errors ?? [],
       },
     });
@@ -201,7 +203,7 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const result: ReviewResult = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       version: opts.version,
       snapshotId: scope.id,
       status: "error",
@@ -214,6 +216,7 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
       timestamp,
       reviewer: AGENT_SMITH,
       candidates: { generated: 0, verified: 0, likely: 0, rejected: 0, insufficientEvidence: 0 },
+      candidateResolutions: [],
       errors: [message],
       scopeId: scope.id,
       profileHash: policy.agentSmith.hash,

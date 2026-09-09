@@ -5,7 +5,9 @@ import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import yaml from "js-yaml";
 import {
+  configureEvalModelTarget,
   compareEvalReports,
+  isCoverageBudgetFailure,
   runEvalCases,
   scoreFindings,
   scoreInspectionTargets,
@@ -109,6 +111,7 @@ function activate(root: string, slug: string) {
     contractFamily: "synthetic-clear",
     exhaustiveCandidates: true,
   };
+  definition.evaluationScope = { stages: ["aggregation"] };
   definition.expectations = { aggregation: { outcome: "clear", findings: [] } };
   fs.writeFileSync(target, yaml.dump(definition));
 }
@@ -116,12 +119,44 @@ function activate(root: string, slug: string) {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("AgentSmith eval cases", () => {
+  it("does not classify ordinary insufficient evidence as a coverage budget failure", () => {
+    expect(
+      isCoverageBudgetFailure({
+        coverage: { omissions: [] },
+        errors: [],
+        incompleteReasons: [{ kind: "insufficient-evidence" }],
+      }),
+    ).toBe(false);
+    expect(
+      isCoverageBudgetFailure({
+        coverage: { omissions: [{ reason: "token-budget" }] },
+        errors: [],
+        incompleteReasons: [],
+      }),
+    ).toBe(true);
+  });
+
+  it("resolves the requested small and large model targets without fallback", () => {
+    const config = {
+      model_profiles: [
+        { id: "small", reviewCapability: "small", model: "small-model" },
+        { id: "strong", reviewCapability: "strong", model: "large-model" },
+      ],
+      models: { candidate: "small", verifier: "small" },
+    } as any;
+    expect(configureEvalModelTarget(config, "small").models).toMatchObject({ candidate: "small", verifier: "small" });
+    expect(configureEvalModelTarget(config, "large").models).toMatchObject({ candidate: "strong", verifier: "strong" });
+    expect(() => configureEvalModelTarget({ ...config, model_profiles: [config.model_profiles[0]] }, "large")).toThrow(
+      /large model profile/,
+    );
+  });
+
   it("curates an unlabeled sanitized draft from a local trace", () => {
     const { root, traceId } = fixture();
     try {
       curateTrace({ root, traceId, slug: "case-one" });
       const { definition } = readEvalCase(root, "case-one");
-      expect(definition).toMatchObject({ schemaVersion: 7, status: "draft", expectations: {} });
+      expect(definition).toMatchObject({ schemaVersion: 9, status: "draft", expectations: {} });
       expect(definition.source.fixture).toBeTruthy();
       expect(() => curateTrace({ root, traceId, slug: "case-one" })).toThrow(/already exists/);
     } finally {

@@ -24,6 +24,8 @@ const incompleteReasonLabels: Record<NonNullable<ReviewResult["incompleteReasons
   "stale-workspace": "Workspace changed during review",
   "provider-failure": "Review provider failed",
   timeout: "Review deadline reached",
+  "evidence-packing-budget": "Required verifier evidence could not fit in the evidence budget",
+  "citation-validation-failure": "Verifier citations remained invalid after repair",
   "unfinished-work-item": "Selected review work did not complete",
   "unadjudicated-candidate": "Candidate verification did not complete",
   "insufficient-evidence": "Candidates lacked sufficient evidence",
@@ -70,7 +72,9 @@ export function formatAgentSmithReview(
     review.outcome === "findings"
       ? `${review.findings.length} verified finding${review.findings.length === 1 ? "" : "s"} pending human triage (advisory${review.coverage.selection === "bounded" ? "; selected risk-ranked scope" : ""})`
       : review.outcome === "incomplete"
-        ? review.coverage.timeout
+        ? review.status === "completed"
+          ? "Review execution completed, but one or more candidates remain unresolved. Do not interpret an empty finding list as approval"
+          : review.coverage.timeout
           ? "Review incomplete; partial review due to timeout. Do not interpret an empty finding list as approval"
           : review.errors?.length
             ? "Review incomplete; partial review due to provider failure. Do not interpret an empty finding list as approval"
@@ -176,6 +180,25 @@ export function formatAgentSmithReview(
       ),
     );
   } else lines.push("No candidates generated.");
+
+  const candidateResolutions = review.candidateResolutions ?? [];
+  if (candidateResolutions.length) {
+    lines.push(
+      "",
+      "### Candidate Resolution Audit",
+      "",
+      table(
+        ["Candidate", "Resolution", "Attribution", "Verifier disposition", "Detail"],
+        candidateResolutions.map((candidate) => [
+          candidate.candidateId,
+          candidate.resolution,
+          candidate.reasonCode ?? "—",
+          candidate.verifier?.verdict ?? "not run",
+          candidate.detail,
+        ]),
+      ),
+    );
+  }
 
   lines.push("", "### Coverage", "");
   lines.push(

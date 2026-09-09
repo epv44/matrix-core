@@ -26,6 +26,13 @@
     - edgeKinds: [calls, producer-consumer, schema-user, serialization]
   short: Compare values produced by changed code with assumptions made by consumers.
   explanation: Focus on return shapes, serialization, units, ordering, and failure behavior.
+- id: contract.value-provenance
+  languages: [python, typescript, go, rust]
+  categories: [contract, correctness]
+  triggers:
+    - edgeKinds: [reads-type, producer-consumer, serialization]
+  short: Trace every producer value variant through typed consumers and user-visible mappings; preserve distinct semantic variants.
+  explanation: Report a mismatch only when an authoritative producer or type distinguishes a value that the changed consumer collapses, relabels, or misinterprets.
 - id: security.authorization-boundary
   languages: [python, typescript, go, rust]
   categories: [security]

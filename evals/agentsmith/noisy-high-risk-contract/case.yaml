@@ -1,4 +1,4 @@
-schemaVersion: 7
+schemaVersion: 9
 id: noisy-high-risk-contract
 status: active
 kind: benchmark
@@ -23,6 +23,8 @@ groundTruth:
   reviewedAt: "2026-08-29T00:00:00.000Z"
   contractFamily: typescript-currency-unit-large-change
   exhaustiveCandidates: true
+evaluationScope:
+  stages: [snapshot, graph, planning, selection, projection, candidates, verification, aggregation, reporting]
 expectations:
   snapshot:
     files:
@@ -62,6 +64,9 @@ expectations:
     edges:
       - src/invoice-api.ts:invoiceSummary->src/contracts.ts:InvoiceSummary:reads-type
       - src/checkout.ts:chargeAmount->src/invoice-api.ts:invoiceSummary:calls
+  selection:
+    maxWorkItems: 4
+    maxTokens: 10000
     forbiddenFiles:
       - src/noise/telemetry-01.ts
       - src/noise/telemetry-02.ts

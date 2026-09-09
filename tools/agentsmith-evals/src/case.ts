@@ -17,7 +17,7 @@ import {
 import { computeWorkspaceVersion } from "../../../src/core/version.js";
 import { sha256 } from "../../../src/core/hash.js";
 
-export const EVAL_CASE_SCHEMA_VERSION = 7;
+export const EVAL_CASE_SCHEMA_VERSION = 9;
 export const STAGE_REPLAY_SCHEMA_VERSION = 1;
 const slugPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -25,7 +25,10 @@ const discoveryClassSchema = z.enum(["L0", "L1", "L2", "L3"]);
 const categorySchema = z.enum(["correctness", "security", "performance", "contract"]);
 const severitySchema = z.enum(["critical", "high", "medium", "low"]);
 const verdictSchema = z.enum(["verified", "likely", "rejected", "insufficient_evidence"]);
-const suiteSchema = z.enum(["component", "conformance", "draft"]);
+const suiteSchema = z
+  .string()
+  .regex(slugPattern, "must be a valid suite ID")
+  .refine((value) => value !== "draft", "draft is an eval status, not a suite ID");
 const evidenceKindSchema = z.enum([
   "definition",
   "callers",
@@ -38,6 +41,20 @@ const evidenceKindSchema = z.enum([
   "schema",
   "search",
 ]);
+export const EVAL_STAGE_ORDER = [
+  "snapshot",
+  "graph",
+  "planning",
+  "ranking",
+  "selection",
+  "projection",
+  "candidates",
+  "evidence",
+  "verification",
+  "aggregation",
+  "reporting",
+] as const;
+const evalStageSchema = z.enum(EVAL_STAGE_ORDER);
 
 const goldenCandidateSchema = z.object({
   id: z.string().min(1),
@@ -75,6 +92,15 @@ const stageReplayArtifactSchema = z.object({
   reviewed: z.literal(true),
   contractEvidence: z.array(z.object({ path: z.string().min(1), content: z.string().min(1) })).default([]),
   goldenCandidates: z.array(goldenCandidateSchema).min(1),
+  /** Optional frozen inputs for isolated component scorecards. */
+  componentInputs: z
+    .object({
+      graphManifest: z.unknown().optional(),
+      planningWorkItems: z.array(z.unknown()).optional(),
+      rankingWorkItems: z.array(z.unknown()).optional(),
+      selection: z.object({ rankedWorkItemIds: z.array(z.string().min(1)).default([]) }).optional(),
+    })
+    .optional(),
 });
 
 export interface StageReplayArtifact {
@@ -84,6 +110,12 @@ export interface StageReplayArtifact {
   reviewed: true;
   contractEvidence: Array<{ path: string; content: string }>;
   goldenCandidates: CandidateFinding[];
+  componentInputs?: {
+    graphManifest?: unknown;
+    planningWorkItems?: unknown[];
+    rankingWorkItems?: unknown[];
+    selection?: { rankedWorkItemIds: string[] };
+  };
 }
 
 export const minimumEvidenceSchema = z
@@ -140,6 +172,32 @@ const targetSchema = z.object({
   forbiddenFiles: z.array(z.string()).default([]),
   forbiddenSymbols: z.array(z.string()).default([]),
   forbiddenEdges: z.array(z.string()).default([]),
+  graphScope: z
+    .object({
+      exhaustiveNodes: z.array(z.string().min(1)).default([]),
+      highDegreeThreshold: z.number().int().nonnegative().default(3),
+    })
+    .default({ exhaustiveNodes: [], highDegreeThreshold: 3 }),
+  adjacency: z
+    .array(
+      z.object({
+        node: z.string().min(1),
+        expectedNeighbors: z.array(z.string().min(1)).default([]),
+        exhaustive: z.boolean().default(true),
+      }),
+    )
+    .default([]),
+  graphFactors: z
+    .array(
+      z.object({
+        node: z.string().min(1),
+        fanIn: z.number().int().nonnegative(),
+        fanOut: z.number().int().nonnegative(),
+        neighborDegree: z.number().int().nonnegative(),
+        directedIncidentDegree: z.number().int().nonnegative(),
+      }),
+    )
+    .default([]),
   paths: z
     .array(
       z.object({
@@ -186,6 +244,15 @@ export const riskRankingExpectationSchema = z.object({
       }),
     )
     .default([]),
+  /** Explicit degree-isolation comparisons, highest degree first. */
+  degreePairs: z
+    .array(
+      z.object({
+        higher: z.string().min(1),
+        lower: z.string().min(1),
+      }),
+    )
+    .default([]),
   /** Edges expected to contribute to graph-derived risk. */
   expectedEdges: z
     .array(
@@ -203,6 +270,13 @@ const selectionExpectationSchema = z.object({
   maxWorkItems: z.number().int().positive(),
   maxTokens: z.number().int().positive(),
   selected: z.array(z.string().min(1)).default([]),
+  /** Full candidate oracle before hard budgets are applied. */
+  expectedEligible: z.array(z.string().min(1)).default([]),
+  /** Candidate oracle after documented reservation and budget constraints. */
+  expectedFeasible: z.array(z.string().min(1)).default([]),
+  /** IDs or item kinds that the selector must reserve. */
+  requiredReserved: z.array(z.string().min(1)).default([]),
+  forbiddenFiles: z.array(z.string()).default([]),
   requiredKinds: z.array(z.enum(["local", "interaction"])).default([]),
 });
 
@@ -234,7 +308,13 @@ const sensitiveContentExemptionSchema = z.object({
 
 export const evalCaseSchema = z
   .object({
-    schemaVersion: z.union([z.literal(5), z.literal(6), z.literal(EVAL_CASE_SCHEMA_VERSION)]),
+    schemaVersion: z.union([
+      z.literal(5),
+      z.literal(6),
+      z.literal(7),
+      z.literal(8),
+      z.literal(EVAL_CASE_SCHEMA_VERSION),
+    ]),
     id: z.string().min(1),
     status: z.enum(["draft", "active"]),
     kind: z.enum(["benchmark", "conformance"]).default("benchmark"),
@@ -266,9 +346,10 @@ export const evalCaseSchema = z
         reviewedBy: z.string().min(1),
         reviewedAt: z.string().datetime(),
         contractFamily: z.string().min(1),
-        exhaustiveCandidates: z.boolean(),
+        exhaustiveCandidates: z.boolean().optional(),
       })
       .optional(),
+    evaluationScope: z.object({ stages: z.array(evalStageSchema).default([]) }).optional(),
     stageReplay: z
       .object({
         path: z.string().min(1),
@@ -299,6 +380,8 @@ export const evalCaseSchema = z
             selection: selectionExpectationSchema.optional(),
           })
           .optional(),
+        ranking: riskRankingExpectationSchema.optional(),
+        selection: selectionExpectationSchema.optional(),
         candidates: z.object({ items: z.array(expectedCandidateSchema).default([]) }).optional(),
         evidence: z.object({ requests: z.array(evidenceExpectationSchema).default([]) }).optional(),
         verification: z.object({ candidates: z.array(expectedCandidateSchema).default([]) }).optional(),
@@ -322,11 +405,74 @@ export const evalCaseSchema = z
     tags: z.array(z.string()).default([]),
   })
   .superRefine((value, context) => {
+    const scopeStages = value.evaluationScope?.stages ?? [];
+    if (value.schemaVersion >= 9) {
+      if (value.status === "active" && !scopeStages.length)
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["evaluationScope", "stages"],
+          message: "active schema-v9 cases require at least one evaluation stage",
+        });
+      const seen = new Set<string>();
+      let prior = -1;
+      for (const [index, stage] of scopeStages.entries()) {
+        if (seen.has(stage))
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["evaluationScope", "stages", index],
+            message: `duplicate evaluation stage ${stage}`,
+          });
+        seen.add(stage);
+        const position = EVAL_STAGE_ORDER.indexOf(stage);
+        if (position <= prior)
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["evaluationScope", "stages", index],
+            message: "evaluation stages must follow canonical stage order",
+          });
+        prior = position;
+      }
+      for (const stage of EVAL_STAGE_ORDER) {
+        const hasExpectation = value.expectations[stage] !== undefined;
+        const inScope = seen.has(stage);
+        if (hasExpectation !== inScope)
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: inScope ? ["expectations", stage] : ["evaluationScope", "stages"],
+            message: inScope
+              ? `stage ${stage} requires a matching expectation block`
+              : `expectation ${stage} must be declared in evaluationScope.stages`,
+          });
+      }
+      const candidateStages = new Set(["candidates", "evidence", "verification", "aggregation"]);
+      const evaluatesCandidates = scopeStages.some((stage) => candidateStages.has(stage));
+      if (evaluatesCandidates && value.groundTruth?.exhaustiveCandidates === undefined)
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["groundTruth", "exhaustiveCandidates"],
+          message: "candidate or downstream evaluation requires exhaustiveCandidates",
+        });
+      if (!evaluatesCandidates && value.groundTruth?.exhaustiveCandidates !== undefined)
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["groundTruth", "exhaustiveCandidates"],
+          message: "exhaustiveCandidates is only valid when candidate or downstream stages are in scope",
+        });
+    } else if (value.groundTruth && value.groundTruth.exhaustiveCandidates === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["groundTruth", "exhaustiveCandidates"],
+        message: "schema-v5 through v8 ground truth requires exhaustiveCandidates",
+      });
+    }
     const ranges = [
       ...(value.expectations.aggregation?.findings ?? []),
       ...(value.expectations.candidates?.items ?? []),
       ...(value.expectations.verification?.candidates ?? []),
     ];
+    const candidateLabels = value.expectations.candidates?.items ?? [];
+    const verificationLabels = value.expectations.verification?.candidates ?? [];
+    const declaredCandidates = verificationLabels.length ? verificationLabels : candidateLabels;
     ranges.forEach((item, index) => {
       if (item.lineEnd < item.lineStart)
         context.addIssue({
@@ -335,6 +481,42 @@ export const evalCaseSchema = z
           message: "lineEnd must be >= lineStart",
         });
     });
+    declaredCandidates.forEach((candidate, index) => {
+      if (!candidate.expectedPresence && candidate.expectedVerdict !== "rejected")
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["expectations", "candidates", "items", index, "expectedVerdict"],
+          message: "an absent candidate oracle must have rejected as its terminal disposition",
+        });
+    });
+    const declaredIds = new Set(declaredCandidates.map((candidate) => candidate.id));
+    value.expectations.evidence?.requests.forEach((request, index) => {
+      if (!declaredIds.has(request.candidate))
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["expectations", "evidence", "requests", index, "candidate"],
+          message: "evidence oracle must reference a declared candidate oracle",
+        });
+    });
+    if (value.status === "active" && value.kind === "benchmark") {
+      const findings = value.expectations.aggregation?.findings ?? [];
+      for (const [index, candidate] of declaredCandidates.entries()) {
+        if (!candidate.expectedPresence || candidate.expectedVerdict !== "verified") continue;
+        const matchingFinding = findings.some(
+          (finding) =>
+            finding.file === candidate.file &&
+            finding.lineEnd >= candidate.lineStart &&
+            finding.lineStart <= candidate.lineEnd &&
+            (!candidate.category || finding.category === candidate.category),
+        );
+        if (!matchingFinding)
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["expectations", "candidates", "items", index],
+            message: "a verified positive candidate oracle must map to an expected final finding",
+          });
+      }
+    }
     value.expectations.projection?.requiredSnippets.forEach((item, index) => {
       if (item.lineStart && item.lineEnd && item.lineEnd < item.lineStart)
         context.addIssue({
@@ -354,7 +536,7 @@ export const evalCaseSchema = z
       );
     };
     value.expectations.aggregation?.findings.forEach((finding, findingIndex) => {
-      if (value.schemaVersion === 7 && value.status === "active" && value.kind === "benchmark") {
+      if (value.schemaVersion >= 7 && value.status === "active" && value.kind === "benchmark") {
         if (finding.smallModelExpected === undefined)
           context.addIssue({
             code: z.ZodIssueCode.custom,
@@ -368,7 +550,7 @@ export const evalCaseSchema = z
             message: "active schema-v7 benchmark findings require minimum evidence",
           });
       }
-      if (value.schemaVersion !== 7) return;
+      if (value.schemaVersion < 7) return;
       if (!normalizedCasePath(finding.file))
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -487,11 +669,17 @@ export function initialCase(trace: AgentSmithTrace, slug: string, project = ""):
       sensitiveContentExemptions: [],
     },
     groundTruth: undefined,
+    evaluationScope: { stages: [] },
     stageReplay: undefined,
     expectations: {},
     narrative: { summary: "", trueCodeFlow: "", references: [] },
     tags: [],
   };
+}
+
+export function evaluationStages(definition: EvalCase): Array<(typeof EVAL_STAGE_ORDER)[number]> {
+  if (definition.schemaVersion >= 9) return [...(definition.evaluationScope?.stages ?? [])];
+  return EVAL_STAGE_ORDER.filter((stage) => definition.expectations[stage] !== undefined);
 }
 
 function writeCaseDefinition(directory: string, definition: EvalCase): void {
@@ -596,6 +784,76 @@ function safeManifestPath(root: string, relative: string): string {
   return containedPath(root, normalized, `Fixture entry ${relative}`);
 }
 
+function validateDiffAgainstPostimage(slug: string, trace: AgentSmithTrace): void {
+  let file: string | undefined;
+  let newLine = 0;
+  let oldConsumed = 0;
+  let newConsumed = 0;
+  let expectedOld = 0;
+  let expectedNew = 0;
+  let hunkLine = 0;
+  let postimage: string[] = [];
+  const finishHunk = () => {
+    if (!hunkLine) return;
+    if (oldConsumed !== expectedOld || newConsumed !== expectedNew)
+      throw new Error(
+        `Eval case ${slug} diff hunk for ${file ?? "<unknown>"} has invalid line counts ` +
+          `(old ${oldConsumed}/${expectedOld}, new ${newConsumed}/${expectedNew})`,
+      );
+    hunkLine = 0;
+  };
+  const diffLines = trace.scope.diff.split("\n");
+  for (let index = 0; index < diffLines.length; index++) {
+    const line = diffLines[index];
+    if (line.startsWith("diff --git ") || line.startsWith("--- a/")) {
+      finishHunk();
+      continue;
+    }
+    const fileHeader = /^\+\+\+ b\/(.+)$/.exec(line);
+    if (fileHeader) {
+      finishHunk();
+      file = fileHeader[1];
+      postimage = (trace.scope.fileContents[file] ?? "").split("\n");
+      continue;
+    }
+    const hunk = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (hunk) {
+      finishHunk();
+      newLine = Number(hunk[3]);
+      oldConsumed = 0;
+      newConsumed = 0;
+      expectedOld = Number(hunk[2] ?? 1);
+      expectedNew = Number(hunk[4] ?? 1);
+      hunkLine = 1;
+      continue;
+    }
+    if (!hunkLine || !file || line.startsWith("\\")) continue;
+    if (line === "") {
+      let next = diffLines[index + 1] ?? "";
+      let lookahead = index + 1;
+      while (next === "" && lookahead + 1 < diffLines.length) next = diffLines[++lookahead] ?? "";
+      const actual = postimage[newLine - 1];
+      if (actual === "" && (next.startsWith(" ") || next.startsWith("+") || next.startsWith("-"))) {
+        oldConsumed++;
+        newConsumed++;
+        newLine++;
+      }
+      continue;
+    }
+    const marker = line[0];
+    const value = line.slice(1);
+    if (marker === " " || marker === "+") {
+      const actual = postimage[newLine - 1];
+      if (actual !== value)
+        throw new Error(`Eval case ${slug} diff/postimage mismatch at ${file}:${newLine}`);
+      newLine++;
+      newConsumed++;
+      if (marker === " ") oldConsumed++;
+    } else if (marker === "-") oldConsumed++;
+  }
+  finishHunk();
+}
+
 export interface ValidatedFixture {
   directory: string;
   root: string;
@@ -680,6 +938,7 @@ export function validateCaseFixture(root: string, slug: string): ValidatedFixtur
   for (const [contextPath, contents] of Object.entries(trace.scope.suppliedContext))
     if (paths.has(contextPath) && fs.readFileSync(safeManifestPath(fixtureRoot, contextPath), "utf8") !== contents)
       throw new Error(`Eval case ${slug} supplied context differs from its fixture: ${contextPath}`);
+  validateDiffAgainstPostimage(slug, trace);
   return { directory, root: fixtureRoot, manifest, digest };
 }
 
@@ -922,9 +1181,13 @@ export function corpusHash(root: string, slugs: string[]): string {
     const { definition } = readEvalCase(root, slug);
     if (definition.stageReplay)
       hash.update(fs.readFileSync(containedPath(directory, definition.stageReplay.path, "Stage replay path")));
-    const fixture = validateCaseFixture(root, slug);
-    hash.update(fs.readFileSync(path.join(directory, "fixture-manifest.json")));
-    hash.update(fixture.digest);
+    if (definition.source.fixture) {
+      const fixture = validateCaseFixture(root, slug);
+      hash.update(fs.readFileSync(path.join(directory, "fixture-manifest.json")));
+      hash.update(fixture.digest);
+    } else {
+      hash.update("no-frozen-fixture");
+    }
   }
   return hash.digest("hex");
 }
@@ -977,10 +1240,9 @@ export function inventory(root: string) {
       conformance: cases.filter((item) => item.kind === "conformance").length,
       component: cases.filter((item) => item.suite === "component").length,
       suites: Object.fromEntries(
-        ["component", "conformance", "draft"].map((suite) => [
-          suite,
-          cases.filter((item) => item.suite === suite).length,
-        ]),
+        [...new Set(cases.map((item) => item.suite))]
+          .sort()
+          .map((suite) => [suite, cases.filter((item) => item.suite === suite).length]),
       ),
       retainedTraces: traces.length,
       uncuratedTraces: traces.filter((item) => !item.curated).length,

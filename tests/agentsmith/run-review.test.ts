@@ -23,7 +23,7 @@ const coverage = {
   omissions: [],
 };
 
-describe("runReview v2", () => {
+describe("runReview v4", () => {
   it("builds unavailable reviews from the shared result factories", () => {
     expect(
       emptyReviewCoverage({
@@ -40,9 +40,9 @@ describe("runReview v2", () => {
     });
   });
 
-  it("rebinds a v2 cache entry to current identity", () => {
+  it("rebinds a v4 cache entry to current identity", () => {
     const cached: ReviewResult = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       version: "old",
       status: "completed",
       outcome: "clear",
@@ -53,9 +53,10 @@ describe("runReview v2", () => {
       summary: "No verified findings.",
       timestamp: "old",
       reviewer: "AgentSmith",
+      candidateResolutions: [],
     };
     expect(materializeCachedReview(cached, { version: "current", timestamp: "now", scopeId: "scope" })).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       version: "current",
       timestamp: "now",
       scopeId: "scope",
@@ -63,7 +64,7 @@ describe("runReview v2", () => {
     });
   });
 
-  it("persists an incomplete v2 result when the provider is unavailable", async () => {
+  it("persists an incomplete v4 result when the provider is unavailable", async () => {
     const unavailable: ReviewProvider = {
       health: async () => ({ ok: false, models: [], error: "provider offline" }),
       invoke: async () => {
@@ -71,7 +72,7 @@ describe("runReview v2", () => {
       },
     };
     const result = await runReview({ cwd: process.cwd(), version: "v2" }, { provider: unavailable });
-    expect(result).toMatchObject({ schemaVersion: 3, status: "error", outcome: "incomplete", findings: [] });
+    expect(result).toMatchObject({ schemaVersion: 4, status: "error", outcome: "incomplete", findings: [] });
     expect(result.errors?.[0]).toMatch(/provider/i);
   });
 });

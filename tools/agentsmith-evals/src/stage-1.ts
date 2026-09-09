@@ -225,6 +225,7 @@ interface Stage1ReportResult {
   mode: string;
   iteration: number;
   status?: string;
+  executionStatus?: string;
   outcome: string;
   durationMs: number;
   inputTokens: number;
@@ -306,7 +307,8 @@ function addResult(totals: Totals, result: Stage1ReportResult): void {
   totals.outputTokens += result.outputTokens;
   totals.modelCallCount += result.benchmark?.reliability?.callsStarted ?? result.coverage?.callsStarted ?? 0;
   totals.latencies.push(result.durationMs);
-  totals.partialRuns += result.status === "completed" && result.outcome !== "incomplete" ? 0 : 1;
+  const executionStatus = result.executionStatus ?? result.status;
+  totals.partialRuns += executionStatus === "completed" ? 0 : 1;
   totals.runs += 1;
   for (const [key, value] of Object.entries(result.stage1.attributions) as Array<[Stage1Attribution, number]>)
     totals.attributions[key] += value;

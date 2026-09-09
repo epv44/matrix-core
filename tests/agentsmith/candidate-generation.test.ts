@@ -101,12 +101,12 @@ describe("candidate structured output", () => {
       health: async () => ({ ok: true, models: ["qwen"] }),
       invoke: async (input) => {
         prompts.push(input.prompt);
+        const attempt = calls++;
         return {
-          raw: JSON.stringify({
-            verdict: "rejected",
-            confidence: 0.9,
-            supportingEvidenceIds: [calls++ === 0 ? "bogus-id" : "e-1"],
-          }),
+          raw:
+            attempt === 0
+              ? JSON.stringify({ verdict: "rejected", confidence: 0.9, supportingEvidenceIds: ["bogus-id"] })
+              : JSON.stringify({ citations: [{ requestId: "request-1", evidenceId: "e-1" }] }),
           usage: { inputTokens: 2, outputTokens: 1 },
         };
       },
@@ -143,7 +143,8 @@ describe("candidate structured output", () => {
       expect.objectContaining({ failureKind: "citation-validation", attempt: 1 }),
     ]);
     expect(judged).toMatchObject({ inputTokens: 4, outputTokens: 2 });
-    expect(prompts[1]).toContain("request request-1: include at least one of e-1");
+    expect(prompts[1]).toContain("request request-1: choose exactly one of e-1");
+    expect(prompts[1]).not.toContain("Previous response");
   });
 
   it("accepts and normalizes bracket-decorated citations without repair", async () => {
@@ -192,9 +193,12 @@ describe("candidate structured output", () => {
     const provider: ReviewProvider = {
       health: async () => ({ ok: true, models: ["qwen"] }),
       invoke: async () => {
-        calls++;
+        const attempt = calls++;
         return {
-          raw: '{"verdict":"verified","confidence":1,"supportingEvidenceIds":["invented"]}',
+          raw:
+            attempt === 0
+              ? '{"verdict":"verified","confidence":1,"supportingEvidenceIds":["invented"]}'
+              : '{"citations":[{"requestId":"verdict-citation","evidenceId":"invented"}]}',
           usage: { inputTokens: 2, outputTokens: 1 },
         };
       },

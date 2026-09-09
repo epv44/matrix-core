@@ -9,7 +9,7 @@ import { getQualityStatus } from "./status.js";
 import { formatAgentSmithReview, REVIEW_MARKDOWN_ARTIFACT } from "../agentsmith/report.js";
 import { turnStore } from "./turn-store.js";
 import { coordinateQualityCompletion } from "./completion-coordinator.js";
-import { noReviewResult } from "./reviewer.js";
+import { isReviewApproval, noReviewResult } from "./reviewer.js";
 export { runReview } from "../agentsmith/scripts/run-review.js";
 function unavailableReview(version: string, message: string): ReviewResult {
   return noReviewResult(version, "error", { message, errors: [message] });
@@ -57,7 +57,7 @@ export async function runQualityReview(
     passed:
       gate.status === "PASS" &&
       computeWorkspaceVersion(resolved.configRoot) === scope.version &&
-      (advisory || (review.status === "completed" && review.outcome === "clear")),
+      (advisory || isReviewApproval(review)),
   };
 }
 
@@ -93,7 +93,7 @@ async function runQualityCompletionOnce(
       passed: current.completionAllowed,
       advisoryReview: {
         status,
-        verdict: result.review.findings.length > 0 ? "findings" : result.review.outcome === "clear" ? "pass" : null,
+        verdict: result.review.findings.length > 0 ? "findings" : isReviewApproval(result.review) ? "pass" : null,
         findings: result.review.findings,
         errors: result.review.errors ?? [],
         profileId: result.gate.policy?.agentSmith.id ?? null,
