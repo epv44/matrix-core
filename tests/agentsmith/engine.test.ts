@@ -119,6 +119,8 @@ describe("ReviewResult v4 engine semantics", () => {
         }),
       ]);
       expect(execution.candidateResolutions).toEqual(result.candidateResolutions);
+      expect(execution.contractShadow).toMatchObject({ schemaVersion: 1, lens: "correctness" });
+      expect(execution.contractShadow?.entries.every((entry) => entry.validation.valid)).toBe(true);
     },
   );
 

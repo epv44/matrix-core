@@ -102,6 +102,7 @@ interface ResultLike {
     verifiedFalsePositive?: number;
     attributions?: Record<string, number>;
   };
+  contractShadow?: unknown;
   benchmark?: {
     coverage?: Partial<Record<CoverageMetricName, CoverageMetricValue>> & { globalScan?: string };
     candidates?: { generated?: number; adjudicated?: number; adjudicationRate?: number | null };
@@ -179,6 +180,7 @@ function aggregateMetricLeaves(results: ResultLike[]): Record<string, SuiteMetri
       stage1: result.stage1,
       coverage: result.coverage,
       benchmark: result.benchmark,
+      contractShadow: result.contractShadow,
     })) {
       for (const [name, metric] of metricLeaves(value, source)) {
         const current = values.get(name) ?? [];

@@ -219,6 +219,8 @@ export interface RouteDecision {
 }
 
 export interface EngineExecution {
+  /** Phase 1 contract audit. Shadow-only: never consumed by execution decisions. */
+  contractShadow?: ContractShadowAudit;
   rankingConfig?: {
     maxDegreeBoost: number;
     degreeCap: number;
@@ -297,4 +299,20 @@ export interface EngineExecution {
     rankFactors?: ReviewWorkItem["rankFactors"];
     selectionReason?: string;
   }>;
+}
+
+export interface ContractShadowAuditEntry {
+  sourceWorkItemId: string;
+  taskId: string;
+  descriptorHash: string;
+  serializedDescriptor: string;
+  validation: { valid: true } | { valid: false; error: string };
+  legacyInputFingerprint: string;
+  legacyOutputFingerprint?: string;
+}
+
+export interface ContractShadowAudit {
+  schemaVersion: 1;
+  lens: "correctness";
+  entries: ContractShadowAuditEntry[];
 }

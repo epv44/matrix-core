@@ -39,12 +39,32 @@ import {
   verifyCandidateWithModel,
 } from "./candidate-generation.js";
 import { candidateAnchorIssue, evidenceRequestId, resolveEvidenceRequests } from "./evidence.js";
-import type { CandidateBatch, EngineExecution, VerificationResult } from "./engine-types.js";
+import type {
+  CandidateBatch,
+  ContractShadowAudit,
+  ContractShadowAuditEntry,
+  EngineExecution,
+  ReviewWorkItem,
+  VerificationResult,
+} from "./engine-types.js";
 import { computeWorkspaceVersion } from "../core/version.js";
 import { AGENTSMITH_STRATEGY_HASH } from "./strategy.js";
 import { loadSpecialists } from "./registry.js";
 import { sha256, sha256Json } from "../core/hash.js";
 import { atomicWriteFile } from "../core/filesystem.js";
+import {
+  CANDIDATE_RESULT_VERSION,
+  REVIEW_TASK_VERSION,
+  deterministicReviewTaskId,
+  deterministicReviewUnitId,
+  serializeReviewContract,
+  validateReviewTask,
+  type ContextRef,
+  type EvidenceLocator,
+  type ReviewTask,
+  type ReviewUnit,
+  type SourceRange,
+} from "../core/review-contracts.js";
 
 function profile(config: AgentSmithConfig, id: string | undefined, role: string): ModelProfile {
   if (!id) throw new Error(`Review ${role} model profile is not configured`);
@@ -488,6 +508,132 @@ function buildCandidateResolutionAudits(opts: {
   });
 }
 
+function uniqueRanges(ranges: SourceRange[]): SourceRange[] {
+  return [...new Map(ranges.map((range) => [`${range.file}:${range.startLine}:${range.endLine}`, range])).values()];
+}
+
+function shadowReviewTask(item: ReviewWorkItem, opts: {
+  snapshotId: string;
+  profile: ModelProfile;
+  existingFiles: ReadonlySet<string>;
+  knownSymbols: ReadonlySet<string>;
+}): ReviewTask {
+  const changedRanges = uniqueRanges(
+    (item.changedRegions ?? []).map((range) => ({ file: range.file, startLine: range.start, endLine: range.end })),
+  );
+  const fallbackRanges = uniqueRanges(
+    item.code.filter((snippet) => snippet.changed).map((snippet) => ({
+      file: snippet.file,
+      startLine: snippet.startLine,
+      endLine: snippet.endLine,
+    })),
+  );
+  const effectiveRanges = changedRanges.length ? changedRanges : fallbackRanges;
+  const changedSymbols = item.primarySymbols.map((symbol) => ({
+    file: symbol.file,
+    name: symbol.qualifiedName,
+    startLine: symbol.startLine,
+    endLine: symbol.endLine,
+  }));
+  const contextRefs = item.relatedSymbols.map((symbol) => ({
+    file: symbol.file,
+    symbol: symbol.qualifiedName,
+    startLine: symbol.startLine,
+    endLine: symbol.endLine,
+    reason: "related selected work-item context",
+  } satisfies ContextRef));
+  const allowedEvidenceLocators: EvidenceLocator[] = effectiveRanges.map((range) => ({
+    id: `range-${sha256Json(range).slice(0, 16)}`,
+    kind: "range",
+    file: range.file,
+    startLine: range.startLine,
+    endLine: range.endLine,
+  }));
+  const unitWithoutId: Omit<ReviewUnit, "id"> = {
+    kind: item.kind,
+    changedSymbols,
+    changedRanges: effectiveRanges,
+    context: contextRefs,
+    riskScore: Math.max(0, item.priority ?? item.rankFactors?.semanticRisk ?? 0),
+    riskReasons: [
+      ...(item.selectionReason ? [item.selectionReason.slice(0, 240)] : []),
+      ...(item.rankFactors?.semanticRisk !== undefined ? [`semanticRisk=${item.rankFactors.semanticRisk}`] : []),
+      ...(item.rankFactors?.graphDegree !== undefined ? [`graphDegree=${item.rankFactors.graphDegree}`] : []),
+    ],
+    estimatedTokens: Math.max(0, item.estimatedTokens),
+  };
+  const unit: ReviewUnit = { ...unitWithoutId, id: deterministicReviewUnitId(unitWithoutId) };
+  const taskWithoutId: Omit<ReviewTask, "taskId"> = {
+    taskVersion: REVIEW_TASK_VERSION,
+    unit,
+    lens: "correctness",
+    lensVersion: "correctness/v1",
+    snapshotId: opts.snapshotId,
+    question: "Identify correctness issues in this bounded review unit and request only necessary evidence.",
+    changedRanges: effectiveRanges,
+    contextRefs,
+    allowedEvidenceLocators,
+    tokenBudget: Math.max(1, item.estimatedTokens),
+    outputTokenBudget: Math.max(1, Math.min(100_000, opts.profile.requestedOutputTokens)),
+    modelCallBudget: 1,
+    expansionBudget: 0,
+    outputContractVersion: CANDIDATE_RESULT_VERSION,
+    evidenceNeeds: [],
+    budget: {
+      inputTokens: Math.max(1, item.estimatedTokens),
+      outputTokens: Math.max(1, Math.min(100_000, opts.profile.requestedOutputTokens)),
+      modelCalls: 1,
+      contextExpansions: 0,
+    },
+  };
+  const task: ReviewTask = {
+    ...taskWithoutId,
+    taskId: deterministicReviewTaskId(taskWithoutId),
+  };
+  return validateReviewTask(task, {
+    existingFiles: opts.existingFiles,
+    knownSymbols: opts.knownSymbols,
+    allowedEvidenceLocators,
+  });
+}
+
+function buildContractShadowAudit(opts: {
+  selectedWorkItems: ReviewWorkItem[];
+  snapshotId: string;
+  profile: ModelProfile;
+  existingFiles: ReadonlySet<string>;
+  knownSymbols: ReadonlySet<string>;
+}): ContractShadowAudit {
+  const entries: ContractShadowAuditEntry[] = opts.selectedWorkItems.map((item) => {
+    try {
+      const task = shadowReviewTask(item, opts);
+      const serializedDescriptor = serializeReviewContract(task);
+      return {
+        sourceWorkItemId: item.id,
+        taskId: task.taskId,
+        descriptorHash: sha256(serializedDescriptor),
+        serializedDescriptor,
+        validation: { valid: true },
+        legacyInputFingerprint: sha256Json({ sourceWorkItemId: item.id, workItem: item }),
+      };
+    } catch (error) {
+      return {
+        sourceWorkItemId: item.id,
+        taskId: "",
+        descriptorHash: "",
+        serializedDescriptor: "",
+        validation: { valid: false, error: error instanceof Error ? error.message : String(error) },
+        legacyInputFingerprint: sha256Json({ sourceWorkItemId: item.id, workItem: item }),
+      };
+    }
+  });
+  return { schemaVersion: 1, lens: "correctness", entries };
+}
+
+function legacyOutputFingerprint(batch: CandidateBatch): string {
+  return sha256Json({ sourceId: batch.sourceId, candidates: batch.candidates, error: batch.error ?? null });
+}
+
 export async function executeReviewEngine(opts: {
   root: string;
   version: string;
@@ -630,6 +776,28 @@ export async function executeReviewEngine(opts: {
   const omittedWorkItems = selection.omitted;
   const tokenOmittedWorkItems = selection.tokenOmitted;
   stageTimingsMs.selection = Date.now() - stageStarted;
+  // Phase 1 shadow integration: construct and validate descriptors from the
+  // selected inputs, but do not pass them to the provider or execution path.
+  const shadowExistingFiles = new Set([
+    ...opts.scope.changedFiles,
+    ...full.manifest.map((entry) => entry.path),
+    ...graph.nodes.map(({ symbol }) => symbol.file),
+    ...selectedWorkItems.flatMap((item) => [
+      ...item.code.map((snippet) => snippet.file),
+      ...item.primarySymbols.map((symbol) => symbol.file),
+      ...item.relatedSymbols.map((symbol) => symbol.file),
+    ]),
+  ]);
+  const shadowKnownSymbols = new Set(
+    graph.nodes.flatMap(({ symbol }) => [symbol.name, symbol.qualifiedName, `${symbol.file}:${symbol.name}`, `${symbol.file}:${symbol.qualifiedName}`]),
+  );
+  const contractShadow = buildContractShadowAudit({
+    selectedWorkItems,
+    snapshotId: opts.scope.id,
+    profile: candidateProfile,
+    existingFiles: shadowExistingFiles,
+    knownSymbols: shadowKnownSymbols,
+  });
   stageStarted = Date.now();
   const candidateBatches: CandidateBatch[] = [];
   if (opts.variant?.seedCandidates) {
@@ -723,6 +891,10 @@ export async function executeReviewEngine(opts: {
   }
   inputTokens += candidateBatches.reduce((sum, batch) => sum + batch.inputTokens, 0);
   outputTokens += candidateBatches.reduce((sum, batch) => sum + batch.outputTokens, 0);
+  for (const entry of contractShadow.entries) {
+    const batch = candidateBatches.find((candidateBatch) => candidateBatch.sourceId === entry.sourceWorkItemId);
+    if (batch) entry.legacyOutputFingerprint = legacyOutputFingerprint(batch);
+  }
   const candidates = normalizeCandidates(
     candidateBatches.flatMap((batch) => batch.candidates),
     opts.config.evidence.maxRequestsPerCandidate,
@@ -1393,6 +1565,7 @@ export async function executeReviewEngine(opts: {
   return {
     result,
     execution: {
+      contractShadow,
       rankingConfig: { maxDegreeBoost: MAX_DEGREE_BOOST, degreeCap: DEGREE_CAP },
       graphSnapshot: graph.snapshot,
       graphManifest: {

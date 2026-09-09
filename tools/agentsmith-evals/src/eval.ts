@@ -29,6 +29,7 @@ import { findingMatches, type ExpectedFinding } from "./matching.js";
 import { aggregateStage1Metrics, scoreStage1Run } from "./stage-1.js";
 import { deriveEvalStatus, evaluateOracleResolutions } from "./oracle-resolution.js";
 import { evaluationStages } from "./case.js";
+import { buildContractShadowAudit } from "./contract-shadow.js";
 
 export type EvalMode =
   "holistic" | "partitioned-local" | "partitioned-evidence" | "partitioned-interactions" | "hybrid";
@@ -491,6 +492,10 @@ export async function runEvalCases(opts: {
                 durationMs,
               });
           const findingMetrics = scoreFindings(execution.result.findings, expectedFindings);
+          const contractShadow = buildContractShadowAudit({
+            execution: execution.execution,
+            result: execution.result as Awaited<ReturnType<typeof executeReviewEngine>>["result"],
+          });
           const coverageBudgetFailure = isCoverageBudgetFailure({
             coverage: execution.result.coverage,
             errors: execution.execution.errors,
@@ -581,6 +586,7 @@ export async function runEvalCases(opts: {
             durationMs,
             metrics: findingMetrics,
             stage1,
+            contractShadow,
             benchmark,
             inspectionTargets,
             stages,
