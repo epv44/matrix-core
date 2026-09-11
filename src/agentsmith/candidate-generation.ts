@@ -2,6 +2,8 @@ import { z } from "zod";
 import { sha256 } from "../core/hash.js";
 import type { CandidateFinding, ModelProfile } from "../core/types.js";
 import type { AgentDef } from "./types.js";
+import type { TaskEvidenceSelector } from "./evidence-locators.js";
+import { selectorPromptText, selectorToEvidenceRequest } from "./evidence-locators.js";
 import type { ProviderCompletionMetadata, ProviderResponse, ReviewOutputKind, ReviewProvider } from "./provider.js";
 import type {
   CandidateBatch,
@@ -28,6 +30,10 @@ const compactRequestSchema = z.object({
   v: z.string().min(1).max(240),
   m: z.enum(["symbol", "literal"]).optional(),
   p: z.string().max(240).optional(),
+  r: z.string().min(1).max(120),
+});
+const boundedRequestSchema = z.object({
+  selector: z.string().min(1).max(120),
   r: z.string().min(1).max(120),
 });
 const compactCandidateSchema = z.object({
@@ -203,6 +209,7 @@ async function invokeStructured<T>(opts: {
   outputKind: ReviewOutputKind;
   allowedFiles?: string[];
   maxCandidates?: number;
+  evidenceSelectorKeys?: string[];
   signal?: AbortSignal;
   validate: (value: unknown) => T;
 }): Promise<{ parsed: T; response: ProviderResponse; diagnostics: ProviderFailureDiagnostic[] }> {
@@ -213,6 +220,7 @@ async function invokeStructured<T>(opts: {
       outputKind: opts.outputKind,
       allowedFiles: opts.allowedFiles,
       maxCandidates: opts.maxCandidates,
+      evidenceSelectorKeys: opts.evidenceSelectorKeys,
       signal: opts.signal,
     });
   const response = await invoke(opts.prompt);
@@ -225,7 +233,14 @@ async function invokeStructured<T>(opts: {
   } catch (error) {
     if (!(error instanceof StructuredOutputError) || opts.signal?.aborted) throw error;
     const first = error.diagnostic;
-    const repairPrompt = `Correct the previous response so it matches the required JSON schema. Return only corrected JSON, with no prose or Markdown. Validation failure: ${first.parseError}\nPrevious response:\n${first.raw.slice(0, 12_000)}`;
+    const repairPrompt =
+      opts.outputKind === "candidates" && opts.evidenceSelectorKeys !== undefined
+        ? `Repair the previous candidate response and return only valid JSON, with no prose or Markdown. Keep the candidate fields and values unless the validation failure requires a correction. ${
+            opts.evidenceSelectorKeys.length === 0
+              ? 'This task has zero allowed evidence selectors. Set "e":[] and remove every evidence object; do not emit an evidence entry with a missing, null, empty, hashed, symbolic, path-based, or legacy selector.'
+              : 'For every evidence entry, use exactly this shape: {"selector":"<one exact allowed selector key>","r":"short reason"}. The selector value is required and must never be empty. If no evidence request is needed, use "e":[]; do not emit an evidence entry with a missing, null, empty, hashed, symbolic, path-based, or legacy selector.'
+          } Allowed selector keys:\n${opts.evidenceSelectorKeys.map((key) => `- ${key}`).join("\n")}\nValidation failure: ${first.parseError}\nPrevious response:\n${first.raw.slice(0, 12_000)}`
+        : `Correct the previous response so it matches the required JSON schema. Return only corrected JSON, with no prose or Markdown. Validation failure: ${first.parseError}\nPrevious response:\n${first.raw.slice(0, 12_000)}`;
     const repaired = await invoke(repairPrompt);
     try {
       return {
@@ -255,9 +270,12 @@ function candidateId(candidate: Omit<CandidateFinding, "id">) {
 }
 
 function expandCandidate(
-  value: z.infer<typeof compactCandidateSchema>,
+  value: Omit<z.infer<typeof compactCandidateSchema>, "e"> & {
+    e: Array<z.infer<typeof compactRequestSchema> | z.infer<typeof boundedRequestSchema>>;
+  },
   sourceWorkItemId: string,
   specialist?: AgentDef["name"],
+  selectors?: ReadonlyMap<string, TaskEvidenceSelector>,
 ): Omit<CandidateFinding, "id"> {
   const symbolRequestKinds = new Set(["definition", "callers", "callees", "type", "implementation", "usage"]);
   return {
@@ -274,7 +292,15 @@ function expandCandidate(
     primarySymbol: value.p,
     ruleId: value.r,
     candidateConfidence: value.q,
-    evidenceRequests: value.e.map((request) => {
+    evidenceRequests: value.e.map((rawRequest) => {
+      const request = rawRequest as unknown as
+        | z.infer<typeof compactRequestSchema>
+        | z.infer<typeof boundedRequestSchema>;
+      if ("selector" in request) {
+        const selector = selectors?.get(request.selector);
+        if (!selector) throw new Error(`unknown evidence selector: ${request.selector}`);
+        return selectorToEvidenceRequest(selector, request.r);
+      }
       const locatorMode = request.m ?? (symbolRequestKinds.has(request.k) ? "symbol" : "literal");
       return {
         kind: request.k,
@@ -336,9 +362,28 @@ function workItemText(item: ReviewWorkItem) {
   ].join("\n");
 }
 
-function candidateInstructions(maxCandidates: number, includeSummary = false) {
+function directedQuestion(item: ReviewWorkItem): string {
+  if (item.kind === "local") {
+    return "Bounded question: Does the changed implementation contain one concrete executable correctness defect? If yes, report the strongest defect; otherwise return no candidates.";
+  }
+  const edgeKinds = new Set(item.graphEdges.map((edge) => edge.kind));
+  const checks = [
+    edgeKinds.has("calls") && "check argument, return-value, and unit compatibility",
+    edgeKinds.has("reads-type") && "check nullability, discriminated variants, and value preservation",
+    edgeKinds.has("exports") && "check public/API compatibility",
+    (edgeKinds.has("producer-consumer") || edgeKinds.has("serialization")) && "check state, ownership, cleanup, and ordering invariants",
+    (edgeKinds.has("schema-user") || edgeKinds.has("config")) && "check field, shape, and configuration compatibility",
+  ].filter((value): value is string => Boolean(value));
+  const focus = checks.length ? ` Specifically ${checks.join("; ")}.` : " Compare both sides for one concrete incompatible assumption.";
+  return `Bounded question: Do the supplied relationship sides disagree for any concrete input, value, or state? If yes, report the strongest executable contract defect; otherwise return no candidates.${focus}`;
+}
+
+function candidateInstructions(maxCandidates: number, includeSummary = false, boundedEvidence = false) {
   const empty = includeSummary ? '{"summary":"concise review summary","c":[]}' : '{"c":[]}';
-  return `You are generating candidate code-review defects. Inspect concrete runtime behavior, value flow, failure paths, boundary conditions, and contracts. For interaction work, compare callers, callees, producers, consumers, schemas, types, configuration, and tests across both sides of each supplied relationship. For finite or discriminated contract values, enumerate the supplied values and check whether changed branching preserves each value's observable meaning. When changed code maps a typed or discriminated value to a label, status, category, or other user-visible representation, inspect every declared variant and report a concrete contract mismatch when any variant is collapsed, relabeled, or made indistinguishable. If several mappings occur in one changed function, inspect each mapping and prioritize a concrete producer/consumer value mismatch over cosmetic or layout-only label behavior. If the supplied producer or type context names a concrete variant, use that actual variant in the title and description; do not replace it with a hypothetical future value. Anchor the finding to the smallest changed line that performs the defective mapping or emits its incorrect result, not an earlier supporting declaration. Prefer that evidence-backed mismatch over hypothetical numeric, nullability, or runtime concerns. Every candidate must identify the triggering input or value, the violated contract or invariant, and the observable outcome. A partial string-label mapping is not by itself a runtime exception. Be permissive enough to preserve recall, but never report repository instructions, filenames alone, style preferences, missing tests without a demonstrated defect, or hypothetical risks without an executable failure or contract mismatch. Generate zero to ${maxCandidates} distinct candidates anchored to supplied changed code. Supporting unchanged code may be requested as evidence. Use one short sentence per text field; set q to confidence from 0 to 1 as a decimal, never a percentage. Request at most two evidence items using {"k":"kind","m":"symbol or literal","v":"required symbol or literal","p":"optional repository path","r":"short reason"}; v is always required. Use m=symbol for canonical symbol names only; never use a source expression, type union, path:line locator, boolean expression, or call expression as a symbol. Use m=literal for concrete value text or enum members. For a finite-value mapping, prefer a literal request for the exact discriminant or emitted value, plus a canonical producer or consumer symbol when relationship evidence is required; do not encode the field access or mapping expression as a symbol. Every request is a required fact for adjudication. Claims about callers, consumers, downstream behavior, assumptions, or expectations must request callers or usage evidence for the exact producer symbol. Never request evidence for text that appears only in review instructions or deterministic-gate context. Return only the compact JSON object required by the schema, with no prose or Markdown, and use ${empty} when no concrete candidate exists.`;
+  const evidenceInstructions = boundedEvidence
+    ? 'Request at most two evidence items using {"selector":"semantic selector key","r":"short reason"}. Use only keys from the supplied selector table; never invent hashes, symbols, paths, expressions, or selector keys. Every request is a required fact for adjudication.'
+    : 'Request at most two evidence items using {"k":"kind","m":"symbol or literal","v":"required symbol or literal","p":"optional repository path","r":"short reason"}; v is always required. Use m=symbol for canonical symbol names only; never use a source expression, type union, path:line locator, boolean expression, or call expression as a symbol. Use m=literal for concrete value text or enum members. For a finite-value mapping, prefer a literal request for the exact discriminant or emitted value, plus a canonical producer or consumer symbol when relationship evidence is required; do not encode the field access or mapping expression as a symbol.';
+  return `You are a bounded code-review candidate generator. Inspect only the supplied changed code and context for concrete executable defects: runtime behavior, value flow, failure paths, boundaries, and contracts. For interaction work, compare both sides of every supplied relationship, including callers/callees, producers/consumers, types, schemas, configuration, and tests. Enumerate supplied finite or discriminated values and report a concrete mismatch when changed branching collapses, relabels, or makes a value indistinguishable. Anchor each candidate to the smallest changed line that causes the defect. Do not report style, missing tests, instructions, filenames alone, or hypothetical risks. ${includeSummary ? "Return a concise inspection summary plus candidates; the summary must not claim global approval. " : ""}Use a concrete title naming the broken behavior and its contract or observable impact; do not use only a generic category. Format d as one compact string with three labeled claims: Trigger: <input/value>; Invariant: <violated contract>; Impact: <observable outcome>. Keep d under 240 characters. Generate zero to ${maxCandidates} distinct candidates and return ${empty} when none exists. Set q to a decimal from 0 to 1. ${evidenceInstructions} Every evidence request must name a required fact; claims about callers, consumers, downstream behavior, assumptions, or expectations must request evidence for the exact producer symbol. Return only the required compact JSON, with no prose or Markdown.`;
 }
 
 export async function generateSpecialistCandidates(opts: {
@@ -386,13 +431,24 @@ export async function generateWorkItemCandidate(opts: {
   provider: ReviewProvider;
   allowedFiles: string[];
   maxCandidates: number;
+  allowedEvidenceSelectors?: readonly TaskEvidenceSelector[];
   signal?: AbortSignal;
 }): Promise<CandidateBatch> {
   const focus =
     opts.item.kind === "interaction"
       ? "Compare both sides of each relationship for broken assumptions and incompatible contracts."
       : "Inspect the changed implementation for concrete local defects.";
-  const prompt = `${candidateInstructions(opts.maxCandidates)}\n${focus}\n\n${workItemText(opts.item)}`;
+  const selectors = opts.allowedEvidenceSelectors ?? [];
+  const boundedSelectors = opts.allowedEvidenceSelectors !== undefined;
+  const locatorInstructions = boundedSelectors
+    ? "For this bounded task, every e entry must use {\"selector\":\"semantic selector key\",\"r\":\"short reason\"}. Do not return hashes, symbols, paths, v, m, p, i, k, or s in an evidence entry. Use e=[] when no evidence is needed."
+    : "";
+  const prompt = `${candidateInstructions(opts.maxCandidates, false, boundedSelectors)}\n${directedQuestion(opts.item)}\n${focus}\n${locatorInstructions}\n${selectorPromptText(selectors)}\n\n${workItemText(opts.item)}`;
+  const boundedSchema = z.object({
+    c: z.array(
+      compactCandidateSchema.extend({ e: z.array(boundedRequestSchema).max(boundedSelectors ? 2 : 0).default([]) }),
+    ).max(opts.maxCandidates).default([]),
+  });
   const { parsed, response, diagnostics } = await invokeStructured({
     provider: opts.provider,
     profile: opts.profile,
@@ -401,13 +457,30 @@ export async function generateWorkItemCandidate(opts: {
     outputKind: "candidates",
     allowedFiles: opts.allowedFiles,
     maxCandidates: opts.maxCandidates,
+    evidenceSelectorKeys: selectors.map((selector) => selector.key),
     signal: opts.signal,
-    validate: (value) => compactCandidatesSchema(opts.maxCandidates).parse(value),
+    validate: (value) => (boundedSelectors ? boundedSchema.parse(value) : compactCandidatesSchema(opts.maxCandidates).parse(value)),
   });
-  const candidates = parsed.c.map((value) => {
-    const candidate = expandCandidate(value, opts.item.id);
-    candidate.primarySymbol ??= opts.item.primarySymbols[0]?.qualifiedName;
-    return { ...candidate, id: candidateId(candidate) };
+  const selectorMap = new Map(selectors.map((selector) => [selector.key, selector]));
+  const contractDrops: NonNullable<CandidateBatch["contractDrops"]> = [];
+  const candidates = parsed.c.flatMap((value, candidateIndex) => {
+    try {
+      const candidate = expandCandidate(value, opts.item.id, undefined, selectors.length ? selectorMap : undefined);
+      candidate.primarySymbol ??= opts.item.primarySymbols[0]?.qualifiedName;
+      return [{ ...candidate, id: candidateId(candidate) }];
+    } catch {
+      // A bounded model response that names an unknown or incompatible locator
+      // is an invalid candidate, not a reason to fail the whole review task.
+      // The strict contract rejects it by omission and the eval attributes the
+      // resulting miss to candidate quality.
+      const request = value.e.find((entry) => "selector" in entry || "s" in entry);
+      contractDrops.push({
+        candidateIndex,
+        reason: request ? "unknown-selector" : "invalid-selector",
+        ...(request && "selector" in request ? { selector: request.selector } : {}),
+      });
+      return [];
+    }
   });
   return {
     sourceId: opts.item.id,
@@ -417,6 +490,7 @@ export async function generateWorkItemCandidate(opts: {
     raw: response.raw,
     completion: response.completion,
     diagnostics,
+    contractDrops,
   };
 }
 

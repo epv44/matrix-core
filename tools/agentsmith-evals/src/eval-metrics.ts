@@ -123,6 +123,15 @@ export function collectEvalMetrics(opts: {
   ]).size;
   const shortlisted = result.candidates?.shortlisted ?? execution.candidates.length - candidateOmissions.length;
   const evidence = evidenceMetrics(execution);
+  const selectorContractDrops = (execution.candidateBatches ?? []).reduce(
+    (sum, batch) => sum + (batch.contractDrops?.length ?? 0),
+    0,
+  );
+  const selectorContractAttempts = execution.candidates.length + selectorContractDrops;
+  const candidateProviderFailures = (execution.candidateBatches ?? []).filter((batch) => Boolean(batch.error)).length;
+  const structuredOutputFailures = (execution.candidateBatches ?? []).filter(
+    (batch) => Boolean(batch.error && batch.diagnostics?.some((diagnostic) => diagnostic.outputKind === "candidates")),
+  ).length;
   const eligibleWorkItems = coverage.localUnitsGenerated + coverage.interactionUnitsGenerated;
   const reviewedWorkItems = coverage.localUnitsReviewed + coverage.interactionUnitsReviewed;
   const honesty = {
@@ -177,6 +186,8 @@ export function collectEvalMetrics(opts: {
     },
     candidates: {
       generated: execution.candidates.length,
+      selectorContractDrops,
+      selectorContractValidityRate: ratio(execution.candidates.length, selectorContractAttempts),
       adjudicated: adjudicatedIds.size,
       modelAdjudicated,
       omitted: candidateOmissions.length,
@@ -192,6 +203,8 @@ export function collectEvalMetrics(opts: {
       callsCompleted: coverage.callsCompleted ?? 0,
       callsCancelled: coverage.callsCancelled ?? 0,
       providerFailures: execution.providerFailures?.length ?? 0,
+      candidateProviderFailures,
+      structuredOutputFailures,
       structuredRepairs: execution.providerDiagnostics?.length ?? 0,
       errors: result.errors?.length ?? 0,
       timeout: Boolean(coverage.timeout),

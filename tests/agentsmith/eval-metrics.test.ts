@@ -55,6 +55,16 @@ describe("AgentSmith eval benchmark metrics", () => {
           ],
         },
         verification: [],
+        candidateBatches: [
+          {
+            sourceId: "local:a",
+            candidates: [],
+            inputTokens: 10,
+            outputTokens: 10,
+            error: "structured output invalid",
+            diagnostics: [{ outputKind: "candidates" }],
+          },
+        ],
         providerFailures: [{}],
         inputTokens: 1000,
         outputTokens: 50,
@@ -66,7 +76,12 @@ describe("AgentSmith eval benchmark metrics", () => {
     expect(metrics.coverage.workItems.duplicateRows).toBe(1);
     expect(metrics.candidates).toMatchObject({ generated: 1, adjudicated: 0, omitted: 1, omittedHighSeverity: 1 });
     expect(metrics.evidence).toMatchObject({ requests: 1, resolvedRecords: 1, relevantRecords: 0, relevanceRate: 0 });
-    expect(metrics.reliability).toMatchObject({ providerFailures: 1, timeout: true });
+    expect(metrics.reliability).toMatchObject({
+      providerFailures: 1,
+      candidateProviderFailures: 1,
+      structuredOutputFailures: 1,
+      timeout: true,
+    });
     expect(metrics.efficiency.reviewedChangedLinesPerSecond).toBe(1);
     expect(metrics.honesty).toMatchObject({
       clearWithUnreviewedFiles: true,

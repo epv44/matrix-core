@@ -134,6 +134,14 @@ describe("AgentSmith eval cases", () => {
         incompleteReasons: [],
       }),
     ).toBe(true);
+    expect(
+      isCoverageBudgetFailure({
+        coverage: { omissions: [{ reason: "provider-failure" }] },
+        errors: ["candidate provider returned invalid JSON"],
+        providerFailures: [{}],
+        incompleteReasons: [{ kind: "unfinished-work-item" }],
+      }),
+    ).toBe(false);
   });
 
   it("resolves the requested small and large model targets without fallback", () => {

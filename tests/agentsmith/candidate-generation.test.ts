@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { generateWorkItemCandidate, verifyCandidateWithModel } from "../../src/agentsmith/candidate-generation.js";
+import { buildTaskEvidenceSelectors } from "../../src/agentsmith/evidence-locators.js";
 import type { ReviewProvider } from "../../src/agentsmith/provider.js";
 import type { ModelProfile } from "../../src/core/types.js";
 import type { ReviewWorkItem } from "../../src/agentsmith/engine-types.js";
@@ -52,6 +53,51 @@ const item: ReviewWorkItem = {
 };
 
 describe("candidate structured output", () => {
+  it("accepts only task-scoped semantic selectors on the small-model path", async () => {
+    const selectors = buildTaskEvidenceSelectors({ snapshotId: "snapshot-a", workItem: item });
+    const definitionSelector = selectors.find((selector) => selector.key.endsWith(".definition"))!;
+    expect(definitionSelector.key).toContain("primary-1");
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async () => ({
+        raw: JSON.stringify({ c: [{ f: "src/a.ts", l: 1, s: "high", k: "correctness", t: "Bad return", d: "The return is wrong.", q: 0.9, e: [{ selector: definitionSelector.key, r: "confirm implementation" }] }] }),
+        usage: { inputTokens: 10, outputTokens: 10 },
+      }),
+    };
+    const result = await generateWorkItemCandidate({
+      item,
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 2,
+      allowedEvidenceSelectors: selectors,
+    });
+    expect(result.candidates[0]?.evidenceRequests).toEqual([
+      expect.objectContaining({ kind: "definition", symbol: "value", pathHint: "src/a.ts" }),
+    ]);
+  });
+
+  it("uses a deterministic bounded question and concrete claim instructions", async () => {
+    const prompts: string[] = [];
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async (input) => {
+        prompts.push(input.prompt);
+        return {
+          raw: JSON.stringify({
+            c: [{ f: "src/a.ts", l: 1, s: "high", k: "correctness", t: "wrong return", d: "Trigger: input is invalid. Invariant: return must be valid. Impact: caller receives a bad value.", q: 0.9, e: [] }],
+          }),
+          usage: { inputTokens: 10, outputTokens: 10 },
+        };
+      },
+    };
+    await generateWorkItemCandidate({ item, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 2 });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("Bounded question: Does the changed implementation contain one concrete executable correctness defect?");
+    expect(prompts[0]).toContain("Trigger: <input/value>; Invariant: <violated contract>; Impact: <observable outcome>");
+    expect(prompts[0]).toContain("Use a concrete title");
+  });
+
   it("repairs one schema-invalid response and expands the required evidence locator", async () => {
     let calls = 0;
     const provider: ReviewProvider = {
@@ -91,6 +137,56 @@ describe("candidate structured output", () => {
         query: undefined,
         reason: "confirm return",
       },
+    ]);
+  });
+
+  it("repairs malformed selector JSON with the explicit selector field", async () => {
+    const selectors = buildTaskEvidenceSelectors({ snapshotId: "snapshot-a", workItem: item });
+    const definitionSelector = selectors.find((selector) => selector.key.endsWith(".definition"))!;
+    let calls = 0;
+    const prompts: string[] = [];
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async (input) => {
+        calls += 1;
+        prompts.push(input.prompt);
+        return {
+          raw:
+            calls === 1
+              ? '{"c":[{"f":"src/a.ts","l":1,"s":"high","k":"correctness","t":"Bad return","d":"The return is wrong.","q":0.9,"e":[{"selector":,"r":"confirm implementation"}]}]}'
+              : JSON.stringify({
+                  c: [
+                    {
+                      f: "src/a.ts",
+                      l: 1,
+                      s: "high",
+                      k: "correctness",
+                      t: "Bad return",
+                      d: "The return is wrong.",
+                      q: 0.9,
+                      e: [{ selector: definitionSelector.key, r: "confirm implementation" }],
+                    },
+                  ],
+                }),
+          usage: { inputTokens: 10, outputTokens: 10 },
+        };
+      },
+    };
+    const result = await generateWorkItemCandidate({
+      item,
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 2,
+      allowedEvidenceSelectors: selectors,
+    });
+    expect(calls).toBe(2);
+    expect(prompts[1]).toContain('exactly this shape: {"selector":"<one exact allowed selector key>","r":"short reason"}');
+    expect(prompts[1]).toContain(definitionSelector.key);
+    expect(prompts[1]).toContain('use "e":[]');
+    expect(result.candidates).toHaveLength(1);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ failureKind: "json-syntax", attempt: 1 }),
     ]);
   });
 

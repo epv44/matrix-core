@@ -54,6 +54,11 @@ function textSimilarity(left: string, right: string): number | null {
   return union ? intersection / union : null;
 }
 
+function claimCompleteness(value: string | undefined): boolean {
+  if (!value) return false;
+  return /^\s*Trigger\s*:\s*\S[\s\S]*?\bInvariant\s*:\s*\S[\s\S]*?\bImpact\s*:\s*\S[\s\S]*$/i.test(value);
+}
+
 function overlaps(actual: CandidateFinding, expected: CandidateExpectation): boolean {
   return (
     actual.file === expected.file &&
@@ -179,6 +184,7 @@ export function collectCandidateNearMissDiagnostics(opts: {
   const titleSimilarities = pairs
     .map(({ actual, expected }) => textSimilarity(expected.titleContains ?? "", actual?.title ?? ""))
     .filter((value): value is number => value !== null);
+  const completeClaims = pairs.filter(({ actual }) => claimCompleteness(actual?.description)).length;
 
   let requiredEvidenceKinds = 0;
   let requestedEvidenceKinds = 0;
@@ -236,6 +242,7 @@ export function collectCandidateNearMissDiagnostics(opts: {
         direction: "higher",
       }),
       metric("titleSimilarity", { value: mean(titleSimilarities), direction: "higher" }),
+      metric("claimCompleteness", ratio(completeClaims, desired.length)),
       metric("anchorValidityDiagnostic", ratio(anchorValid, opts.candidates.length)),
       metric("anchorDistance", { value: mean(anchorDistances), direction: "lower" }),
       metric("evidenceRequestCompletenessDiagnostic", ratio(requestedEvidenceKinds, requiredEvidenceKinds)),

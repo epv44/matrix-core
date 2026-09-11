@@ -6,7 +6,7 @@ This roadmap migrates the small-model review path toward a deterministic, eval-d
 
 1. better code/context selection;
 2. bounded review tasks;
-3. focused specialist lenses;
+3. one bounded correctness question per selected small-model task;
 4. bounded context expansion;
 5. evidence-based verification;
 6. deterministic aggregation and routing.
@@ -36,7 +36,7 @@ Bounded ReviewTask descriptor
         │
         ├── code/context
         ├── selection rationale
-        ├── review lens
+        ├── bounded correctness task
         ├── allowed context expansion
         └── strict output schema
         │
@@ -44,7 +44,7 @@ Bounded ReviewTask descriptor
 Small-model candidate review
         │
         ├── correctness always
-        └── targeted specialist lens where applicable
+        └── existing specialist path only for the strong/frontier route
         │
         ▼
 Candidate verifier
@@ -91,7 +91,7 @@ Additional stage-specific metrics:
 ```text
 cross_file_selection_recall
 cross_file_finding_recall
-lens_specific_recall
+evidence_locator_validity
 context_expansion_rate
 verifier_rejection_rate
 ```
@@ -450,73 +450,31 @@ Stage 5 is primarily observability/infrastructure.
 
 ---
 
-# Stage 6 — Review Lens Registry
+# Stage 6 — Small-Model Review Path Consolidation
 
 ## Objective
 
-Preserve specialized reviewer expertise while making small-model prompts bounded and focused.
+Keep the small-model path to one bounded correctness review per selected unit. Do not add
+specialist calls, lens routing, or a lens registry to the constrained small-model path.
 
-## Initial Lenses
-
-```text
-correctness
-performance-threading
-contract-semantic
-security
-```
-
-## Routing Policy
-
-Every selected unit receives `correctness`.
-
-Risk signals may add at most one additional specialist lens in the initial implementation.
-
-Examples:
-
-```text
-threading/async risk   → performance-threading
-API/schema risk        → contract-semantic
-security boundary      → security
-```
-
-Avoid multiplying every work unit by a large matrix of micro-review passes.
-
-## Large-Model Compatibility
-
-Preserve broad specialist reviewer behavior for the large/frontier path:
-
-```text
-small model:
-    bounded unit × focused lens
-
-large model:
-    broad/full projection × broad specialist lens
-```
+The existing strong/frontier holistic specialist path remains unchanged.
 
 ## Required Tests
 
-- correctness always present;
-- deterministic specialist routing;
-- max lens/call limits;
-- no accidental duplicate lenses;
-- specialist prompt/task construction;
-- specialist fixture behavior.
-
-## Required Eval Comparisons
-
-Where feasible compare old broad specialist behavior vs bounded specialist lens behavior.
+- one correctness candidate call per selected small-model unit;
+- no hidden or opt-in additive specialist call;
+- hard call and token budgets remain enforced;
+- strong/frontier specialist behavior remains unchanged.
 
 ## Promotion Gate
 
 ```text
-✓ correctness lens always applied
-✓ specialist routing deterministic
-✓ max model-call budget respected
-✓ specialist fixture performance retained or improved
-✓ false-positive rate does not materially worsen
+✓ small-model call count does not increase
+✓ small-model token and latency metrics do not materially regress
+✓ existing candidate recall and precision do not regress
+✓ strong/frontier specialist path remains compatible
+✓ evidence and verifier failures remain attributable
 ```
-
-Do not delete existing specialist knowledge merely because the small-model path changes how it is applied.
 
 ---
 
@@ -748,7 +706,7 @@ Only after this stage passes should removal of the previous path be considered.
 | 3 | Changed-symbol unit generation |
 | 4 | Interaction units + risk scoring + hard selector |
 | 5 | Selection audit + coverage/failure classification |
-| 6 | Review lens registry + specialist migration |
+| 6 | Small-model review path consolidation; no additive specialist lenses |
 | 7 | Bounded context request/resolution loop |
 | 8 | Candidate verifier + deterministic aggregation |
 | 9 | Router + escalation + shadow comparison |
@@ -773,6 +731,6 @@ Descriptor hashes may still be useful later for trace identity, cache keys, stal
 
 The migration is successful when:
 
-> A small model receives only a few deliberately selected review units, gets enough bounded cross-file context to establish important contracts, performs focused specialist reasoning, and cannot turn an unsupported suspicion into a final finding.
+> A small model receives only a few deliberately selected review units, gets enough bounded cross-file context to establish important contracts, performs one bounded correctness review per unit, and cannot turn an unsupported suspicion into a final finding.
 
 The system should also be able to explain whether any missed gold finding was caused by selection, model reasoning, verification, or review-budget limitations.

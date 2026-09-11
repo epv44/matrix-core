@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-This document is the canonical index for the candidate-quality improvement campaign prompted by the component eval results and the Paladin architecture comparison.
+This document is the canonical index for the candidate-quality improvement campaign prompted by the component eval results and the architecture comparison.
 
 It refines, but does not replace:
 
@@ -46,7 +46,7 @@ Every phase must preserve all of the following:
 9. The previous small-model path remains available until the final shadow-comparison phase passes.
 10. Descriptor fingerprints are audit and stale-result controls, not proof that a model behaved correctly.
 11. Same-model agreement is not verification evidence.
-12. Correctness remains the default lens; initial routing may add at most one applicable specialist lens per unit.
+12. Correctness remains the sole small-model review mode; no additive specialist review is currently planned.
 
 ## Promotion protocol shared by every phase
 
@@ -101,8 +101,8 @@ Parallel writers must have disjoint write scopes. Dependent work is serialized. 
 
 - [Phase 0 — Candidate Measurement and Fresh Baseline](#phase-0--candidate-measurement-and-fresh-baseline)
 - [Phase 1 — Typed Question and Result Contracts](#phase-1--typed-question-and-result-contracts)
-- [Phase 2 — Focused Candidate Lenses](#phase-2--focused-candidate-lenses)
-- [Phase 3 — Constrained Evidence Locator IDs](#phase-3--constrained-evidence-locator-ids)
+- [Phase 2 — Focused Candidate Lenses (Deferred)](#phase-2--focused-candidate-lenses-deferred)
+- [Phase 3 — Semantic Evidence Selectors](#phase-3--semantic-evidence-selectors)
 - [Phase 4 — Descriptor Fingerprints and Stale-Result Rejection](#phase-4--descriptor-fingerprints-and-stale-result-rejection)
 - [Phase 5 — Relationship-Preserving Unit Packing](#phase-5--relationship-preserving-unit-packing)
 - [Phase 6 — Eval-Qualified Routing and Shadow Promotion](#phase-6--eval-qualified-routing-and-shadow-promotion)
@@ -113,8 +113,8 @@ Parallel writers must have disjoint write scopes. Dependent work is serialized. 
 |---|---|
 | 0 | Fresh baseline and candidate near-miss attribution |
 | 1 | Typed question/result contracts in shadow mode |
-| 2 | Eval-driven focused lenses for measured miss families |
-| 3 | Constrained evidence locator IDs instead of invented strings |
+| 2 | Deferred; retain one bounded correctness review |
+| 3 | Semantic evidence selectors instead of invented strings |
 | 4 | Reproducible descriptor identity and stale-result rejection |
 | 5 | Relationship-preserving, token-bounded large-change packing |
 | 6 | Eval-qualified routing, escalation, and final shadow comparison |
@@ -184,7 +184,7 @@ Record immutable pre/post artifacts and designate the post-phase result as the c
 
 ### Objective
 
-Define a bounded, reproducible question contract for small-model candidate work without activating new lenses in production.
+Define a bounded, reproducible question contract for small-model candidate work without activating specialist routing in production.
 
 ### Required contracts
 
@@ -244,127 +244,30 @@ Reject malformed states, missing finding fields, nonexistent ranges, out-of-scop
 - Every invalid contract test is rejected deterministically.
 - No production route consumes the shadow descriptor yet.
 
-# Phase 2 — Focused Candidate Lenses
+# Phase 2 — Focused Candidate Lenses (Deferred)
+
+### Status
+
+Deferred and removed from the active migration sequence. The small-model path is intentionally
+constrained to one bounded correctness review per selected unit. No additive specialist review,
+specialist routing, or specialist qualification is implemented or planned at this time.
+
+The failed lifecycle experiment is retained as historical evidence only; it increased calls and
+tokens without improving verified recall.
+
+No implementation work is scheduled for this phase.
+
+No specialist registry changes are scheduled.
+
+# Phase 3 — Semantic Evidence Selectors
 
 ### Objective
 
-Improve model-attributed candidate recall by replacing one broad question with a small, eval-driven set of narrowly scoped lens questions.
-
-Extend the existing rule/lens registry. Do not create a second competing pass registry.
-
-### Initial lens families
-
-Introduce families only for measured component failures:
-
-1. lifecycle and resource cleanup;
-2. authentication and authorization boundaries;
-3. null-return and caller contracts;
-4. boundary arithmetic and off-by-one behavior;
-5. producer/consumer unit and schema contracts;
-6. finite-value provenance and user-visible mapping.
-
-Each registered lens declares:
-
-```text
-stable ID and version
-deterministic applicability predicates
-one bounded question template
-required result fields
-allowed evidence kinds
-maximum calls and input tokens
-required evaluated model capability
-owned eval fixtures
-```
-
-Correctness always runs. Initial routing may add at most one specialist lens per selected unit. Applicability is decided by deterministic AST/graph/risk signals, never by fixture identity or model preference.
-
-### Execution order
-
-Implement one lens family at a time as sub-phases 2A–2F. Each sub-phase must pass before the next family begins. This preserves causal attribution between a lens and metric movement.
-
-### Subagent decomposition per family
-
-- Lens builder: one registry entry and bounded prompt/task integration.
-- Eval agent: family fixture plus at least one negative/sentinel fixture.
-- Reviewer: read-only review for prompt leakage, duplicate calls, hypothetical findings, and false-positive suppression.
-
-Do not let two builders modify shared routing or registry code concurrently.
-
-### Required component evals per family
-
-- the target positive fixture;
-- its negative/sentinel fixture;
-- all previously promoted lens fixtures;
-- Candidate, Evidence, Verification, Aggregation, and Reporting stages;
-- three consecutive live repetitions under the same model and budgets;
-- a no-specialist-lens control over the same frozen corpus, selected units, model
-  profile, budgets, and repetition count, with lens-attributable call, token, and
-  latency deltas reported.
-
-After 2F, run the complete component suite and produce a consolidated comparison.
-
-### Control and efficiency accounting
-
-The control run is the comparison point for specialist-lens cost. It must use
-the same frozen inputs, selected units, model profile, budgets, and repetitions;
-only the applicable specialist lens is disabled. Report, separately for the
-control and lens-enabled runs:
-
-- model-call count, input tokens, output tokens, total tokens, and latency;
-- specialist-lens calls, tokens, and latency attributable to applicable lenses;
-- newly recovered expected candidates attributable to the lens; and
-- `tokensPerRecoveredGold = lensAttributableTokens /
-  newlyRecoveredExpectedCandidates`.
-
-Use the existing 15% efficiency convention for aggregate token usage:
-
-- lens-enabled total tokens MUST be no more than 15% above the matched control;
-- specialist-lens calls and tokens MUST remain within each lens's declared
-  per-unit limits and the existing global hard budgets;
-- hard global call and token limit values MUST remain unchanged and MUST never
-  be exceeded;
-- any increase in calls, tokens, or latency MUST be attributable to applicable
-  specialist-lens execution and reported explicitly;
-- `tokensPerRecoveredGold` MUST NOT materially regress, using the same 15%
-  tolerance when a control comparison is defined;
-- if no expected candidate is newly recovered, the ratio is `N/A`, but the
-  family still fails because the target-recall gate was not met;
-- if the control recovers zero candidates, the ratio comparison is `N/A`; use
-  the aggregate 15% token cap, declared lens limits, and the recall gate.
-
-Partial and error rates are strict non-regression gates. A latency increase
-that is not explained by applicable lens execution fails the gate. No lens may
-be routed to an inapplicable unit.
-
-### Promotion gate per family
-
-- Target-family expected-candidate recall measurably improves.
-- Previously promoted family recall does not regress.
-- Candidate precision and forbidden-candidate metrics remain unchanged or improve.
-- Anchor validity and evidence-request completeness remain unchanged or improve.
-- No extra lens is routed to an inapplicable unit.
-- Specialist-lens calls and tokens stay within declared per-unit limits and
-  existing global hard budgets.
-- Any increase in calls, tokens, or latency is attributable to applicable
-  specialist-lens execution and is reported in the control comparison.
-- Aggregate total tokens remain within the 15% control tolerance, and
-  `tokensPerRecoveredGold` does not materially regress.
-- Partial and error rates remain unchanged or improve.
-- Hard global call and token limit values remain unchanged and are never
-  exceeded.
-- Every previously passing case remains passing.
-
-A lens that only increases candidate volume without improving target recall cannot be promoted.
-
-# Phase 3 — Constrained Evidence Locator IDs
-
-### Objective
-
-Prevent candidates from inventing expression-shaped symbol locators while preserving the model's ability to request bounded supporting evidence.
+Prevent candidates from inventing expression-shaped symbol locators while preserving the model's ability to request bounded supporting evidence. The model-facing contract uses deterministic, human-readable selector keys; canonical locator hashes remain host-internal integrity identities.
 
 ### Required design
 
-For each task, deterministic code builds an allowed locator table from the frozen work item and graph:
+For each task, deterministic code builds an allowed locator table and model-facing selector table from the frozen work item and graph:
 
 ```text
 locator ID
@@ -373,11 +276,13 @@ canonical value
 allowed evidence kinds
 optional path bound
 snapshot identity
+
+The model receives selectors such as `primary-1.callers` and their semantic labels. It does not receive or return the internal locator hash. Host code maps a selector to its canonical locator and verifies the deterministic hash before resolving evidence.
 ```
 
-The model returns locator IDs, not raw symbol or path strings. Literal searches remain explicit and distinct from symbol lookup. Relationship requests identify a canonical source symbol and supported relationship kind.
+The model returns semantic selector keys, not raw symbol/path strings or internal hashes. Literal searches remain explicit and distinct from symbol lookup. Relationship selectors encode the supported relationship kind, preventing incompatible subject/kind combinations.
 
-Unknown, stale, duplicated, incompatible, or out-of-scope locator IDs are rejected. The engine must not silently reinterpret an invalid symbol expression as a valid literal.
+Unknown, stale, duplicated, incompatible, or out-of-scope selector keys are rejected. The engine must not silently reinterpret an invalid symbol expression as a valid literal.
 
 ### Subagent decomposition
 
@@ -397,12 +302,14 @@ Unknown, stale, duplicated, incompatible, or out-of-scope locator IDs are reject
 ### Promotion gate
 
 - Canonical-locator validity is 100% for expected candidates.
+- Selector-to-locator resolution is 100% for accepted requests.
 - Evidence-request completeness and required evidence recall improve or remain unchanged.
 - Candidate recall and precision do not regress.
 - Invalid locator acceptance remains zero.
 - No locator resolves outside its snapshot or task scope.
 - Evidence, token, call, and expansion budgets remain unchanged.
 - Partial/error/unresolved-request rates remain unchanged or improve.
+- Selector-contract candidate drops are reported separately from provider failures and candidate misses.
 
 # Phase 4 — Descriptor Fingerprints and Stale-Result Rejection
 
@@ -419,7 +326,7 @@ Hash a canonical serialization of:
 ```text
 snapshot ID
 review-unit ID and content references
-lens ID/version
+review route/version
 question-contract version
 allowed locator-table identity
 token/call/expansion limits
@@ -435,7 +342,7 @@ The model result envelope carries the expected descriptor fingerprint. The engin
 - order-independent canonical fields where specified;
 - one-bit input changes alter the fingerprint;
 - stale result rejection;
-- wrong snapshot/lens/schema/model identity rejection;
+- wrong snapshot/route/schema/model identity rejection;
 - cache and replay identity behavior;
 - trace/report provenance.
 
@@ -493,7 +400,7 @@ Packing may improve utilization but must not recompute Ranking scores or let Sel
 
 - Planning, Ranking, Selection, and Projection isolated evals;
 - all cross-file and noisy-change component fixtures;
-- all previously promoted candidate-lens fixtures;
+- all existing candidate fixtures;
 - complete component suite with three live repetitions.
 
 ### Promotion gate
@@ -510,15 +417,15 @@ Packing may improve utilization but must not recompute Ranking scores or let Sel
 
 ### Objective
 
-Route tasks only to model profiles that have demonstrated capability for the applicable lens, then compare the complete new candidate path with the previous path before replacement.
+Route bounded small-model tasks and explicit escalations deterministically, then compare the complete new candidate path with the previous path before replacement. The small-model route has one correctness review mode; the existing strong/frontier route retains its specialist reviewers.
 
 ### Capability qualification
 
-Capability is established by eval evidence, not model parameter count. For each model profile and lens version, persist:
+Capability is established by eval evidence, not model parameter count. For each model profile and review route, persist:
 
 ```text
 model/profile identity
-lens ID/version
+review route/version
 owned fixture corpus hash
 candidate and verified recall
 precision
@@ -528,13 +435,13 @@ partial/error rate
 qualification status and checkpoint
 ```
 
-A model/lens pair is qualified only after three consecutive live repetitions satisfy the lens gate. An unqualified pair must use a documented fallback, produce an escalation signal, or remain incomplete; it cannot silently substitute another model.
+A model/route pair is qualified only after three consecutive live repetitions satisfy the route gate. An unqualified pair must use a documented fallback, produce an escalation signal, or remain incomplete; it cannot silently substitute another model.
 
 ### Routing and escalation
 
-Deterministic routing considers task/lens capability, required evidence complexity, configured availability, and hard budgets. Supported escalation reasons include:
+Deterministic routing considers task capability, required evidence complexity, configured availability, and hard budgets. Supported escalation reasons include:
 
-- no qualified model for the lens;
+- no qualified model for the route;
 - high-risk insufficient context;
 - required relationship group cannot fit;
 - architecture-level reasoning requirement;
@@ -560,7 +467,7 @@ The previous path remains intact throughout this phase.
 
 - Routing builder: qualification records and deterministic routing.
 - Shadow builder: comparison artifact without promotion authority.
-- Eval agent: full repeated suite and per-lens qualification calculations.
+- Eval agent: full repeated suite and per-route qualification calculations.
 - Reviewer: read-only review of substitution, fallback, partial/pass, and baseline semantics.
 
 ### Required validation
@@ -575,7 +482,7 @@ The previous path remains intact throughout this phase.
 
 ### Promotion gate
 
-- Every active small-model lens has a qualified route or an explicit non-pass escalation path.
+- Every active small-model route has a qualified model or an explicit non-pass escalation path.
 - The new path measurably improves expected-candidate recall and verified-finding recall.
 - Every previously passing case remains passing.
 - No applicable quality, coverage, evidence, reliability, or efficiency metric regresses.
@@ -592,7 +499,7 @@ The following are not part of this campaign unless a future eval-backed plan is 
 - a full voice × pass matrix;
 - dozens of binary yes/no prompts;
 - same-model rephrased agreement as a confidence or verification signal;
-- aggressive concurrency before lens quality and call budgets are stable;
+- aggressive concurrency before review quality and call budgets are stable;
 - file-count-based sharding that can split semantic relationships;
 - routing based only on parameter count;
 - cryptographic sealing presented as a review-quality guarantee;

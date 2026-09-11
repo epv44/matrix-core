@@ -139,11 +139,13 @@ export interface EvalCoverageBudgetInput {
 
 /** Partial execution is not itself a budget failure; preserve the root cause. */
 export function isCoverageBudgetFailure(input: EvalCoverageBudgetInput): boolean {
+  // Provider and transport failures are execution failures, not evidence-packing
+  // failures. In particular, a malformed candidate response can also leave an
+  // unfinished work item, but that secondary symptom must not hide the root cause.
+  if (input.errors.length > 0 || (input.providerFailures?.length ?? 0) > 0) return false;
   return (
     Boolean(input.coverage.timeout) ||
-    input.errors.length > 0 ||
-    (input.providerFailures?.length ?? 0) > 0 ||
-    input.coverage.omissions.some((omission) => ["token-budget", "timeout", "provider-failure"].includes(omission.reason)) ||
+    input.coverage.omissions.some((omission) => ["token-budget", "timeout"].includes(omission.reason)) ||
     (input.incompleteReasons ?? []).some((reason) =>
       ["unfinished-work-item", "unadjudicated-candidate", "material-omission", "evidence-packing-budget"].includes(reason.kind),
     )
@@ -337,6 +339,7 @@ function evaluationDiagnostics(execution: { execution: EngineExecution; result: 
       completion: batch.completion,
       cacheStatus: batch.cacheStatus,
       diagnostics: batch.diagnostics,
+      contractDrops: batch.contractDrops,
       error: batch.error,
     })),
     verification: execution.execution.verification.map((item) => ({

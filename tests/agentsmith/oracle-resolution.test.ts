@@ -29,7 +29,7 @@ const positive = {
 };
 
 function execution(candidates: any[] = [], verification: any[] = []) {
-  return { candidates, verification, evidence: {}, evidenceOutcomes: {} } as any;
+  return { candidates, verification, evidence: {}, evidenceOutcomes: {}, errors: [], providerFailures: [] } as any;
 }
 
 const result = { status: "completed", findings: [], incompleteReasons: [] } as any;
@@ -47,6 +47,14 @@ describe("eval oracle resolution", () => {
       }),
     ]);
     expect(deriveEvalStatus({ executionStatus: "completed", oracleResolutions: audits, stages: [] })).toBe("fail");
+  });
+
+  it("attributes a missing candidate to provider failure when structured output failed", () => {
+    const failed = execution();
+    failed.errors = ["candidate JSON was invalid"];
+    failed.providerFailures = [{ outputKind: "candidates", failureKind: "json-syntax" }];
+    const audits = evaluateOracleResolutions({ definition: definition([positive]), execution: failed, result });
+    expect(audits[0]).toMatchObject({ resolution: "missed", reasonCode: "provider-failure" });
   });
 
   it("records completed verifier abstention as eval partial, not execution partial", () => {

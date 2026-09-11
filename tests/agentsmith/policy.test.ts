@@ -7,7 +7,7 @@ describe("central AgentSmith policy", () => {
     const config = agentSmithConfigFromPolicy(true, policy);
     expect(policy.agentSmith).toMatchObject({
       id: "agentsmith.unified.v4",
-      outputSchemaVersion: 4,
+      outputSchemaVersion: 5,
       concurrency: 1,
       maxDurationMs: 1800000,
       partitioned: {

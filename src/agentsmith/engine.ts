@@ -39,6 +39,7 @@ import {
   verifyCandidateWithModel,
 } from "./candidate-generation.js";
 import { candidateAnchorIssue, evidenceRequestId, resolveEvidenceRequests } from "./evidence.js";
+import { buildTaskEvidenceLocatorTable, canonicalEvidenceLocatorTable, locatorToEvidenceRequest } from "./evidence-locators.js";
 import type {
   CandidateBatch,
   ContractShadowAudit,
@@ -60,7 +61,6 @@ import {
   serializeReviewContract,
   validateReviewTask,
   type ContextRef,
-  type EvidenceLocator,
   type ReviewTask,
   type ReviewUnit,
   type SourceRange,
@@ -230,14 +230,18 @@ function candidateKey(candidate: CandidateFinding) {
 }
 
 function evidenceRequestKey(request: CandidateFinding["evidenceRequests"][number]) {
-  return `${request.kind}:${request.locatorMode ?? ""}:${request.symbol ?? ""}:${request.pathHint ?? ""}:${request.query ?? ""}`;
+  return `${request.locatorId ?? ""}:${request.kind}:${request.locatorMode ?? ""}:${request.symbol ?? ""}:${request.pathHint ?? ""}:${request.query ?? ""}`;
 }
 
 function uniqueEvidenceRequests(requests: CandidateFinding["evidenceRequests"], limit: number) {
   return [...new Map(requests.map((request) => [evidenceRequestKey(request), request])).values()].slice(0, limit);
 }
 
-function missingClaimDirectedRequest(candidate: CandidateFinding) {
+function missingClaimDirectedRequest(
+  candidate: CandidateFinding,
+  locatorTable?: ReturnType<typeof buildTaskEvidenceLocatorTable>,
+  anchoredSymbol?: string,
+) {
   const consumerClaim =
     candidate.category === "contract" &&
     /\b(callers?|consumers?|downstream|assum(?:e|es|ed|ption)|expect(?:s|ed|ation)?)\b/i.test(candidate.description);
@@ -246,10 +250,17 @@ function missingClaimDirectedRequest(candidate: CandidateFinding) {
     candidate.evidenceRequests.some((request) => request.kind === "callers" || request.kind === "usage")
   )
     return undefined;
+  const subject = anchoredSymbol ?? candidate.primarySymbol;
+  const relationshipLocator = locatorTable?.locators.find(
+    (locator) => locator.mode === "relationship" && locator.relationshipKind === "callers" && locator.sourceSymbol === subject,
+  );
+  if (locatorTable && !relationshipLocator) return undefined;
+  if (relationshipLocator)
+    return locatorToEvidenceRequest(relationshipLocator, "callers", "candidate omitted required evidence from an actual caller or consumer");
   return {
     kind: "callers" as const,
     locatorMode: "symbol" as const,
-    symbol: candidate.primarySymbol,
+    symbol: subject,
     pathHint: candidate.file,
     reason: "candidate omitted required evidence from an actual caller or consumer",
   };
@@ -294,6 +305,7 @@ function failedCandidateBatch(opts: {
     candidates: [],
     inputTokens: opts.diagnostic?.usage.inputTokens ?? 0,
     outputTokens: opts.diagnostic?.usage.outputTokens ?? 0,
+    diagnostics: opts.diagnostic ? [opts.diagnostic] : undefined,
     error: opts.error,
   };
 }
@@ -542,13 +554,8 @@ function shadowReviewTask(item: ReviewWorkItem, opts: {
     endLine: symbol.endLine,
     reason: "related selected work-item context",
   } satisfies ContextRef));
-  const allowedEvidenceLocators: EvidenceLocator[] = effectiveRanges.map((range) => ({
-    id: `range-${sha256Json(range).slice(0, 16)}`,
-    kind: "range",
-    file: range.file,
-    startLine: range.startLine,
-    endLine: range.endLine,
-  }));
+  const evidenceLocatorTable = buildTaskEvidenceLocatorTable({ snapshotId: opts.snapshotId, workItem: item });
+  const allowedEvidenceLocators = evidenceLocatorTable.locators;
   const unitWithoutId: Omit<ReviewUnit, "id"> = {
     kind: item.kind,
     changedSymbols,
@@ -572,7 +579,7 @@ function shadowReviewTask(item: ReviewWorkItem, opts: {
     question: "Identify correctness issues in this bounded review unit and request only necessary evidence.",
     changedRanges: effectiveRanges,
     contextRefs,
-    allowedEvidenceLocators,
+                allowedEvidenceLocators,
     tokenBudget: Math.max(1, item.estimatedTokens),
     outputTokenBudget: Math.max(1, Math.min(100_000, opts.profile.requestedOutputTokens)),
     modelCallBudget: 1,
@@ -594,6 +601,7 @@ function shadowReviewTask(item: ReviewWorkItem, opts: {
     existingFiles: opts.existingFiles,
     knownSymbols: opts.knownSymbols,
     allowedEvidenceLocators,
+    evidenceLocatorTable: canonicalEvidenceLocatorTable(evidenceLocatorTable),
   });
 }
 
@@ -856,12 +864,13 @@ export async function executeReviewEngine(opts: {
     const batches = await mapLimit(selectedWorkItems, effectiveParallelism, async (item) => {
       if (!executionBudget.canStart())
         return failedCandidateBatch({ sourceId: item.id, error: "review deadline exceeded" });
+      const evidenceLocatorTable = buildTaskEvidenceLocatorTable({ snapshotId: opts.scope.id, workItem: item });
       try {
         const { value, cacheStatus } = await cachedStage({
           root: opts.root,
           enabled: opts.config.cache,
           stage: "candidates",
-          key: { snapshot: opts.scope.id, item, profile: candidateProfile },
+          key: { snapshot: opts.scope.id, item, profile: candidateProfile, evidenceLocatorTable },
           run: () =>
             executionBudget.call((signal) =>
               generateWorkItemCandidate({
@@ -870,6 +879,7 @@ export async function executeReviewEngine(opts: {
                 provider: opts.provider,
                 allowedFiles: opts.scope.changedFiles,
                 maxCandidates: opts.config.partitioned.maxCandidatesPerWorkItem ?? 2,
+                allowedEvidenceSelectors: evidenceLocatorTable.selectors,
                 signal,
               }),
             ),
@@ -939,12 +949,24 @@ export async function executeReviewEngine(opts: {
           })),
           estimatedTokens: 0,
         };
+      const sourceItem = selectedWorkItems.find((item) => item.id === candidate.sourceWorkItemIds[0]);
+      const locatorTable = reviewPath === "specialist" || !sourceItem
+        ? undefined
+        : buildTaskEvidenceLocatorTable({ snapshotId: opts.scope.id, workItem: sourceItem });
+      const anchoredSymbol = sourceItem?.primarySymbols.find(
+        (symbol) => symbol.file === candidate.file && symbol.startLine <= candidate.line && symbol.endLine >= candidate.line,
+      )?.qualifiedName;
+      const missingDirected = missingClaimDirectedRequest(candidate, locatorTable, anchoredSymbol);
+      const candidateForResolution =
+        missingDirected && reviewPath !== "specialist"
+          ? { ...candidate, evidenceRequests: [...candidate.evidenceRequests, missingDirected] }
+          : candidate;
       const resolved =
         opts.variant?.resolveEvidence === false
           ? {
               records: [],
-              gaps: candidate.evidenceRequests.map((request) => `${request.kind}: evidence resolution disabled`),
-              outcomes: candidate.evidenceRequests.map((request) => ({
+              gaps: candidateForResolution.evidenceRequests.map((request) => `${request.kind}: evidence resolution disabled`),
+              outcomes: candidateForResolution.evidenceRequests.map((request) => ({
                 requestId: evidenceRequestId(request),
                 request,
                 status: "unresolved" as const,
@@ -952,9 +974,8 @@ export async function executeReviewEngine(opts: {
                 reason: "evidence resolution disabled",
               })),
             }
-          : resolveEvidenceRequests({ candidate, scope: opts.scope, graph, policy: opts.config.evidence });
-      const missingDirected = missingClaimDirectedRequest(candidate);
-      if (missingDirected) {
+          : resolveEvidenceRequests({ candidate: candidateForResolution, scope: opts.scope, graph, policy: opts.config.evidence });
+      if (missingDirected && reviewPath === "specialist") {
         const requestId = evidenceRequestId(missingDirected);
         const reason = missingDirected.reason;
         resolved.gaps.push(`callers: ${reason}`);

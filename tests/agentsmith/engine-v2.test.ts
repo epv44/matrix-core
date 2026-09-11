@@ -105,6 +105,7 @@ describe("unified v2 verification pipeline", () => {
               usage: { inputTokens: 1, outputTokens: 1 },
             };
           }
+          const implementationSelector = input.prompt.match(/- (primary-1\.implementation):/)?.[1];
           return {
             raw: JSON.stringify({
               c: [
@@ -117,7 +118,9 @@ describe("unified v2 verification pipeline", () => {
                   d: "Callers assume value returns one.",
                   p: "value",
                   q: 0.9,
-                  e: [{ k: "implementation", v: "value", p: "src.ts", r: "inspect producer" }],
+                  e: implementationSelector
+                    ? [{ selector: implementationSelector, r: "inspect producer" }]
+                    : [],
                 },
               ],
             }),

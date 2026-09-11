@@ -94,7 +94,8 @@ function reasonForUnproven(
   return "verification-rejection";
 }
 
-function reasonForMiss(stage1: Stage1RunScore | undefined, oracleId: string): RootCauseCode {
+function reasonForMiss(execution: EngineExecution, stage1: Stage1RunScore | undefined, oracleId: string): RootCauseCode {
+  if ((execution.providerFailures?.length ?? 0) > 0 || (execution.errors?.length ?? 0) > 0) return "provider-failure";
   const attribution = stage1?.gold.find((item) => item.id === oracleId)?.attribution;
   if (attribution === "selection-miss") return "selection-miss";
   if (attribution === "coverage-budget-failure") return "evidence-packing-budget";
@@ -193,7 +194,7 @@ export function evaluateOracleResolutions(input: {
         expectedDisposition: expected,
         resolution,
         oracleSatisfied: !label.expectedPresence,
-        reasonCode: label.expectedPresence ? reasonForMiss(input.stage1, label.id) : null,
+        reasonCode: label.expectedPresence ? reasonForMiss(input.execution, input.stage1, label.id) : null,
         candidateId: null,
         verifierVerdict: null,
       };

@@ -11,7 +11,7 @@ import type { GraphContext } from "../core/graph/types.js";
 import type { ReviewScope } from "./scope.js";
 import { changedRanges } from "./projection.js";
 import { parseAddedLineRanges } from "../core/diff.js";
-import { sha256Json } from "../core/hash.js";
+import { sha256, sha256Json } from "../core/hash.js";
 import { discoverGraphFiles } from "../core/graph/providers.js";
 
 function safePath(root: string, value: string) {
@@ -69,6 +69,9 @@ export function evidenceRequestId(request: EvidenceRequest): string {
   return sha256Json(
     {
       kind: request.kind,
+      locatorId: request.locatorId ?? "",
+      taskId: request.taskId ?? "",
+      snapshotId: request.snapshotId ?? "",
       locatorMode: request.locatorMode ?? "",
       symbol: request.symbol ?? "",
       pathHint: request.pathHint ?? "",
@@ -92,6 +95,9 @@ function record(
   const id = sha256Json({ requestId, file, startLine, snippet, symbol }, 16);
   return {
     id,
+    locatorId: request.locatorId,
+    taskId: request.taskId,
+    snapshotId: request.snapshotId,
     requestKind: request.kind,
     file,
     startLine,
@@ -125,6 +131,13 @@ function evidenceSearchFiles(scope: ReviewScope): string[] {
         `${file}/`,
       ) && !/(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/.test(file),
   );
+}
+
+function symbolMatchesSnapshot(scope: ReviewScope, symbol: { file: string; contentHash: string }): boolean {
+  const source = scope.fileContents[symbol.file] ?? scope.suppliedContext[symbol.file];
+  if (source !== undefined && /^[a-f0-9]{64}$/i.test(symbol.contentHash)) return sha256(source) === symbol.contentHash;
+  const discovered = discoverGraphFiles(scope.root).find((file) => file.path === symbol.file);
+  return !discovered || !/^[a-f0-9]{64}$/i.test(symbol.contentHash) || discovered.contentHash === symbol.contentHash;
 }
 
 function searchRoleScore(file: string, kind: EvidenceRequest["kind"]): number {
@@ -199,7 +212,7 @@ export function resolveEvidenceRequests(opts: {
   const records: EvidenceRecord[] = [];
   const gaps: string[] = [];
   const outcomes: EvidenceResolutionOutcome[] = [];
-  const symbols = opts.graph.nodes.map((node) => node.symbol);
+  const symbols = opts.graph.nodes.map((node) => node.symbol).filter((symbol) => symbolMatchesSnapshot(opts.scope, symbol));
   const maxPerRequest = opts.policy.maxRecordsPerRequest ?? 3;
   const maxPerCandidate = opts.policy.maxRecordsPerCandidate ?? 8;
   const requests = [
@@ -253,6 +266,12 @@ export function resolveEvidenceRequests(opts: {
           return Boolean(request.symbol || locator.pathHint);
         });
     const matchedFiles = new Set(matchedSymbols.map((symbol) => normalizedRepositoryPath(symbol.file)));
+    if (!literalMode && request.symbol && matchedSymbols.length === 0) {
+      const reason = "canonical symbol locator was not found in the frozen graph snapshot";
+      outcomes.push({ requestId, request, status: "unresolved", records: [], reason });
+      gaps.push(`${request.kind}: ${reason}`);
+      continue;
+    }
     if (!locator.pathHint && matchedFiles.size > 1) {
       const reason = `ambiguous locator matched ${matchedFiles.size} files: ${[...matchedFiles].sort().join(", ")}`;
       outcomes.push({ requestId, request, status: "unresolved", records: [], reason });
@@ -264,6 +283,7 @@ export function resolveEvidenceRequests(opts: {
     if (["callers", "callees", "usage"].includes(request.kind)) {
       const matchedKeys = new Set(matchedSymbols.map((symbol) => `${symbol.file}:${symbol.qualifiedName}`));
       for (const edge of opts.graph.edges) {
+        if ((request.kind === "callers" || request.kind === "callees") && edge.kind !== "calls") continue;
         const relatedKeys =
           request.kind === "callees"
             ? matchedKeys.has(edge.source) && edge.target

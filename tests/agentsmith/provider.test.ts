@@ -88,4 +88,92 @@ describe("OllamaProvider v2", () => {
       "insufficient_evidence",
     ]);
   });
+
+  it("uses only supplied semantic selector keys for bounded candidate evidence", async () => {
+    const config = agentSmithConfigFromPolicy(true);
+    let requestBody: any;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        requestBody = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ response: '{"c":[]}' }));
+      }),
+    );
+    await new OllamaProvider(config).invoke({
+      profile: config.model_profiles[0],
+      prompt: "review",
+      outputKind: "candidates",
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 2,
+      evidenceSelectorKeys: ["primary-1.definition", "primary-1.implementation"],
+    });
+    const evidence = requestBody.format.properties.c.items.properties.e.items;
+    expect(evidence.required).toEqual(["selector", "r"]);
+    expect(evidence.properties.selector).toEqual({
+      type: "string",
+      enum: ["primary-1.definition", "primary-1.implementation"],
+    });
+    expect(evidence.properties.k).toBeUndefined();
+    expect(evidence.properties.i).toBeUndefined();
+    expect(evidence.properties.v).toBeUndefined();
+    expect(evidence.properties.m).toBeUndefined();
+    expect(evidence.properties.p).toBeUndefined();
+  });
+
+  it("preserves the strong specialist path without bounded selector IDs", async () => {
+    const config = agentSmithConfigFromPolicy(true);
+    let requestBody: any;
+    const prompt = "strong specialist review prompt";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        requestBody = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ response: '{"summary":"reviewed","c":[]}' }));
+      }),
+    );
+
+    await new OllamaProvider(config).invoke({
+      profile: config.model_profiles.find((item) => item.reviewCapability === "strong")!,
+      prompt,
+      outputKind: "specialist",
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 2,
+    });
+
+    const evidence = requestBody.format.properties.c.items.properties.e.items;
+    expect(requestBody.prompt).toBe(prompt);
+    expect(evidence.required).toEqual(["k", "v", "r"]);
+    expect(evidence.properties.i).toBeUndefined();
+    expect(evidence.properties.v).toMatchObject({ type: "string", minLength: 1 });
+    expect(evidence.properties.m.enum).toEqual(["symbol", "literal"]);
+    expect(evidence.properties.p).toBeDefined();
+  });
+
+  it("keeps readable selector names in the bounded schema rather than exposing internal hashes", async () => {
+    const config = agentSmithConfigFromPolicy(true);
+    let requestBody: any;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        requestBody = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ response: '{"c":[]}' }));
+      }),
+    );
+
+    await new OllamaProvider(config).invoke({
+      profile: config.model_profiles[0],
+      prompt: "inspect the producer selector",
+      outputKind: "candidates",
+      allowedFiles: ["src/producer.ts"],
+      maxCandidates: 1,
+      evidenceSelectorKeys: ["primary-1.definition"],
+    } as any);
+
+    const evidence = requestBody.format.properties.c.items.properties.e.items;
+    expect(evidence.required).toEqual(["selector", "r"]);
+    expect(evidence.properties.selector).toEqual({ type: "string", enum: ["primary-1.definition"] });
+    expect(evidence.properties.i).toBeUndefined();
+    expect(evidence.properties.v).toBeUndefined();
+    expect(JSON.stringify(requestBody.format)).not.toMatch(/locator-[a-f0-9]{20}/);
+  });
 });

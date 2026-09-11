@@ -942,6 +942,15 @@ export function evaluateStages(opts: {
       scope: trace.scope,
       candidates: candidateStageExecution.candidates,
     });
+    const selectorContractDrops = (candidateStageExecution.candidateBatches ?? []).reduce(
+      (sum, batch) => sum + (batch.contractDrops?.length ?? 0),
+      0,
+    );
+    const selectorContractAttempts = candidateStageExecution.candidates.length + selectorContractDrops;
+    const candidateProviderFailures = (candidateStageExecution.candidateBatches ?? []).filter((batch) => Boolean(batch.error)).length;
+    const structuredOutputFailures = (candidateStageExecution.candidateBatches ?? []).filter(
+      (batch) => Boolean(batch.error && batch.diagnostics?.some((diagnostic) => diagnostic.outputKind === "candidates")),
+    ).length;
     push({
       stage: "candidates",
       evaluation: evaluation("candidates"),
@@ -951,6 +960,14 @@ export function evaluateStages(opts: {
         metric("anchorValidity", anchored, candidateStageExecution.candidates.length),
         metric("evidenceRequestCompleteness", requestsComplete, desired.length),
         metric("reasoningTermAccuracy", reasoningComplete, desired.length),
+        { name: "selectorContractDrops", value: selectorContractDrops, direction: "lower" },
+        {
+          name: "selectorContractValidity",
+          value: ratio(candidateStageExecution.candidates.length, selectorContractAttempts),
+          direction: "higher",
+        },
+        { name: "candidateProviderFailures", value: candidateProviderFailures, direction: "lower" },
+        { name: "structuredOutputFailures", value: structuredOutputFailures, direction: "lower" },
         ...nearMiss.metrics,
       ],
       diagnostics: [],

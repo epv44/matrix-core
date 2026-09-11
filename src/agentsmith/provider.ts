@@ -31,11 +31,12 @@ export interface ReviewProvider {
     outputKind: ReviewOutputKind;
     allowedFiles?: string[];
     maxCandidates?: number;
+    evidenceSelectorKeys?: string[];
     signal?: AbortSignal;
   }): Promise<ProviderResponse>;
 }
 
-function compactCandidateProperties(allowedFiles?: string[]) {
+function compactCandidateProperties(allowedFiles?: string[], evidenceSelectorKeys?: string[]) {
   return {
     f: allowedFiles?.length ? { type: "string", enum: [...new Set(allowedFiles)] } : { type: "string", minLength: 1 },
     l: { type: "integer", minimum: 1 },
@@ -54,36 +55,41 @@ function compactCandidateProperties(allowedFiles?: string[]) {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["k", "v", "r"],
+        required: evidenceSelectorKeys !== undefined ? ["selector", "r"] : ["k", "v", "r"],
         properties: {
-          k: {
-            type: "string",
-            description: "Evidence relationship or lookup kind.",
-            enum: [
-              "definition",
-              "callers",
-              "callees",
-              "type",
-              "implementation",
-              "usage",
-              "config",
-              "test",
-              "schema",
-              "search",
-            ],
-          },
-          v: {
-            type: "string",
-            minLength: 1,
-            maxLength: 240,
-            description: "Required symbol for semantic lookups or literal value for search/config/test/schema lookups.",
-          },
-          m: {
-            type: "string",
-            enum: ["symbol", "literal"],
-            description: "Whether v is a canonical symbol locator or an exact literal value.",
-          },
-          p: { type: "string", maxLength: 240, description: "Optional repository-relative path hint." },
+          ...(evidenceSelectorKeys !== undefined ? { selector: { type: "string", enum: evidenceSelectorKeys } } : {}),
+          ...(evidenceSelectorKeys === undefined
+            ? {
+                k: {
+                  type: "string",
+                  description: "Evidence relationship or lookup kind.",
+                  enum: [
+                    "definition",
+                    "callers",
+                    "callees",
+                    "type",
+                    "implementation",
+                    "usage",
+                    "config",
+                    "test",
+                    "schema",
+                    "search",
+                  ],
+                },
+              }
+            : {}),
+          ...(evidenceSelectorKeys === undefined
+            ? {
+                v: {
+                  type: "string",
+                  minLength: 1,
+                  maxLength: 240,
+                  description: "Required symbol for semantic lookups or literal value for search/config/test/schema lookups.",
+                },
+                m: { type: "string", enum: ["symbol", "literal"] },
+                p: { type: "string", maxLength: 240, description: "Optional repository-relative path hint." },
+              }
+            : {}),
           r: { type: "string", minLength: 1, maxLength: 120, description: "Why this evidence is needed." },
         },
       },
@@ -91,7 +97,7 @@ function compactCandidateProperties(allowedFiles?: string[]) {
   };
 }
 
-function outputSchema(kind: ReviewOutputKind, allowedFiles?: string[], maxCandidates = 2) {
+function outputSchema(kind: ReviewOutputKind, allowedFiles?: string[], maxCandidates = 2, evidenceSelectorKeys?: string[]) {
   if (kind === "citation-selection")
     return {
       type: "object",
@@ -169,7 +175,7 @@ function outputSchema(kind: ReviewOutputKind, allowedFiles?: string[], maxCandid
           type: "object",
           additionalProperties: false,
           required: ["f", "l", "s", "k", "t", "d", "q", "e"],
-          properties: compactCandidateProperties(allowedFiles),
+        properties: compactCandidateProperties(allowedFiles, kind === "candidates" ? evidenceSelectorKeys : undefined),
         },
       },
     },
@@ -197,6 +203,7 @@ export class OllamaProvider implements ReviewProvider {
     outputKind: ReviewOutputKind;
     allowedFiles?: string[];
     maxCandidates?: number;
+    evidenceSelectorKeys?: string[];
     signal?: AbortSignal;
   }): Promise<ProviderResponse> {
     const controller = new AbortController();
@@ -215,7 +222,7 @@ export class OllamaProvider implements ReviewProvider {
           prompt: input.prompt,
           stream: false,
           think: input.profile.inference.thinking,
-          format: outputSchema(input.outputKind, input.allowedFiles, input.maxCandidates),
+          format: outputSchema(input.outputKind, input.allowedFiles, input.maxCandidates, input.evidenceSelectorKeys),
           keep_alive: `${Math.ceil(this.config.maxDurationMs / 60_000) + 5}m`,
           options: {
             temperature: input.profile.inference.temperature,

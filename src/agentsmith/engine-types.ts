@@ -172,6 +172,11 @@ export interface CandidateBatch {
   completion?: ProviderCompletionMetadata;
   cacheStatus?: "hit" | "miss";
   diagnostics?: ProviderFailureDiagnostic[];
+  contractDrops?: Array<{
+    candidateIndex: number;
+    reason: "unknown-selector" | "invalid-selector";
+    selector?: string;
+  }>;
   error?: string;
 }
 

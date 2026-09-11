@@ -148,7 +148,7 @@ describe("Phase 0 candidate-quality measurement contracts", () => {
     const actual = candidate({
       severity: "medium",
       title: "Null result reaches the caller",
-      description: "The caller sees a null impact.",
+      description: "Trigger: producer returns null. Invariant: caller must handle nullable results. Impact: the caller sees a null impact.",
       evidenceRequests: [{ kind: "callers", symbol: "loadValue", reason: "check caller contract" }],
     });
     const diagnostics = collectCandidateNearMissDiagnostics({
@@ -167,6 +167,7 @@ describe("Phase 0 candidate-quality measurement contracts", () => {
     expect(value("violatedInvariantTermRecall")).toBe(1);
     expect(value("observableImpactTermRecall")).toBe(1);
     expect(value("titleSimilarity")).toBe(0.25);
+    expect(value("claimCompleteness")).toBe(1);
     expect(value("anchorValidityDiagnostic")).toBe(1);
     expect(value("anchorDistance")).toBe(1);
     expect(value("evidenceRequestCompletenessDiagnostic")).toBe(1);

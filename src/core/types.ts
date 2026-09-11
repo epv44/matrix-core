@@ -386,6 +386,9 @@ export type EvidenceRequestKind =
 
 export interface EvidenceRequest {
   kind: EvidenceRequestKind;
+  locatorId?: string;
+  taskId?: string;
+  snapshotId?: string;
   locatorMode?: "symbol" | "literal";
   symbol?: string;
   pathHint?: string;
@@ -395,6 +398,9 @@ export interface EvidenceRequest {
 
 export interface EvidenceRecord {
   id: string;
+  locatorId?: string;
+  taskId?: string;
+  snapshotId?: string;
   requestKind: EvidenceRequestKind;
   file: string;
   startLine: number;

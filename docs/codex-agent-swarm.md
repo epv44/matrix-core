@@ -262,7 +262,7 @@ Stage-specific metrics may include:
 ```text
 cross_file_selection_recall
 cross_file_finding_recall
-lens_specific_recall
+evidence_locator_validity
 verifier_rejection_rate
 context_expansion_rate
 ```
@@ -422,11 +422,11 @@ Agent B: failure-classification tests
 Agent C: trace usability review
 ```
 
-## Stage 6 — Review Lenses
+## Stage 6 — Small-Model Review Path Consolidation
 
 ```text
-Agent A: correctness/default lens
-Agent B: specialist lens migration where scopes are disjoint
+Agent A: correctness/default review path
+Agent B: bounded evidence/verifier work where scopes are disjoint
 Agent C: old-vs-new specialist eval comparison
 Agent D: false-positive review
 ```
