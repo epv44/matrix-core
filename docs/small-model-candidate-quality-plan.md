@@ -103,6 +103,8 @@ Parallel writers must have disjoint write scopes. Dependent work is serialized. 
 - [Phase 1 — Typed Question and Result Contracts](#phase-1--typed-question-and-result-contracts)
 - [Phase 2 — Focused Candidate Lenses (Deferred)](#phase-2--focused-candidate-lenses-deferred)
 - [Phase 3 — Semantic Evidence Selectors](#phase-3--semantic-evidence-selectors)
+- [Phase 3A — Evidence-Request Metric Decomposition](#phase-3a--evidence-request-metric-decomposition)
+- [Phase 3B — Semantic Evidence Planning Variants](#phase-3b--semantic-evidence-planning-variants)
 - [Phase 4 — Descriptor Fingerprints and Stale-Result Rejection](#phase-4--descriptor-fingerprints-and-stale-result-rejection)
 - [Phase 5 — Relationship-Preserving Unit Packing](#phase-5--relationship-preserving-unit-packing)
 - [Phase 6 — Eval-Qualified Routing and Shadow Promotion](#phase-6--eval-qualified-routing-and-shadow-promotion)
@@ -115,6 +117,7 @@ Parallel writers must have disjoint write scopes. Dependent work is serialized. 
 | 1 | Typed question/result contracts in shadow mode |
 | 2 | Deferred; retain one bounded correctness review |
 | 3 | Semantic evidence selectors instead of invented strings |
+| 3A | Diagnostic separation of candidate and evidence-request failures |
 | 4 | Reproducible descriptor identity and stale-result rejection |
 | 5 | Relationship-preserving, token-bounded large-change packing |
 | 6 | Eval-qualified routing, escalation, and final shadow comparison |
@@ -310,6 +313,51 @@ Unknown, stale, duplicated, incompatible, or out-of-scope selector keys are reje
 - Evidence, token, call, and expansion budgets remain unchanged.
 - Partial/error/unresolved-request rates remain unchanged or improve.
 - Selector-contract candidate drops are reported separately from provider failures and candidate misses.
+
+# Phase 3B — Deterministic Host-Default Evidence Planning
+
+### Objective
+
+Improve evidence selection for candidates that are mechanically valid but request the wrong
+evidence kind. Deterministic host defaults are now the single supported bounded small-model
+behavior; they are not an additional model call or a scope-expanding fallback.
+
+### Implementation
+
+For every bounded candidate task, host code deterministically adds up to two evidence requests
+from the task selector table after valid model-requested selectors. Requests are deduplicated and
+the existing cap remains authoritative. Tasks without selectors receive no defaults. The model
+continues to receive only readable selector keys; canonical locator identities remain host-internal.
+
+Prompt-guidance, structured-intent, and hybrid evidence-planning variants were evaluated and
+retired. Their experiment-only flags, schemas, diagnostics, and report metrics are not part of the
+production contract.
+
+### Metrics and gate
+
+Report exact evidence-kind compatibility separately from semantic evidence sufficiency after
+resolution. Also report candidate recall/precision, evidence relevance, selector validity and
+resolution, calls, tokens, latency, partials, and errors. Host-default consolidation passes when
+the completed retained host-defaults run remains comparable, no candidate or execution metric
+regresses, and the deterministic tests prove the request cap and selector scope invariants.
+
+# Phase 3A — Evidence-Request Metric Decomposition
+
+### Status
+
+Implemented as a measurement-only substage. It does not change prompts, candidate execution,
+selector routing, scoring, statuses, or promotion criteria.
+
+The evaluator now separates candidate generation, diagnostic near-matching, evidence-request
+emission, evidence-kind compatibility, selector validity, selector resolution, and selector scope
+from strict-oracle-conditioned evidence completeness. Existing strict metrics remain authoritative.
+
+### Promotion gate
+
+This substage is not itself a Phase 3 promotion decision. It passes implementation validation when
+the new metrics are deterministic, report applicable denominators or `N/A`, preserve existing strict
+results, and distinguish model misses from selector/resolution failures. A later human-reviewed
+decision may use the new measurements to revise Phase 3 quality criteria.
 
 # Phase 4 — Descriptor Fingerprints and Stale-Result Rejection
 

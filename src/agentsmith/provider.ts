@@ -36,7 +36,10 @@ export interface ReviewProvider {
   }): Promise<ProviderResponse>;
 }
 
-function compactCandidateProperties(allowedFiles?: string[], evidenceSelectorKeys?: string[]) {
+function compactCandidateProperties(
+  allowedFiles?: string[],
+  evidenceSelectorKeys?: string[],
+) {
   return {
     f: allowedFiles?.length ? { type: "string", enum: [...new Set(allowedFiles)] } : { type: "string", minLength: 1 },
     l: { type: "integer", minimum: 1 },
@@ -97,7 +100,12 @@ function compactCandidateProperties(allowedFiles?: string[], evidenceSelectorKey
   };
 }
 
-function outputSchema(kind: ReviewOutputKind, allowedFiles?: string[], maxCandidates = 2, evidenceSelectorKeys?: string[]) {
+function outputSchema(
+  kind: ReviewOutputKind,
+  allowedFiles?: string[],
+  maxCandidates = 2,
+  evidenceSelectorKeys?: string[],
+) {
   if (kind === "citation-selection")
     return {
       type: "object",
@@ -175,7 +183,7 @@ function outputSchema(kind: ReviewOutputKind, allowedFiles?: string[], maxCandid
           type: "object",
           additionalProperties: false,
           required: ["f", "l", "s", "k", "t", "d", "q", "e"],
-        properties: compactCandidateProperties(allowedFiles, kind === "candidates" ? evidenceSelectorKeys : undefined),
+          properties: compactCandidateProperties(allowedFiles, kind === "candidates" ? evidenceSelectorKeys : undefined),
         },
       },
     },
@@ -222,7 +230,12 @@ export class OllamaProvider implements ReviewProvider {
           prompt: input.prompt,
           stream: false,
           think: input.profile.inference.thinking,
-          format: outputSchema(input.outputKind, input.allowedFiles, input.maxCandidates, input.evidenceSelectorKeys),
+          format: outputSchema(
+            input.outputKind,
+            input.allowedFiles,
+            input.maxCandidates,
+            input.evidenceSelectorKeys,
+          ),
           keep_alive: `${Math.ceil(this.config.maxDurationMs / 60_000) + 5}m`,
           options: {
             temperature: input.profile.inference.temperature,

@@ -237,8 +237,8 @@ async function invokeStructured<T>(opts: {
       opts.outputKind === "candidates" && opts.evidenceSelectorKeys !== undefined
         ? `Repair the previous candidate response and return only valid JSON, with no prose or Markdown. Keep the candidate fields and values unless the validation failure requires a correction. ${
             opts.evidenceSelectorKeys.length === 0
-              ? 'This task has zero allowed evidence selectors. Set "e":[] and remove every evidence object; do not emit an evidence entry with a missing, null, empty, hashed, symbolic, path-based, or legacy selector.'
-              : 'For every evidence entry, use exactly this shape: {"selector":"<one exact allowed selector key>","r":"short reason"}. The selector value is required and must never be empty. If no evidence request is needed, use "e":[]; do not emit an evidence entry with a missing, null, empty, hashed, symbolic, path-based, or legacy selector.'
+              ? 'This task has zero allowed evidence selectors. Set "e":[] and remove every evidence object; do not emit a subject, selector, symbol, path, hash, or legacy locator.'
+              : 'For every evidence entry, use exactly this shape: {"selector":"<one exact allowed selector key>","r":"short reason"}. The selector value is required and must never be empty. If no evidence request is needed, use "e":[].'
           } Allowed selector keys:\n${opts.evidenceSelectorKeys.map((key) => `- ${key}`).join("\n")}\nValidation failure: ${first.parseError}\nPrevious response:\n${first.raw.slice(0, 12_000)}`
         : `Correct the previous response so it matches the required JSON schema. Return only corrected JSON, with no prose or Markdown. Validation failure: ${first.parseError}\nPrevious response:\n${first.raw.slice(0, 12_000)}`;
     const repaired = await invoke(repairPrompt);
@@ -312,6 +312,21 @@ function expandCandidate(
       };
     }),
   };
+}
+
+function deterministicEvidenceDefaults(
+  selectors: readonly TaskEvidenceSelector[],
+  maxRequests = 2,
+) {
+  const priority = ["implementation", "type", "definition", "callers", "callees", "usage", "config", "schema", "test", "search"];
+  return [...selectors]
+    .sort((left, right) => {
+      const leftRank = priority.indexOf(left.key.slice(left.key.lastIndexOf(".") + 1));
+      const rightRank = priority.indexOf(right.key.slice(right.key.lastIndexOf(".") + 1));
+      return (leftRank < 0 ? priority.length : leftRank) - (rightRank < 0 ? priority.length : rightRank) || left.key.localeCompare(right.key);
+    })
+    .slice(0, maxRequests)
+    .map((selector) => selectorToEvidenceRequest(selector, "deterministic host-selected evidence for candidate adjudication"));
 }
 
 function projectionText(projection: ReviewProjection) {
@@ -444,9 +459,10 @@ export async function generateWorkItemCandidate(opts: {
     ? "For this bounded task, every e entry must use {\"selector\":\"semantic selector key\",\"r\":\"short reason\"}. Do not return hashes, symbols, paths, v, m, p, i, k, or s in an evidence entry. Use e=[] when no evidence is needed."
     : "";
   const prompt = `${candidateInstructions(opts.maxCandidates, false, boundedSelectors)}\n${directedQuestion(opts.item)}\n${focus}\n${locatorInstructions}\n${selectorPromptText(selectors)}\n\n${workItemText(opts.item)}`;
+  const candidateValueSchema = compactCandidateSchema;
   const boundedSchema = z.object({
     c: z.array(
-      compactCandidateSchema.extend({ e: z.array(boundedRequestSchema).max(boundedSelectors ? 2 : 0).default([]) }),
+      candidateValueSchema.extend({ e: z.array(boundedRequestSchema).max(boundedSelectors ? 2 : 0).default([]) }),
     ).max(opts.maxCandidates).default([]),
   });
   const { parsed, response, diagnostics } = await invokeStructured({
@@ -466,6 +482,9 @@ export async function generateWorkItemCandidate(opts: {
   const candidates = parsed.c.flatMap((value, candidateIndex) => {
     try {
       const candidate = expandCandidate(value, opts.item.id, undefined, selectors.length ? selectorMap : undefined);
+      if (boundedSelectors)
+        candidate.evidenceRequests = [...candidate.evidenceRequests, ...deterministicEvidenceDefaults(selectors)];
+      candidate.evidenceRequests = [...new Map(candidate.evidenceRequests.map((request) => [JSON.stringify(request), request])).values()].slice(0, 2);
       candidate.primarySymbol ??= opts.item.primarySymbols[0]?.qualifiedName;
       return [{ ...candidate, id: candidateId(candidate) }];
     } catch {

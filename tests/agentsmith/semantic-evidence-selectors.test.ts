@@ -173,4 +173,16 @@ describe("semantic evidence selector boundaries", () => {
       { candidateIndex: 0, reason: "unknown-selector", selector: "selector-does-not-exist" },
     ]);
   });
+
+  it("adds deterministic host defaults without another provider call", async () => {
+    const table = buildTaskEvidenceLocatorTable({ snapshotId: "snapshot-a", workItem });
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["small"] }),
+      invoke: async () => ({ raw: JSON.stringify({ c: [{ f: "src/producer.ts", l: 1, s: "high", k: "contract", t: "Null producer value", d: "Trigger: null; Invariant: consumer contract; Impact: failure", q: 0.9, e: [] }] }), usage: { inputTokens: 1, outputTokens: 1 } }),
+    };
+    const result = await generateWorkItemCandidate({ item: workItem, profile, provider, allowedFiles: ["src/producer.ts"], maxCandidates: 1, allowedEvidenceSelectors: table.selectors });
+    expect(result.candidates[0]?.evidenceRequests).toHaveLength(2);
+    expect(result.candidates[0]?.evidenceRequests.map((request) => request.kind)).toEqual(["implementation", "type"]);
+  });
+
 });

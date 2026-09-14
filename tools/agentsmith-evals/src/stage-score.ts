@@ -958,7 +958,8 @@ export function evaluateStages(opts: {
         metric("expectedCandidateRecall", matched.length, desired.length),
         { name: "forbiddenCandidates", value: generatedForbidden.length, direction: "lower" },
         metric("anchorValidity", anchored, candidateStageExecution.candidates.length),
-        metric("evidenceRequestCompleteness", requestsComplete, desired.length),
+        metric("evidenceRequestCompleteness", requestsComplete, matched.length),
+        metric("strictCandidateEvidenceCompleteness", requestsComplete, matched.length),
         metric("reasoningTermAccuracy", reasoningComplete, desired.length),
         { name: "selectorContractDrops", value: selectorContractDrops, direction: "lower" },
         {

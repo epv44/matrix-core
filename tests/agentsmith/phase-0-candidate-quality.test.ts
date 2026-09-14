@@ -168,10 +168,16 @@ describe("Phase 0 candidate-quality measurement contracts", () => {
     expect(value("observableImpactTermRecall")).toBe(1);
     expect(value("titleSimilarity")).toBe(0.25);
     expect(value("claimCompleteness")).toBe(1);
+    expect(value("diagnosticCandidatePairRate")).toBe(1);
+    expect(value("strictCandidateMatchRate")).toBe(0);
+    expect(value("candidateEvidenceRequestEmissionRate")).toBe(1);
+    expect(value("evidenceKindCompatibility")).toBe(1);
     expect(value("anchorValidityDiagnostic")).toBe(1);
     expect(value("anchorDistance")).toBe(1);
     expect(value("evidenceRequestCompletenessDiagnostic")).toBe(1);
     expect(value("evidenceRequestLocatorValidity")).toBe(1);
+    expect(value("selectorKeyValidity")).toBe(1);
+    expect(value("selectorResolutionRate")).toBe(0);
     expect(value("strictOracleOnlyRejection")).toBe(0);
   });
 
@@ -192,6 +198,7 @@ describe("Phase 0 candidate-quality measurement contracts", () => {
     });
 
     expect(candidateMetric(stages, "expectedCandidateRecall")).toMatchObject({ value: 0, numerator: 0, denominator: 1 });
+    expect(candidateMetric(stages, "evidenceRequestCompleteness")).toMatchObject({ value: null, numerator: 0, denominator: 0 });
     expect(candidateMetric(stages, "anchorValidity")).toMatchObject({ value: 1, numerator: 1, denominator: 1 });
 
     const audits = evaluateOracleResolutions({

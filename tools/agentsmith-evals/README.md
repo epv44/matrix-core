@@ -20,7 +20,7 @@ the run creates status, report, or baseline artifacts and never falls back to sm
 ```bash
 npm run eval -- --target agentsmith --suite component --model small --format html \
   --output .quality/evals/latest.html \
-  --create-baseline evals/agentsmith/baselines/component-small-v3.json
+  --create-baseline evals/agentsmith/baselines/component-small-host-defaults.json
 npm run eval -- --target agentsmith --suite conformance --model large --format json
 ```
 

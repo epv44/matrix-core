@@ -191,14 +191,28 @@ export function collectCandidateNearMissDiagnostics(opts: {
   let validLocatorShapes = 0;
   let validLocatorScopes = 0;
   let locators = 0;
+  let emittedEvidenceCandidates = 0;
+  let compatibleEvidenceKinds = 0;
+  let requiredEvidenceKindsForPairs = 0;
+  let resolvedSelectorRequests = 0;
+  let selectorRequests = 0;
   let strictOracleOnlyRejected = 0;
   for (const { expected, actual } of pairs) {
+    if (actual) {
+      if (actual.evidenceRequests.length > 0) emittedEvidenceCandidates += 1;
+      requiredEvidenceKindsForPairs += expected.requiredEvidenceKinds.length;
+      compatibleEvidenceKinds += expected.requiredEvidenceKinds.filter((kind) =>
+        actual.evidenceRequests.some((request) => request.kind === kind),
+      ).length;
+    }
     requiredEvidenceKinds += expected.requiredEvidenceKinds.length;
     requestedEvidenceKinds += expected.requiredEvidenceKinds.filter((kind) =>
       actual?.evidenceRequests.some((request) => request.kind === kind),
     ).length;
     for (const request of actual?.evidenceRequests ?? []) {
       locators += 1;
+      selectorRequests += 1;
+      if (request.locatorId && request.taskId && request.snapshotId) resolvedSelectorRequests += 1;
       if (locatorShapeIsValid(request)) validLocatorShapes += 1;
       if (locatorShapeIsValid(request) && scopeContentMatches(opts.scope, request)) validLocatorScopes += 1;
     }
@@ -243,11 +257,17 @@ export function collectCandidateNearMissDiagnostics(opts: {
       }),
       metric("titleSimilarity", { value: mean(titleSimilarities), direction: "higher" }),
       metric("claimCompleteness", ratio(completeClaims, desired.length)),
+      metric("diagnosticCandidatePairRate", ratio(pairs.filter(({ actual }) => Boolean(actual)).length, desired.length)),
+      metric("strictCandidateMatchRate", ratio(pairs.filter(({ actual, expected }) => strictMatch(actual, expected)).length, desired.length)),
+      metric("candidateEvidenceRequestEmissionRate", ratio(emittedEvidenceCandidates, pairs.filter(({ actual }) => Boolean(actual)).length)),
+      metric("evidenceKindCompatibility", ratio(compatibleEvidenceKinds, requiredEvidenceKindsForPairs)),
       metric("anchorValidityDiagnostic", ratio(anchorValid, opts.candidates.length)),
       metric("anchorDistance", { value: mean(anchorDistances), direction: "lower" }),
       metric("evidenceRequestCompletenessDiagnostic", ratio(requestedEvidenceKinds, requiredEvidenceKinds)),
       metric("evidenceRequestLocatorValidity", ratio(validLocatorShapes, locators)),
       metric("evidenceRequestLocatorScopeValidity", ratio(validLocatorScopes, locators)),
+      metric("selectorKeyValidity", ratio(validLocatorShapes, selectorRequests)),
+      metric("selectorResolutionRate", ratio(resolvedSelectorRequests, selectorRequests)),
       metric("strictOracleOnlyRejection", ratio(strictOracleOnlyRejected, desired.length)),
     ],
     diagnosticOnly,
