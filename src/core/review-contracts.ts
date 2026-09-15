@@ -382,6 +382,9 @@ export function deterministicReviewUnitId(unit: Omit<ReviewUnit, "id">): string 
 export function deterministicReviewTaskId(task: Omit<ReviewTask, "taskId">): string {
   return `task-${sha256(serializeReviewContract({ ...task, taskId: "" }), 16)}`;
 }
+export function deterministicReviewDescriptorFingerprint(value: unknown): string {
+  return sha256(serializeReviewContract(value));
+}
 export function deterministicCandidateFindingId(finding: Omit<CandidateReviewFinding, "id">): string {
   return `finding-${sha256(serializeReviewContract({ ...finding, id: "" }), 16)}`;
 }

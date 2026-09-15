@@ -9,6 +9,7 @@ export interface ContractShadowMetrics {
   descriptorCount: number;
   validDescriptorCount: number;
   descriptorValidity: StageMetric;
+  descriptorFingerprintValidity: StageMetric;
   serializationDeterminism: StageMetric;
   hashDeterminism: StageMetric;
   legacyPromptEquivalence: StageMetric;
@@ -71,6 +72,11 @@ export function buildContractShadowAudit(opts: {
       descriptorCount: audit.entries.length,
       validDescriptorCount: valid,
       descriptorValidity: metric("descriptorValidity", valid, audit.entries.length),
+      descriptorFingerprintValidity: metric(
+        "descriptorFingerprintValidity",
+        audit.entries.filter((entry) => /^[a-f0-9]{64}$/.test(entry.descriptorFingerprint ?? "")).length,
+        valid,
+      ),
       serializationDeterminism: descriptorMetrics.serialization,
       hashDeterminism: descriptorMetrics.hashes,
       legacyPromptEquivalence: legacyMetric("legacyPromptEquivalence"),

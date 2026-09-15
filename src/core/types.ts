@@ -528,6 +528,7 @@ export interface ReviewCoverage {
   callsCancelled?: number;
   cacheHits?: number;
   cacheMisses?: number;
+  staleCacheEntries?: number;
   structuredRepairs?: number;
   citationRepairs?: number;
   providerInvocations?: number;

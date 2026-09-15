@@ -56,6 +56,7 @@ import { atomicWriteFile } from "../core/filesystem.js";
 import {
   CANDIDATE_RESULT_VERSION,
   REVIEW_TASK_VERSION,
+  deterministicReviewDescriptorFingerprint,
   deterministicReviewTaskId,
   deterministicReviewUnitId,
   serializeReviewContract,
@@ -88,24 +89,56 @@ function compactDeterministicReport(report?: string): string | undefined {
   return report.slice(0, 2_000);
 }
 
+export function isFreshDescriptorCacheEntry<T>(
+  cached: unknown,
+  descriptorFingerprint: string,
+): cached is { schemaVersion: 1; descriptorFingerprint: string; value: T } {
+  if (!cached || typeof cached !== "object") return false;
+  const entry = cached as { schemaVersion?: unknown; descriptorFingerprint?: unknown; value?: unknown };
+  return entry.schemaVersion === 1 && entry.descriptorFingerprint === descriptorFingerprint && entry.value !== undefined;
+}
+
 async function cachedStage<T>(opts: {
   root: string;
   enabled: boolean;
   stage: string;
   key: unknown;
+  descriptorFingerprint: string;
   run: () => Promise<T>;
-}): Promise<{ value: T; cacheStatus: "hit" | "miss" }> {
+}): Promise<{ value: T; cacheStatus: "hit" | "miss"; stale: boolean }> {
   const digest = sha256Json({ strategyHash: AGENTSMITH_STRATEGY_HASH, key: opts.key });
   const target = path.join(opts.root, ".quality", "cache", "agentsmith-v4", "stages", opts.stage, `${digest}.json`);
+  let stale = false;
   if (opts.enabled && fs.existsSync(target))
     try {
-      return { value: JSON.parse(fs.readFileSync(target, "utf8")) as T, cacheStatus: "hit" };
+      const cached = JSON.parse(fs.readFileSync(target, "utf8")) as { descriptorFingerprint?: string; value?: T };
+      if (isFreshDescriptorCacheEntry<T>(cached, opts.descriptorFingerprint))
+        return { value: cached.value as T, cacheStatus: "hit", stale: false };
+      stale = true;
     } catch {
       /* regenerate */
+      stale = true;
     }
   const value = await opts.run();
-  if (opts.enabled) atomicWriteFile(target, `${JSON.stringify(value)}\n`);
-  return { value, cacheStatus: "miss" };
+  if (opts.enabled)
+    atomicWriteFile(target, `${JSON.stringify({ schemaVersion: 1, descriptorFingerprint: opts.descriptorFingerprint, value })}\n`);
+  return { value, cacheStatus: "miss", stale };
+}
+
+function modelDescriptorIdentity(model: ModelProfile) {
+  return {
+    id: model.id,
+    model: model.model,
+    contextTokens: model.contextTokens,
+    requestedOutputTokens: model.requestedOutputTokens,
+    safetyReserveTokens: model.safetyReserveTokens,
+    tokenizer: model.tokenizer,
+    inference: model.inference,
+  };
+}
+
+function dispatchDescriptorFingerprint(value: unknown, model: ModelProfile, stage: string): string {
+  return deterministicReviewDescriptorFingerprint({ stage, model: modelDescriptorIdentity(model), descriptor: value });
 }
 
 async function mapLimit<T, R>(values: T[], limit: number, fn: (value: T) => Promise<R>): Promise<R[]> {
@@ -620,6 +653,7 @@ function buildContractShadowAudit(opts: {
         sourceWorkItemId: item.id,
         taskId: task.taskId,
         descriptorHash: sha256(serializedDescriptor),
+        descriptorFingerprint: dispatchDescriptorFingerprint(task, opts.profile, "candidates"),
         serializedDescriptor,
         validation: { valid: true },
         legacyInputFingerprint: sha256Json({ sourceWorkItemId: item.id, workItem: item }),
@@ -715,6 +749,7 @@ export async function executeReviewEngine(opts: {
   stageTimingsMs.projection = Date.now() - stageStarted;
   stageStarted = Date.now();
   const executionBudget = createExecutionBudget(opts.config.maxDurationMs, opts.signal);
+  let staleCacheEntries = 0;
   const effectiveParallelism = Math.min(opts.config.concurrency, opts.config.partitioned.maxParallelUnits);
   const workItemOptions = {
     projection: full,
@@ -734,11 +769,16 @@ export async function executeReviewEngine(opts: {
   let scoutTrace: EngineExecution["scout"];
   if (route.mode === "hybrid" && scoutProfile)
     try {
-      const { value: scout, cacheStatus } = await cachedStage({
+      const { value: scout, cacheStatus, stale } = await cachedStage({
         root: opts.root,
         enabled: opts.config.cache,
         stage: "scout",
         key: { snapshot: opts.scope.id, projection: compact.id, profile: scoutProfile },
+        descriptorFingerprint: dispatchDescriptorFingerprint(
+          { snapshotId: opts.scope.id, projection: compact, route: route.mode },
+          scoutProfile,
+          "scout",
+        ),
         run: () =>
           executionBudget.call((signal) =>
             runScout({
@@ -749,8 +789,17 @@ export async function executeReviewEngine(opts: {
             }),
           ),
       });
+      if (stale) staleCacheEntries += 1;
       hotspots = scout.hotspots.slice(0, opts.config.hybrid.maxHotspots);
-      scoutTrace = { ...scout, cacheStatus };
+      scoutTrace = {
+        ...scout,
+        cacheStatus,
+        descriptorFingerprint: dispatchDescriptorFingerprint(
+          { snapshotId: opts.scope.id, projection: compact, route: route.mode },
+          scoutProfile,
+          "scout",
+        ),
+      };
       inputTokens += scout.inputTokens;
       outputTokens += scout.outputTokens;
     } catch (error) {
@@ -826,11 +875,16 @@ export async function executeReviewEngine(opts: {
       if (!executionBudget.canStart())
         return failedCandidateBatch({ sourceId, specialist: specialist.name, error: "review deadline exceeded" });
       try {
-        const { value, cacheStatus } = await cachedStage({
+        const { value, cacheStatus, stale } = await cachedStage({
           root: opts.root,
           enabled: opts.config.cache,
           stage: "specialist-candidates",
           key: { snapshot: opts.scope.id, projection: full.id, profile: candidateProfile, specialist },
+          descriptorFingerprint: dispatchDescriptorFingerprint(
+            { snapshotId: opts.scope.id, projection: full, specialist, route: route.mode },
+            candidateProfile,
+            "specialist-candidates",
+          ),
           run: () =>
             executionBudget.call((signal) =>
               generateSpecialistCandidates({
@@ -844,7 +898,16 @@ export async function executeReviewEngine(opts: {
               }),
             ),
         });
-        return { ...value, cacheStatus };
+        if (stale) staleCacheEntries += 1;
+        return {
+          ...value,
+          cacheStatus,
+          descriptorFingerprint: dispatchDescriptorFingerprint(
+            { snapshotId: opts.scope.id, projection: full, specialist, route: route.mode },
+            candidateProfile,
+            "specialist-candidates",
+          ),
+        };
       } catch (error) {
         captureProviderFailure(error, providerFailures);
         const message = `${specialist.name}: ${error instanceof Error ? error.message : String(error)}`;
@@ -866,11 +929,14 @@ export async function executeReviewEngine(opts: {
         return failedCandidateBatch({ sourceId: item.id, error: "review deadline exceeded" });
       const evidenceLocatorTable = buildTaskEvidenceLocatorTable({ snapshotId: opts.scope.id, workItem: item });
       try {
-        const { value, cacheStatus } = await cachedStage({
+        const { value, cacheStatus, stale } = await cachedStage({
           root: opts.root,
           enabled: opts.config.cache,
           stage: "candidates",
           key: { snapshot: opts.scope.id, item, profile: candidateProfile, evidenceLocatorTable },
+          descriptorFingerprint:
+            contractShadow.entries.find((entry) => entry.sourceWorkItemId === item.id)?.descriptorFingerprint ??
+            dispatchDescriptorFingerprint({ snapshotId: opts.scope.id, item, evidenceLocatorTable }, candidateProfile, "candidates"),
           run: () =>
             executionBudget.call((signal) =>
               generateWorkItemCandidate({
@@ -884,7 +950,14 @@ export async function executeReviewEngine(opts: {
               }),
             ),
         });
-        return { ...value, cacheStatus };
+        if (stale) staleCacheEntries += 1;
+        return {
+          ...value,
+          cacheStatus,
+          descriptorFingerprint:
+            contractShadow.entries.find((entry) => entry.sourceWorkItemId === item.id)?.descriptorFingerprint ??
+            dispatchDescriptorFingerprint({ snapshotId: opts.scope.id, item, evidenceLocatorTable }, candidateProfile, "candidates"),
+        };
       } catch (error) {
         captureProviderFailure(error, providerFailures);
         const message = `${item.id}: ${error instanceof Error ? error.message : String(error)}`;
@@ -1161,6 +1234,11 @@ export async function executeReviewEngine(opts: {
         enabled: opts.config.cache,
         stage: "verification",
         key: { snapshot: opts.scope.id, candidate, evidence: evidence[candidate.id], profile: verifierProfile },
+        descriptorFingerprint: dispatchDescriptorFingerprint(
+          { snapshotId: opts.scope.id, candidate, evidence: evidence[candidate.id], profile: verifierProfile },
+          verifierProfile,
+          "verification",
+        ),
         run: () =>
           executionBudget.call((signal) =>
             verifyCandidateWithModel({
@@ -1184,6 +1262,12 @@ export async function executeReviewEngine(opts: {
       });
       const judged = judgedStage.value;
       judged.result.cacheStatus = judgedStage.cacheStatus;
+      judged.result.descriptorFingerprint = dispatchDescriptorFingerprint(
+        { snapshotId: opts.scope.id, candidate, evidence: evidence[candidate.id], profile: verifierProfile },
+        verifierProfile,
+        "verification",
+      );
+      if (judgedStage.stale) staleCacheEntries += 1;
       inputTokens += judged.inputTokens;
       outputTokens += judged.outputTokens;
       return judged.result;
@@ -1383,6 +1467,7 @@ export async function executeReviewEngine(opts: {
   ].filter((value): value is "hit" | "miss" => Boolean(value));
   coverage.cacheHits = cacheStatuses.filter((value) => value === "hit").length;
   coverage.cacheMisses = cacheStatuses.filter((value) => value === "miss").length;
+  coverage.staleCacheEntries = staleCacheEntries;
   coverage.structuredRepairs = providerDiagnostics.filter(
     (diagnostic) => diagnostic.failureKind !== "citation-validation",
   ).length;

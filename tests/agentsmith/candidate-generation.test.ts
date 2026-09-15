@@ -74,6 +74,7 @@ describe("candidate structured output", () => {
     });
     expect(result.candidates[0]?.evidenceRequests).toEqual([
       expect.objectContaining({ kind: "definition", symbol: "value", pathHint: "src/a.ts" }),
+      expect.objectContaining({ kind: "implementation", symbol: "value", pathHint: "src/a.ts" }),
     ]);
   });
 

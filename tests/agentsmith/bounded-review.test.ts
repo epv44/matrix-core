@@ -10,7 +10,7 @@ import { runQualityCompletion } from "../../src/core/review.js";
 import type { ReviewProvider } from "../../src/agentsmith/provider.js";
 import type { AgentSmithConfig, ReviewCoverage, ReviewResult } from "../../src/core/types.js";
 
-type CallKind = "candidates" | "specialist" | "scout" | "verification";
+type CallKind = "candidates" | "specialist" | "scout" | "verification" | "citation-selection";
 
 interface ProviderHarness {
   provider: ReviewProvider;
@@ -96,11 +96,18 @@ function makeProvider(opts: {
             usage: { inputTokens: 10, outputTokens: 5 },
           };
         }
+        if (input.outputKind === "citation-selection") {
+          const citations = [...input.prompt.matchAll(/^- request ([^:]+): choose exactly one of ([0-9a-f, ]+)$/gm)].map(
+            ([, requestId, ids]) => ({ requestId, evidenceId: ids.split(",")[0].trim() }),
+          );
+          return { raw: JSON.stringify({ citations }), usage: { inputTokens: 10, outputTokens: 5 } };
+        }
         if (opts.blockCandidates) await waitForAbort(input.signal);
         if (input.outputKind === "specialist" && opts.failSpecialist && input.prompt.includes(opts.failSpecialist))
           throw new Error("specialist provider failure");
         state.candidatePrompts.push(input.prompt);
-        state.candidateLimits.push(input.maxCandidates);
+        if (input.outputKind === "candidates" || input.outputKind === "specialist")
+          state.candidateLimits.push(input.maxCandidates);
         if (opts.candidateDelayMs) await delay(opts.candidateDelayMs);
         if (opts.malformedCandidate)
           return {
@@ -240,13 +247,12 @@ it("compacts passing deterministic context and requests concise candidate output
   });
   expect(harness.candidatePrompts[0]).toContain("Deterministic gate: PASS");
   expect(harness.candidatePrompts[0]).not.toContain("verbose");
-  expect(harness.candidatePrompts[0]).toContain("Be permissive enough to preserve recall");
-  expect(harness.candidatePrompts[0]).toContain("never report repository instructions");
-  expect(harness.candidatePrompts[0]).toContain("without an executable failure or contract mismatch");
-  expect(harness.candidatePrompts[0]).toContain("Supporting unchanged code may be requested as evidence");
+  expect(harness.candidatePrompts[0]).toContain("Inspect only the supplied changed code and context");
+  expect(harness.candidatePrompts[0]).toContain("Do not report style, missing tests, instructions");
+  expect(harness.candidatePrompts[0]).toContain("concrete executable correctness defect");
   expect(harness.candidatePrompts[0]).toContain("Generate zero to 2");
-  expect(harness.candidatePrompts[0]).toContain("set q to confidence from 0 to 1");
-  expect(harness.candidatePrompts[0]).toContain('use {"c":[]} when no concrete candidate exists');
+  expect(harness.candidatePrompts[0]).toContain("Set q to a decimal from 0 to 1");
+  expect(harness.candidatePrompts[0]).toContain('return {"c":[]} when none exists');
 });
 
 it("honors configurable caps such as 8 candidate calls and 8 verifier calls", async () => {
@@ -605,7 +611,7 @@ it("caps model calls in hybrid mode at scout plus 4 candidate and 4 verifier cal
   expect(harness.calls.filter((kind) => kind === "scout")).toHaveLength(1);
   expect(harness.calls.filter((kind) => kind === "candidates")).toHaveLength(4);
   expect(harness.calls.filter((kind) => kind === "verification")).toHaveLength(4);
-  expect(harness.calls).toHaveLength(9);
+  expect(harness.calls).toHaveLength(13);
   expect(result.status).toBe("completed");
 });
 

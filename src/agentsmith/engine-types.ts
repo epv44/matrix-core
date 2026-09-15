@@ -171,6 +171,7 @@ export interface CandidateBatch {
   raw?: string;
   completion?: ProviderCompletionMetadata;
   cacheStatus?: "hit" | "miss";
+  descriptorFingerprint?: string;
   diagnostics?: ProviderFailureDiagnostic[];
   contractDrops?: Array<{
     candidateIndex: number;
@@ -194,6 +195,7 @@ export interface VerificationResult {
   raw?: string;
   completion?: ProviderCompletionMetadata;
   cacheStatus?: "hit" | "miss";
+  descriptorFingerprint?: string;
   diagnostics?: ProviderFailureDiagnostic[];
   citationRepairAttempted?: boolean;
   providerInvocations?: number;
@@ -257,6 +259,7 @@ export interface EngineExecution {
     completion?: ProviderCompletionMetadata;
     diagnostics?: ProviderFailureDiagnostic[];
     cacheStatus?: "hit" | "miss";
+    descriptorFingerprint?: string;
   };
   workItems: ReviewWorkItem[];
   candidateBatches: CandidateBatch[];
@@ -310,6 +313,7 @@ export interface ContractShadowAuditEntry {
   sourceWorkItemId: string;
   taskId: string;
   descriptorHash: string;
+  descriptorFingerprint?: string;
   serializedDescriptor: string;
   validation: { valid: true } | { valid: false; error: string };
   legacyInputFingerprint: string;
