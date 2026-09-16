@@ -16,6 +16,9 @@ describe("AgentSmith CLI migration", () => {
     expect(packageJson.scripts?.["eval:agentsmith"]).toBeUndefined();
     expect(cliSource).toContain('.option("--target <target>"');
     expect(cliSource).toContain('.option("--suite <suite>"');
+    expect(cliSource).toContain('.option("--tier <tier>"');
+    expect(cliSource).toContain('.option("--stage <stage...>"');
+    expect(cliSource).toContain('.option("--repeat <count>"');
     expect(cliSource).not.toContain('.command("suite")');
     expect(cliSource).not.toContain("runCanonicalEvalSuite");
   });

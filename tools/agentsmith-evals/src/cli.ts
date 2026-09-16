@@ -149,10 +149,20 @@ async function runTargetEval(opts: {
   createBaseline?: string;
   root: string;
   progress?: boolean;
+  tier?: EvalReplayMode;
+  stages?: EvalStage[];
+  repeat?: number;
 }) {
   if (opts.target !== "agentsmith") throw new Error(`Unsupported eval target: ${opts.target ?? "<missing>"}`);
   if (!opts.suite) throw new Error("--suite is required");
   if (opts.baseline && opts.createBaseline) throw new Error("--baseline cannot be combined with --create-baseline");
+  const replay = opts.tier ?? "live";
+  if (!["stage", "recorded", "isolated", "live"].includes(replay)) throw new Error(`Invalid tier: ${replay}`);
+  const repeat = opts.repeat ?? 1;
+  if (!Number.isInteger(repeat) || repeat < 1) throw new Error(`Invalid repeat count: ${repeat}`);
+  if (opts.stages?.some((stage) => !stages.includes(stage))) throw new Error("Invalid pipeline stage");
+  if ((opts.baseline || opts.createBaseline) && (replay !== "live" || opts.stages?.length))
+    throw new Error("Suite baselines are only supported for the complete live suite");
   const repositoryRoot = root(opts.root);
   const baselinePath = opts.baseline ? path.resolve(repositoryRoot, opts.baseline) : null;
   if (baselinePath && !fs.existsSync(baselinePath)) throw new Error(`Baseline file not found: ${baselinePath}`);
@@ -168,6 +178,9 @@ async function runTargetEval(opts: {
     root: repositoryRoot,
     suite: opts.suite,
     modelTarget: opts.model,
+    replay,
+    stages: opts.stages,
+    repeat,
     output: jsonOutput,
     baseline,
     baselineOutput: opts.createBaseline,
@@ -330,6 +343,9 @@ program
   .option("--create-baseline <path>", "Create an observational baseline from a complete suite run")
   .option("--root <path>", "MatrixCore repository root", process.cwd())
   .option("--no-progress", "Disable live progress updates")
+  .option("--tier <tier>", "Suite replay tier: stage, recorded, isolated, or live", "live")
+  .option("--stage <stage...>", "Run only the selected pipeline stage(s)")
+  .option("--repeat <count>", "Runs per case", (value) => Number(value), 1)
   .action(async (opts) => {
     if (!opts.target && !opts.suite) throw new Error("--target agentsmith and --suite <registered-suite> are required");
     if (opts.model !== "small" && opts.model !== "large") throw new Error(`Invalid model target: ${opts.model}`);

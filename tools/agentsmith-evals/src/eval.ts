@@ -476,9 +476,18 @@ export async function runEvalCases(opts: {
                 mode,
               })
             : await execute(stageReplay?.goldenCandidates);
+          // In an isolated candidate-stage run, the normal execution is seeded
+          // with golden candidates so downstream stages can be replayed. The
+          // candidate metrics themselves must come from the unseeded model
+          // execution, otherwise the evaluator reports the oracle path rather
+          // than the candidate contract under test.
+          const metricExecution =
+            opts.stages?.length === 1 && opts.stages[0] === "candidates" && candidateExecution
+              ? candidateExecution
+              : execution;
           const promotedRejectedCandidates = rejectedCandidates
             .filter((candidate) =>
-              execution.result.findings.some(
+              metricExecution.result.findings.some(
                 (finding) =>
                   finding.file === candidate.file &&
                   finding.line >= candidate.lineStart &&
@@ -492,30 +501,30 @@ export async function runEvalCases(opts: {
             ? undefined
             : collectEvalMetrics({
                 scope: trace.scope,
-                result: execution.result as Awaited<ReturnType<typeof executeReviewEngine>>["result"],
-                execution: execution.execution,
+                result: metricExecution.result as Awaited<ReturnType<typeof executeReviewEngine>>["result"],
+                execution: metricExecution.execution,
                 durationMs,
               });
-          const findingMetrics = scoreFindings(execution.result.findings, expectedFindings);
+          const findingMetrics = scoreFindings(metricExecution.result.findings, expectedFindings);
           const contractShadow = buildContractShadowAudit({
-            execution: execution.execution,
-            result: execution.result as Awaited<ReturnType<typeof executeReviewEngine>>["result"],
+            execution: metricExecution.execution,
+            result: metricExecution.result as Awaited<ReturnType<typeof executeReviewEngine>>["result"],
           });
           const coverageBudgetFailure = isCoverageBudgetFailure({
-            coverage: execution.result.coverage,
-            errors: execution.execution.errors,
-            providerFailures: execution.execution.providerFailures,
-            incompleteReasons: execution.result.incompleteReasons,
+            coverage: metricExecution.result.coverage,
+            errors: metricExecution.execution.errors,
+            providerFailures: metricExecution.execution.providerFailures,
+            incompleteReasons: metricExecution.result.incompleteReasons,
           });
           const stage1 = scoreStage1Run({
             goldFindings: expectedFindings,
-            workItems: execution.execution.workItems,
-            candidates: execution.execution.candidates,
-            verifiedFindings: execution.result.findings,
+            workItems: metricExecution.execution.workItems,
+            candidates: metricExecution.execution.candidates,
+            verifiedFindings: metricExecution.result.findings,
             coverageBudgetFailure,
           });
           const inspectionTargets = scoreInspectionTargets(
-            execution.execution,
+            metricExecution.execution,
             definition.expectations.planning ?? definition.expectations.graph ?? { files: [], symbols: [], edges: [] },
           );
           let stages = evaluateStages({
@@ -537,7 +546,7 @@ export async function runEvalCases(opts: {
           });
           const recordedMisses =
             replay === "recorded"
-              ? (execution.result.errors ?? []).filter((message) => /Recorded replay miss/.test(message))
+              ? (metricExecution.result.errors ?? []).filter((message) => /Recorded replay miss/.test(message))
               : [];
           if (recordedMisses.length) {
             const dependentStages = new Set<EvalStage>([
@@ -553,7 +562,7 @@ export async function runEvalCases(opts: {
                 : stage,
             );
           }
-          const executionStatus = execution.result.status;
+          const executionStatus = metricExecution.result.status;
           const oracleResolutions = deterministicOnly
             ? []
             : evaluateOracleResolutions({
@@ -571,23 +580,23 @@ export async function runEvalCases(opts: {
             executionStatus,
             oracleResolutions,
             stages,
-            errors: recordedMisses.length ? [] : execution.result.errors,
+            errors: recordedMisses.length ? [] : metricExecution.result.errors,
             incompatibilities: recordedMisses,
           });
           results.push({
             mode,
             tier: replay,
             iteration,
-            outcome: execution.result.outcome ?? "not-applicable",
+            outcome: metricExecution.result.outcome ?? "not-applicable",
             executionStatus,
             evalStatus,
             candidateResolution: primaryResolution?.resolution ?? null,
             reasonCode: primaryResolution?.reasonCode ?? null,
             oracleSatisfied: oracleResolutions.length ? oracleResolutions.every((item) => item.oracleSatisfied) : null,
             oracleResolutions,
-            findings: execution.result.findings,
-            coverage: execution.result.coverage,
-            incompleteReasons: execution.result.incompleteReasons ?? [],
+            findings: metricExecution.result.findings,
+            coverage: metricExecution.result.coverage,
+            incompleteReasons: metricExecution.result.incompleteReasons ?? [],
             durationMs,
             metrics: findingMetrics,
             stage1,
@@ -599,13 +608,13 @@ export async function runEvalCases(opts: {
               scored && replay !== "stage" && !recordedMisses.length && Boolean(definition.expectations.aggregation),
             outcomeCorrect:
               !deterministicOnly && replay !== "stage" && !recordedMisses.length && expectedOutcome
-                ? execution.result.outcome === expectedOutcome
+                ? metricExecution.result.outcome === expectedOutcome
                 : null,
             promotedRejectedCandidates,
-            inputTokens: execution.execution.inputTokens,
-            outputTokens: execution.execution.outputTokens,
-            diagnostics: evaluationDiagnostics(execution),
-            errors: recordedMisses.length ? [] : (execution.result.errors ?? []),
+            inputTokens: metricExecution.execution.inputTokens,
+            outputTokens: metricExecution.execution.outputTokens,
+            diagnostics: evaluationDiagnostics(metricExecution),
+            errors: recordedMisses.length ? [] : (metricExecution.result.errors ?? []),
             incompatibilities: recordedMisses,
             evaluationRole: scored ? ("scored" as const) : ("diagnostic" as const),
             provenance: {
@@ -615,9 +624,9 @@ export async function runEvalCases(opts: {
               policyHash: policy.policyHash,
               agentSmithProfileHash: policy.agentSmith.hash,
               strategyHash: AGENTSMITH_STRATEGY_HASH,
-              graphSchemaVersion: execution.execution.graphSnapshot.schemaVersion,
-              graphProviderVersions: execution.execution.graphSnapshot.providerVersions,
-              rankingConfig: execution.execution.rankingConfig ?? null,
+              graphSchemaVersion: metricExecution.execution.graphSnapshot.schemaVersion,
+              graphProviderVersions: metricExecution.execution.graphSnapshot.providerVersions,
+              rankingConfig: metricExecution.execution.rankingConfig ?? null,
               stageReplaySha256: definition.stageReplay?.sha256 ?? null,
               models: config.model_profiles.map((profile) => ({ id: profile.id, model: profile.model })),
             },

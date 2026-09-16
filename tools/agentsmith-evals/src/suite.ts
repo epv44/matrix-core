@@ -1283,6 +1283,9 @@ export async function runEvalSuite(opts: {
   root: string;
   suite: string;
   modelTarget: EvalModelTarget;
+  replay?: EvalReplayMode;
+  stages?: EvalStage[];
+  repeat?: number;
   label?: string;
   output?: string;
   baseline?: EvalSuiteBaseline;
@@ -1327,7 +1330,10 @@ export async function runEvalSuite(opts: {
     provider: opts.provider,
   });
   const mode: EvalMode = opts.modelTarget === "small" ? "partitioned-interactions" : "holistic";
-  const tiers = [{ tier: "live" as const, repetitions: 1, deterministic: false }];
+  const replay = opts.replay ?? "live";
+  const repeat = Math.max(1, opts.repeat ?? 1);
+  const deterministic = replay === "stage" || replay === "recorded";
+  const tiers = [{ tier: replay, repetitions: repeat, deterministic }];
   const runner = opts.runner ?? runEvalCases;
   const suiteRunId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID()}`;
   const statusFile = suiteStatusPath(opts.root, suiteRunId);
@@ -1351,8 +1357,9 @@ export async function runEvalSuite(opts: {
         root: opts.root,
         slugs,
         modes: [mode],
-        repeat: 1,
-        replay: "live",
+        repeat,
+        replay,
+        stages: opts.stages,
         label: opts.label,
         allowDrafts: false,
         modelTarget: opts.modelTarget,
@@ -1395,7 +1402,13 @@ export async function runEvalSuite(opts: {
     executionStatus: summarizeRuntimeStatus(suiteResults),
     diagnosticStatus: status.diagnosticStatus,
     validation,
-    configuration: { suite: opts.suite, modelTarget: opts.modelTarget, modes: [mode], tiers },
+    configuration: {
+      suite: opts.suite,
+      modelTarget: opts.modelTarget,
+      modes: [mode],
+      tiers,
+      ...(opts.stages?.length ? { stages: opts.stages } : {}),
+    },
     corpus: { active: slugs, drafts: [], activeCount: slugs.length, draftCount: 0, activeHash: corpusHash(opts.root, slugs), evaluatedHash: corpusHash(opts.root, slugs) },
     evaluation: serializedEvaluation(status),
     execution: {
