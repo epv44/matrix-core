@@ -15,6 +15,12 @@ If these documents conflict, `AGENTS.md` and the existing roadmap constraints wi
 
 Implementation agents must not edit this plan or its promotion criteria while implementing a phase. Changes to promotion criteria require a separate, human-reviewed documentation change before implementation begins.
 
+## Campaign status: paused after Phase 5
+
+The candidate-quality campaign is paused after Phase 5. Phase 5 relationship-preserving packing was archived without promotion because the three-repetition comparison produced no candidate-recall, precision, or verified-recall improvement. The findings and historical artifacts are preserved in [`docs/phase-5-relationship-packing-findings.md`](./phase-5-relationship-packing-findings.md).
+
+The host-default path remains authoritative and no baseline was replaced. Phase 6 and later phases must not be implemented or evaluated as promotion candidates until a separately reviewed recall-and-precision improvement direction is approved. This pause does not change the Phase 6 design; it suspends execution of that design.
+
 ## Evidence motivating the campaign
 
 The latest complete suite artifact available when this plan was written was `.quality/evals/component-small-v4.json`. It recorded:
@@ -415,7 +421,7 @@ The model result envelope carries the expected descriptor fingerprint. The engin
 - Existing candidate/finding results and all quality metrics remain unchanged or improve.
 - Calls, tokens, latency, partials, and errors remain unchanged or improve.
 
-# Phase 5 — Relationship-Preserving Unit Packing
+# Phase 5 — Relationship-Preserving Unit Packing (Archived; Not Promoted)
 
 ### Objective
 
@@ -461,7 +467,7 @@ Packing may improve utilization but must not recompute Ranking scores or let Sel
 - Calls, tokens, latency, omissions, partials, and errors remain unchanged or improve.
 - No previously passing case regresses.
 
-# Phase 6 — Eval-Qualified Routing and Shadow Promotion
+# Phase 6 — Eval-Qualified Routing and Shadow Promotion (Paused)
 
 ### Objective
 
