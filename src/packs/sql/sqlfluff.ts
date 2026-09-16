@@ -145,11 +145,23 @@ export const sqlfluffPlugin: QualityPlugin = {
       });
       const targets = [...standalone, ...generated.keys()];
       if (targets.length > 0) {
+        const templaterConfig = path.join(temporary, "sqlfluff-project.cfg");
+        const options = Object.entries(facet.templater_options ?? {});
+        if (options.length > 0) {
+          const section = options
+            .map(([key, value]) => `${key} = ${value}`)
+            .join("\n");
+          fs.writeFileSync(
+            templaterConfig,
+            `[sqlfluff:templater:${facet.templater}]\n${section}\n`,
+          );
+        }
         const args = [
           "lint",
           "--format",
           "json",
           ...(ctx.policyCheck?.args ?? []),
+          ...(options.length > 0 ? ["--config", templaterConfig] : []),
           "--dialect",
           facet.dialect,
           "--templater",

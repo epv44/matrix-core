@@ -33,6 +33,7 @@ class Extractor(ast.NodeVisitor):
     def __init__(self, filename: str) -> None:
         self.filename = filename
         self.scopes: list[dict[str, StaticString | None]] = [{}]
+        self.sequences: list[dict[str, tuple[str, ...] | None]] = [{}]
         self.fragments: list[dict[str, object]] = []
         self.unresolved: list[dict[str, object]] = []
 
@@ -40,11 +41,40 @@ class Extractor(ast.NodeVisitor):
     def env(self) -> dict[str, StaticString | None]:
         return self.scopes[-1]
 
+    @property
+    def sequence_env(self) -> dict[str, tuple[str, ...] | None]:
+        return self.sequences[-1]
+
     def resolve(self, node: ast.AST) -> StaticString | None:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             return StaticString(node.value, node.lineno)
         if isinstance(node, ast.Name):
             return self.env.get(node.id)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_quote"
+            and len(node.args) == 1
+        ):
+            value = self.resolve(node.args[0])
+            if value is not None:
+                return StaticString('"' + value.value.replace('"', '""') + '"', value.line)
+        if isinstance(node, ast.JoinedStr):
+            parts: list[str] = []
+            line = node.lineno
+            for value in node.values:
+                if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                    parts.append(value.value)
+                    continue
+                if isinstance(value, ast.FormattedValue):
+                    formatted = self.resolve(value.value)
+                    if formatted is None:
+                        return None
+                    parts.append(formatted.value)
+                    line = min(line, formatted.line)
+                    continue
+                return None
+            return StaticString("".join(parts), line)
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
             left = self.resolve(node.left)
             right = self.resolve(node.right)
@@ -56,14 +86,23 @@ class Extractor(ast.NodeVisitor):
         if isinstance(target, ast.Name):
             self.env[target.id] = value
 
+    def bind_sequence(self, target: ast.AST, value: tuple[str, ...] | None) -> None:
+        if isinstance(target, ast.Name):
+            self.sequence_env[target.id] = value
+
     def visit_Assign(self, node: ast.Assign) -> None:
         value = self.resolve(node.value)
+        sequence = self.resolve_sequence(node.value)
         for target in node.targets:
             self.bind(target, value)
+            self.bind_sequence(target, sequence)
         self.generic_visit(node.value)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         self.bind(node.target, self.resolve(node.value) if node.value else None)
+        self.bind_sequence(
+            node.target, self.resolve_sequence(node.value) if node.value else None
+        )
         if node.value:
             self.generic_visit(node.value)
 
@@ -74,7 +113,31 @@ class Extractor(ast.NodeVisitor):
         if isinstance(node.op, ast.Add) and current is not None and addition is not None:
             value = StaticString(current.value + addition.value, current.line)
         self.bind(node.target, value)
+        self.bind_sequence(node.target, None)
         self.generic_visit(node.value)
+
+    def resolve_sequence(self, node: ast.AST | None) -> tuple[str, ...] | None:
+        if node is None:
+            return None
+        if isinstance(node, ast.Name):
+            return self.sequence_env.get(node.id)
+        if isinstance(node, (ast.Tuple, ast.List)):
+            values = []
+            for element in node.elts:
+                resolved = self.resolve(element)
+                if resolved is None:
+                    return None
+                values.append(resolved.value)
+            return tuple(values)
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "reversed"
+            and len(node.args) == 1
+        ):
+            sequence = self.resolve_sequence(node.args[0])
+            return tuple(reversed(sequence)) if sequence is not None else None
+        return None
 
     def visit_If(self, node: ast.If) -> None:
         self.visit(node.test)
@@ -88,11 +151,28 @@ class Extractor(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self.scopes.append(dict(self.env))
+        self.sequences.append(dict(self.sequence_env))
         for statement in node.body:
             self.visit(statement)
+        self.sequences.pop()
         self.scopes.pop()
 
     visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_For(self, node: ast.For) -> None:
+        sequence = self.resolve_sequence(node.iter)
+        if sequence is None:
+            self.generic_visit(node)
+            return
+        for value in sequence:
+            self.bind(node.target, StaticString(value, node.iter.lineno))
+            self.bind_sequence(node.target, None)
+            for statement in node.body:
+                self.visit(statement)
+        self.bind(node.target, None)
+        self.bind_sequence(node.target, None)
+        for statement in node.orelse:
+            self.visit(statement)
 
     def visit_Call(self, node: ast.Call) -> None:
         sink = node.func.attr if isinstance(node.func, ast.Attribute) else None

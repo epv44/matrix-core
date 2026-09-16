@@ -78,4 +78,24 @@ describe("v2 project manifest", () => {
     expect(() => resolveConfig({ cwd: root })).toThrow(/Invalid MatrixCore v2 manifest/);
     fs.rmSync(root, { recursive: true, force: true });
   });
+
+  it("accepts SQLFluff templater options and preserves them in application metadata", () => {
+    const root = temp();
+    fs.writeFileSync(
+      path.join(root, "quality.yaml"),
+      "version: 2\nproject: app\napplication:\n  sql:\n    - root: finance\n      dialect: postgres\n      templater: placeholder\n      templater_options:\n        param_style: percent\n      sources: [python]\n",
+    );
+    expect(resolveConfig({ cwd: root }).config.application).toEqual({
+      sql: [
+        {
+          root: "finance",
+          dialect: "postgres",
+          templater: "placeholder",
+          templater_options: { param_style: "percent" },
+          sources: ["python"],
+        },
+      ],
+    });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
 });

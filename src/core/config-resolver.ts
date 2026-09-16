@@ -19,6 +19,7 @@ const ProjectManifestSchema = z
                 root: z.string().trim().min(1),
                 dialect: z.string().trim().min(1),
                 templater: z.enum(["raw", "jinja", "python", "placeholder"]),
+                templater_options: z.record(z.string(), z.string()).optional(),
                 sources: z.array(z.enum(["files", "python"])).min(1),
               })
               .strict(),

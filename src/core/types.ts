@@ -83,6 +83,7 @@ export interface SqlApplicationFacet {
   root: string;
   dialect: string;
   templater: "raw" | "jinja" | "python" | "placeholder";
+  templater_options?: Record<string, string>;
   sources: SqlSourceKind[];
 }
 export interface ApplicationConfig {
@@ -120,6 +121,7 @@ export interface SqlWorkspaceFacet {
   sourceRoot: string;
   dialect: string;
   templater: "raw" | "jinja" | "python" | "placeholder";
+  templater_options?: Record<string, string>;
   sources: SqlSourceKind[];
   toolEnvironment: ToolEnvironment;
   resolutionEvidence: ResolutionEvidence[];

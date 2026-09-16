@@ -249,6 +249,7 @@ function attachSqlFacets(root: string, workspaces: LanguageWorkspace[], applicat
       sourceRoot: idPath,
       dialect: config.dialect,
       templater: config.templater,
+      templater_options: config.templater_options,
       sources: [...config.sources].sort(),
       files: relative(root, files),
     };
@@ -258,6 +259,7 @@ function attachSqlFacets(root: string, workspaces: LanguageWorkspace[], applicat
       sourceRoot,
       dialect: config.dialect,
       templater: config.templater,
+      templater_options: config.templater_options,
       sources: [...config.sources].sort() as SqlWorkspaceFacet["sources"],
       toolEnvironment: { ...environment, root: path.relative(root, environment.root) || "." },
       resolutionEvidence: [

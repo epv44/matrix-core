@@ -89,6 +89,51 @@ describe.runIf(process.platform !== "win32" && !!python)("new centrally owned Py
     }
   });
 
+  it("passes SQLFluff templater options through a temporary config", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrixcore-sql-options-"));
+    try {
+      const fake = path.join(root, "sqlfluff");
+      executable(
+        fake,
+        [
+          'const fs = require("node:fs");',
+          'const config = process.argv[process.argv.indexOf("--config") + 1];',
+          'if (!fs.readFileSync(config, "utf8").includes("param_style = percent")) process.exit(7);',
+          'process.stdout.write("[]");',
+        ].join("\n"),
+      );
+      fs.writeFileSync(path.join(root, "query.sql"), "SELECT 1;\n");
+      const owner = workspace(root, { sqlfluff: fake });
+      const facet: SqlWorkspaceFacet = {
+        id: "sql:.",
+        ownerWorkspaceId: owner.id,
+        sourceRoot: root,
+        dialect: "postgres",
+        templater: "placeholder",
+        templater_options: { param_style: "percent" },
+        sources: ["files"],
+        toolEnvironment: { kind: "python-venv", root, binaries: { python: python!, sqlfluff: fake } },
+        resolutionEvidence: [],
+        resolutionHash: "sql",
+      };
+      owner.sqlFacets = [facet];
+      const result = await sqlfluffPlugin.run(
+        {
+          root,
+          configRoot: root,
+          full: true,
+          workspace: owner,
+          sqlFacet: facet,
+          policyCheck: { id: "sql.sqlfluff", language: "sql", tool: "sqlfluff", requiredVersion: "4.2.2", args: [] },
+        },
+        new Map([["sqlfluff", { name: "sqlfluff", found: true, required: true }]]),
+      );
+      expect(result.status).toBe("PASS");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("isolates deptry from project quality configuration and reports only DEP004", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "matrixcore-deptry-plugin-"));
     try {
