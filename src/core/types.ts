@@ -594,6 +594,7 @@ export interface ReviewIncompleteReason {
     | "provider-failure"
     | "timeout"
     | "unfinished-work-item"
+    | "insufficient-context"
     | "unadjudicated-candidate"
     | "evidence-packing-budget"
     | "citation-validation-failure"

@@ -1507,6 +1507,12 @@ export async function executeReviewEngine(opts: {
       id: item.id,
       detail: "Selected candidate-generation work item did not complete.",
     });
+  for (const batch of candidateBatches.filter((batch) => batch.candidateState === "insufficient_context"))
+    incompleteReasons.push({
+      kind: "insufficient-context",
+      id: batch.sourceId,
+      detail: "Candidate generator reported insufficient context for the selected review task.",
+    });
   for (const candidate of omittedCandidates.filter(
     (item) => tokenOmittedCandidates.includes(item) || item.severity === "critical" || item.severity === "high",
   ))

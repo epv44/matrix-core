@@ -27,6 +27,7 @@ const incompleteReasonLabels: Record<NonNullable<ReviewResult["incompleteReasons
   "evidence-packing-budget": "Required verifier evidence could not fit in the evidence budget",
   "citation-validation-failure": "Verifier citations remained invalid after repair",
   "unfinished-work-item": "Selected review work did not complete",
+  "insufficient-context": "Candidate task reported insufficient context",
   "unadjudicated-candidate": "Candidate verification did not complete",
   "insufficient-evidence": "Candidates lacked sufficient evidence",
   "likely-unpublished": "Likely findings could not be verified",

@@ -250,9 +250,9 @@ it("compacts passing deterministic context and requests concise candidate output
   expect(harness.candidatePrompts[0]).toContain("Inspect only the supplied changed code and context");
   expect(harness.candidatePrompts[0]).toContain("Do not report style, missing tests, instructions");
   expect(harness.candidatePrompts[0]).toContain("concrete executable correctness defect");
-  expect(harness.candidatePrompts[0]).toContain("Generate zero to 2");
-  expect(harness.candidatePrompts[0]).toContain("Set q to a decimal from 0 to 1");
-  expect(harness.candidatePrompts[0]).toContain('return {"c":[]} when none exists');
+  expect(harness.candidatePrompts[0]).toContain("candidates array with at most 2 items");
+  expect(harness.candidatePrompts[0]).toContain("confidence");
+  expect(harness.candidatePrompts[0]).toContain('state set to finding, no_finding, or insufficient_context');
 });
 
 it("honors configurable caps such as 8 candidate calls and 8 verifier calls", async () => {

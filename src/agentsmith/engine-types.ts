@@ -164,6 +164,8 @@ export interface CandidateBatch {
   sourceId: string;
   specialist?: SpecialistReviewerId;
   summary?: string;
+  /** Model-declared candidate-task state; insufficient context is not a clear review. */
+  candidateState?: "finding" | "no_finding" | "insufficient_context";
   candidates: CandidateFinding[];
   inputTokens: number;
   outputTokens: number;

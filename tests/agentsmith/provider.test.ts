@@ -36,16 +36,14 @@ describe("OllamaProvider v2", () => {
       allowedFiles: ["src/a.ts", "docs/deleted.md", "src/a.ts"],
       maxCandidates: 2,
     });
-    const candidates = requestBody.format.properties.c;
+    const candidates = requestBody.format.properties.candidates;
     const item = candidates.items;
-    expect(requestBody.format.required).toEqual(["c"]);
+    expect(requestBody.format.required).toEqual(["state", "candidates"]);
     expect(candidates.maxItems).toBe(2);
-    expect(item.required).toEqual(expect.arrayContaining(["f", "l", "k", "e"]));
-    expect(item.properties.f).toEqual({ type: "string", enum: ["src/a.ts", "docs/deleted.md"] });
-    expect(item.properties.d.maxLength).toBe(280);
-    expect(item.properties.e.maxItems).toBe(2);
-    expect(item.properties.e.items.required).toEqual(["k", "v", "r"]);
-    expect(item.properties.e.items.properties.v.minLength).toBe(1);
+    expect(item.required).toEqual(expect.arrayContaining(["file", "line", "category", "trigger", "invariant", "impact", "confidence"]));
+    expect(item.properties.file).toEqual({ type: "string", enum: ["src/a.ts", "docs/deleted.md"] });
+    expect(item.properties.impact.maxLength).toBe(240);
+    expect(item.properties.trigger.maxLength).toBe(160);
     expect(requestBody.model).toBe(profile.model);
     expect(requestBody.options).toMatchObject({
       num_ctx: profile.contextTokens,
@@ -89,7 +87,7 @@ describe("OllamaProvider v2", () => {
     ]);
   });
 
-  it("uses only supplied semantic selector keys for bounded candidate evidence", async () => {
+  it("does not expose evidence selectors in the bounded candidate schema", async () => {
     const config = agentSmithConfigFromPolicy(true);
     let requestBody: any;
     vi.stubGlobal(
@@ -107,17 +105,10 @@ describe("OllamaProvider v2", () => {
       maxCandidates: 2,
       evidenceSelectorKeys: ["primary-1.definition", "primary-1.implementation"],
     });
-    const evidence = requestBody.format.properties.c.items.properties.e.items;
-    expect(evidence.required).toEqual(["selector", "r"]);
-    expect(evidence.properties.selector).toEqual({
-      type: "string",
-      enum: ["primary-1.definition", "primary-1.implementation"],
-    });
-    expect(evidence.properties.k).toBeUndefined();
-    expect(evidence.properties.i).toBeUndefined();
-    expect(evidence.properties.v).toBeUndefined();
-    expect(evidence.properties.m).toBeUndefined();
-    expect(evidence.properties.p).toBeUndefined();
+    const candidate = requestBody.format.properties.candidates.items;
+    expect(candidate.properties.evidence).toBeUndefined();
+    expect(candidate.properties.selector).toBeUndefined();
+    expect(JSON.stringify(candidate)).not.toContain("primary-1.definition");
   });
 
   it("preserves the strong specialist path without bounded selector IDs", async () => {
@@ -169,11 +160,10 @@ describe("OllamaProvider v2", () => {
       evidenceSelectorKeys: ["primary-1.definition"],
     } as any);
 
-    const evidence = requestBody.format.properties.c.items.properties.e.items;
-    expect(evidence.required).toEqual(["selector", "r"]);
-    expect(evidence.properties.selector).toEqual({ type: "string", enum: ["primary-1.definition"] });
-    expect(evidence.properties.i).toBeUndefined();
-    expect(evidence.properties.v).toBeUndefined();
+    const candidate = requestBody.format.properties.candidates.items;
+    expect(candidate.properties.evidence).toBeUndefined();
+    expect(candidate.properties.selector).toBeUndefined();
+    expect(JSON.stringify(candidate)).not.toContain("primary-1.definition");
     expect(JSON.stringify(requestBody.format)).not.toMatch(/locator-[a-f0-9]{20}/);
   });
 });

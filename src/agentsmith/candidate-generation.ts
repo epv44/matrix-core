@@ -3,7 +3,7 @@ import { sha256 } from "../core/hash.js";
 import type { CandidateFinding, ModelProfile } from "../core/types.js";
 import type { AgentDef } from "./types.js";
 import type { TaskEvidenceSelector } from "./evidence-locators.js";
-import { selectorPromptText, selectorToEvidenceRequest } from "./evidence-locators.js";
+import { selectorToEvidenceRequest } from "./evidence-locators.js";
 import type { ProviderCompletionMetadata, ProviderResponse, ReviewOutputKind, ReviewProvider } from "./provider.js";
 import type {
   CandidateBatch,
@@ -53,6 +53,41 @@ const compactCandidateSchema = z.object({
 function compactCandidatesSchema(maxCandidates: number) {
   return z.object({ c: z.array(compactCandidateSchema).max(maxCandidates).default([]) });
 }
+const simplifiedCandidateSchema = z
+  .object({
+    file: z.string().min(1),
+    line: z.number().int().positive(),
+    endLine: z.number().int().positive().optional(),
+    severity: z.enum(["critical", "high", "medium", "low"]),
+    category: z.enum(["correctness", "security", "performance", "contract"]),
+    trigger: z.string().min(1).max(160),
+    invariant: z.string().min(1).max(240),
+    impact: z.string().min(1).max(240),
+    confidence: z.number().min(0).max(1),
+  })
+  .strict();
+const simplifiedCandidateResponseSchema = z
+  .object({
+    state: z.enum(["finding", "no_finding", "insufficient_context"]),
+    candidates: z.array(simplifiedCandidateSchema).max(2).default([]),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.state === "finding" && value.candidates.length === 0)
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "finding state requires at least one candidate" });
+    if (value.state !== "finding" && value.candidates.length > 0)
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${value.state} state cannot contain candidates` });
+  });
+const workItemCandidateResponseSchema = (maxCandidates: number) =>
+  z.union([
+    simplifiedCandidateResponseSchema,
+    z.object({
+      c: z.array(
+        compactCandidateSchema.extend({ e: z.array(boundedRequestSchema).max(2).default([]) }),
+      ).max(maxCandidates).default([]),
+    }),
+    compactCandidatesSchema(maxCandidates),
+  ]);
 function specialistCandidatesSchema(maxCandidates: number) {
   return z.object({
     summary: z.string().min(1).max(1200),
@@ -314,6 +349,31 @@ function expandCandidate(
   };
 }
 
+function expandSimplifiedCandidate(
+  value: z.infer<typeof simplifiedCandidateSchema>,
+  item: ReviewWorkItem,
+  selectors: readonly TaskEvidenceSelector[],
+): Omit<CandidateFinding, "id"> {
+  const primarySymbol = item.primarySymbols[0]?.qualifiedName;
+  const title = `${value.category} defect: ${value.invariant}`;
+  const description = `Trigger: ${value.trigger} Invariant: ${value.invariant} Impact: ${value.impact}`;
+  return {
+    sourceWorkItemIds: [item.id],
+    sourceReviewers: [],
+    file: value.file,
+    line: value.line,
+    endLine: value.endLine,
+    severity: value.severity,
+    category: value.category,
+    title,
+    description,
+    primarySymbol,
+    ruleId: item.rules[0]?.id,
+    candidateConfidence: value.confidence,
+    evidenceRequests: deterministicEvidenceDefaults(selectors),
+  };
+}
+
 function deterministicEvidenceDefaults(
   selectors: readonly TaskEvidenceSelector[],
   maxRequests = 2,
@@ -401,6 +461,10 @@ function candidateInstructions(maxCandidates: number, includeSummary = false, bo
   return `You are a bounded code-review candidate generator. Inspect only the supplied changed code and context for concrete executable defects: runtime behavior, value flow, failure paths, boundaries, and contracts. For interaction work, compare both sides of every supplied relationship, including callers/callees, producers/consumers, types, schemas, configuration, and tests. Enumerate supplied finite or discriminated values and report a concrete mismatch when changed branching collapses, relabels, or makes a value indistinguishable. Anchor each candidate to the smallest changed line that causes the defect. Do not report style, missing tests, instructions, filenames alone, or hypothetical risks. ${includeSummary ? "Return a concise inspection summary plus candidates; the summary must not claim global approval. " : ""}Use a concrete title naming the broken behavior and its contract or observable impact; do not use only a generic category. Format d as one compact string with three labeled claims: Trigger: <input/value>; Invariant: <violated contract>; Impact: <observable outcome>. Keep d under 240 characters. Generate zero to ${maxCandidates} distinct candidates and return ${empty} when none exists. Set q to a decimal from 0 to 1. ${evidenceInstructions} Every evidence request must name a required fact; claims about callers, consumers, downstream behavior, assumptions, or expectations must request evidence for the exact producer symbol. Return only the required compact JSON, with no prose or Markdown.`;
 }
 
+function simplifiedCandidateInstructions(maxCandidates: number) {
+  return `Inspect only the supplied changed code and context for concrete executable defects. Do not report style, missing tests, instructions, filenames alone, or hypothetical risks. Return exactly one JSON object with state set to finding, no_finding, or insufficient_context and a candidates array with at most ${maxCandidates} items. A finding requires at least one candidate; the other states require an empty candidates array. Each candidate must contain only file, line, optional endLine, severity, category, trigger, invariant, impact, and confidence. The host derives the title, primary symbol, rule identifier, evidence requests, and attribution fields. Do not emit evidence requests, selectors, hashes, symbols, paths with line numbers, suggestions, or prose outside the JSON object.`;
+}
+
 export async function generateSpecialistCandidates(opts: {
   specialist: AgentDef;
   projection: ReviewProjection;
@@ -455,16 +519,7 @@ export async function generateWorkItemCandidate(opts: {
       : "Inspect the changed implementation for concrete local defects.";
   const selectors = opts.allowedEvidenceSelectors ?? [];
   const boundedSelectors = opts.allowedEvidenceSelectors !== undefined;
-  const locatorInstructions = boundedSelectors
-    ? "For this bounded task, every e entry must use {\"selector\":\"semantic selector key\",\"r\":\"short reason\"}. Do not return hashes, symbols, paths, v, m, p, i, k, or s in an evidence entry. Use e=[] when no evidence is needed."
-    : "";
-  const prompt = `${candidateInstructions(opts.maxCandidates, false, boundedSelectors)}\n${directedQuestion(opts.item)}\n${focus}\n${locatorInstructions}\n${selectorPromptText(selectors)}\n\n${workItemText(opts.item)}`;
-  const candidateValueSchema = compactCandidateSchema;
-  const boundedSchema = z.object({
-    c: z.array(
-      candidateValueSchema.extend({ e: z.array(boundedRequestSchema).max(boundedSelectors ? 2 : 0).default([]) }),
-    ).max(opts.maxCandidates).default([]),
-  });
+  const prompt = `${simplifiedCandidateInstructions(opts.maxCandidates)}\n${directedQuestion(opts.item)}\n${focus}\nDo not request more context; reason only from the supplied bounded task.\n\n${workItemText(opts.item)}`;
   const { parsed, response, diagnostics } = await invokeStructured({
     provider: opts.provider,
     profile: opts.profile,
@@ -475,34 +530,40 @@ export async function generateWorkItemCandidate(opts: {
     maxCandidates: opts.maxCandidates,
     evidenceSelectorKeys: selectors.map((selector) => selector.key),
     signal: opts.signal,
-    validate: (value) => (boundedSelectors ? boundedSchema.parse(value) : compactCandidatesSchema(opts.maxCandidates).parse(value)),
+    validate: (value) => workItemCandidateResponseSchema(opts.maxCandidates).parse(value),
   });
   const selectorMap = new Map(selectors.map((selector) => [selector.key, selector]));
   const contractDrops: NonNullable<CandidateBatch["contractDrops"]> = [];
-  const candidates = parsed.c.flatMap((value, candidateIndex) => {
-    try {
-      const candidate = expandCandidate(value, opts.item.id, undefined, selectors.length ? selectorMap : undefined);
-      if (boundedSelectors)
-        candidate.evidenceRequests = [...candidate.evidenceRequests, ...deterministicEvidenceDefaults(selectors)];
-      candidate.evidenceRequests = [...new Map(candidate.evidenceRequests.map((request) => [JSON.stringify(request), request])).values()].slice(0, 2);
-      candidate.primarySymbol ??= opts.item.primarySymbols[0]?.qualifiedName;
-      return [{ ...candidate, id: candidateId(candidate) }];
-    } catch {
-      // A bounded model response that names an unknown or incompatible locator
-      // is an invalid candidate, not a reason to fail the whole review task.
-      // The strict contract rejects it by omission and the eval attributes the
-      // resulting miss to candidate quality.
-      const request = value.e.find((entry) => "selector" in entry || "s" in entry);
-      contractDrops.push({
-        candidateIndex,
-        reason: request ? "unknown-selector" : "invalid-selector",
-        ...(request && "selector" in request ? { selector: request.selector } : {}),
+  const candidates = "state" in parsed
+    ? parsed.candidates.map((value) => {
+        const candidate = expandSimplifiedCandidate(value, opts.item, selectors);
+        return { ...candidate, id: candidateId(candidate) };
+      })
+    : parsed.c.flatMap((value, candidateIndex) => {
+        try {
+          const candidate = expandCandidate(value, opts.item.id, undefined, selectors.length ? selectorMap : undefined);
+          if (boundedSelectors)
+            candidate.evidenceRequests = [...candidate.evidenceRequests, ...deterministicEvidenceDefaults(selectors)];
+          candidate.evidenceRequests = [...new Map(candidate.evidenceRequests.map((request) => [JSON.stringify(request), request])).values()].slice(0, 2);
+          candidate.primarySymbol ??= opts.item.primarySymbols[0]?.qualifiedName;
+          return [{ ...candidate, id: candidateId(candidate) }];
+        } catch {
+          // A bounded model response that names an unknown or incompatible locator
+          // is an invalid candidate, not a reason to fail the whole review task.
+          // The strict contract rejects it by omission and the eval attributes the
+          // resulting miss to candidate quality.
+          const request = value.e.find((entry) => "selector" in entry || "s" in entry);
+          contractDrops.push({
+            candidateIndex,
+            reason: request ? "unknown-selector" : "invalid-selector",
+            ...(request && "selector" in request ? { selector: request.selector } : {}),
+          });
+          return [];
+        }
       });
-      return [];
-    }
-  });
   return {
     sourceId: opts.item.id,
+    candidateState: "state" in parsed ? parsed.state : candidates.length ? "finding" : "no_finding",
     candidates,
     ...response.usage,
     prompt,

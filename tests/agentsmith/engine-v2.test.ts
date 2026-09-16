@@ -147,13 +147,13 @@ describe("unified v2 verification pipeline", () => {
       expect(execution.verification[0].reasoningSummary?.match(/omitted required evidence/g)).toHaveLength(1);
       expect(result.coverage.evidenceRequestsUnresolved).toBe(1);
       expect(result.coverage).toMatchObject({
-        evidenceRequests: 2,
-        evidenceRequestsAttempted: 2,
-        evidenceRequestsSatisfied: 1,
+        evidenceRequests: 3,
+        evidenceRequestsAttempted: 3,
+        evidenceRequestsSatisfied: 2,
         evidenceRequestsPartiallySatisfied: 0,
         evidenceRequestsSkipped: 0,
-        evidenceRecordsResolved: 1,
-        evidenceRecordsPacked: 1,
+        evidenceRecordsResolved: 2,
+        evidenceRecordsPacked: 2,
       });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

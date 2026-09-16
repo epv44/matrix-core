@@ -104,7 +104,7 @@ function outputSchema(
   kind: ReviewOutputKind,
   allowedFiles?: string[],
   maxCandidates = 2,
-  evidenceSelectorKeys?: string[],
+  _evidenceSelectorKeys?: string[],
 ) {
   if (kind === "citation-selection")
     return {
@@ -173,19 +173,45 @@ function outputSchema(
   const candidateOutput = {
     type: "object",
     additionalProperties: false,
-    required: kind === "specialist" ? ["summary", "c"] : ["c"],
+    required: kind === "specialist" ? ["summary", "c"] : ["state", "candidates"],
     properties: {
-      ...(kind === "specialist" ? { summary: { type: "string", minLength: 1, maxLength: 1200 } } : {}),
-      c: {
-        type: "array",
-        maxItems: maxCandidates,
-        items: {
-          type: "object",
-          additionalProperties: false,
-          required: ["f", "l", "s", "k", "t", "d", "q", "e"],
-          properties: compactCandidateProperties(allowedFiles, kind === "candidates" ? evidenceSelectorKeys : undefined),
-        },
-      },
+      ...(kind === "specialist"
+        ? {
+            summary: { type: "string", minLength: 1, maxLength: 1200 },
+            c: {
+              type: "array",
+              maxItems: maxCandidates,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["f", "l", "s", "k", "t", "d", "q", "e"],
+                properties: compactCandidateProperties(allowedFiles),
+              },
+            },
+          }
+        : {
+            state: { type: "string", enum: ["finding", "no_finding", "insufficient_context"] },
+            candidates: {
+              type: "array",
+              maxItems: maxCandidates,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["file", "line", "severity", "category", "trigger", "invariant", "impact", "confidence"],
+                properties: {
+                  file: allowedFiles?.length ? { type: "string", enum: [...new Set(allowedFiles)] } : { type: "string", minLength: 1 },
+                  line: { type: "integer", minimum: 1 },
+                  endLine: { type: "integer", minimum: 1 },
+                  severity: { type: "string", enum: ["critical", "high", "medium", "low"] },
+                  category: { type: "string", enum: ["correctness", "security", "performance", "contract"] },
+                  trigger: { type: "string", minLength: 1, maxLength: 160 },
+                  invariant: { type: "string", minLength: 1, maxLength: 240 },
+                  impact: { type: "string", minLength: 1, maxLength: 240 },
+                  confidence: { type: "number", minimum: 0, maximum: 1 },
+                },
+              },
+            },
+          }),
     },
   };
   return candidateOutput;

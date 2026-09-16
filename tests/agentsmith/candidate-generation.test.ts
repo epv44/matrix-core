@@ -53,6 +53,45 @@ const item: ReviewWorkItem = {
 };
 
 describe("candidate structured output", () => {
+  it("maps the simplified semantic contract to host-owned fields", async () => {
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async () => ({
+        raw: JSON.stringify({
+          state: "finding",
+          candidates: [{
+            file: "src/a.ts",
+            line: 1,
+            severity: "high",
+            category: "correctness",
+            trigger: "input is invalid",
+            invariant: "return must be valid",
+            impact: "caller receives a bad value",
+            confidence: 0.9,
+          }],
+        }),
+        usage: { inputTokens: 10, outputTokens: 10 },
+      }),
+    };
+    const result = await generateWorkItemCandidate({
+      item,
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 2,
+      allowedEvidenceSelectors: buildTaskEvidenceSelectors({ snapshotId: "snapshot-a", workItem: item }),
+    });
+    expect(result.candidateState).toBe("finding");
+    expect(result.candidates[0]).toMatchObject({
+      title: "correctness defect: return must be valid",
+      primarySymbol: "value",
+      description: "Trigger: input is invalid Invariant: return must be valid Impact: caller receives a bad value",
+    });
+    expect(result.candidates[0]?.evidenceRequests).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: "implementation" })]),
+    );
+  });
+
   it("accepts only task-scoped semantic selectors on the small-model path", async () => {
     const selectors = buildTaskEvidenceSelectors({ snapshotId: "snapshot-a", workItem: item });
     const definitionSelector = selectors.find((selector) => selector.key.endsWith(".definition"))!;
@@ -95,8 +134,8 @@ describe("candidate structured output", () => {
     await generateWorkItemCandidate({ item, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 2 });
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain("Bounded question: Does the changed implementation contain one concrete executable correctness defect?");
-    expect(prompts[0]).toContain("Trigger: <input/value>; Invariant: <violated contract>; Impact: <observable outcome>");
-    expect(prompts[0]).toContain("Use a concrete title");
+    expect(prompts[0]).toContain("trigger, invariant, impact, and confidence");
+    expect(prompts[0]).toContain("The host derives the title");
   });
 
   it("repairs one schema-invalid response and expands the required evidence locator", async () => {

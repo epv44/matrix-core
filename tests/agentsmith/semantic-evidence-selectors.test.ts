@@ -132,7 +132,7 @@ describe("semantic evidence selector boundaries", () => {
       allowedEvidenceSelectors: table.selectors,
     });
 
-    expect(result.prompt).toContain("primary-1.definition: definition for produce (src/producer.ts)");
+    expect(result.prompt).not.toContain("primary-1.definition: definition for produce (src/producer.ts)");
     expect(result.prompt).not.toMatch(/locator-[a-f0-9]{20}/);
   });
 
