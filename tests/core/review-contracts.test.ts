@@ -93,6 +93,22 @@ describe("Phase 1 review contracts", () => {
     });
   });
 
+  it("accepts bounded host-derived control-flow context without treating it as a finding", () => {
+    expect(validateReviewTask({
+      ...task,
+      controlFlowDeltas: [{
+        file: "src/a.ts",
+        startLine: 4,
+        endLine: 4,
+        state: "input = null",
+        previousOutcome: "blocked",
+        currentOutcome: "passes",
+      }],
+    }, { existingFiles: files, knownSymbols: ["run"] })).toMatchObject({
+      controlFlowDeltas: [expect.objectContaining({ currentOutcome: "passes" })],
+    });
+  });
+
   it("accepts finding, no_finding, and insufficient_context as distinct states", () => {
     expect(validateCandidateReviewOutput(validOutput(), { existingFiles: files }).status).toBe("finding");
     expect(validateCandidateReviewOutput({ status: "no_finding", findings: [], evidenceNeeds: [], contextRequests: [] }).status).toBe("no_finding");

@@ -5,7 +5,7 @@ import type { AgentSmithConfig, ModelProfile, ReviewFinding } from "../../../src
 import { resolveConfig } from "../../../src/core/config-resolver.js";
 import { resolvePolicyForConfig } from "../../../src/core/resolved-policy.js";
 import { ENGINE_VERSION } from "../../../src/core/meta.js";
-import { OllamaProvider, type ReviewProvider } from "../../../src/agentsmith/provider.js";
+import { createReviewProvider, type ReviewProvider } from "../../../src/agentsmith/provider.js";
 import { executeReviewEngine } from "../../../src/agentsmith/engine.js";
 import { repositoryGraph } from "../../../src/core/graph/index.js";
 import { emptyReviewCoverage } from "../../../src/core/reviewer.js";
@@ -18,7 +18,7 @@ import {
   routeReview,
   selectWorkItems,
 } from "../../../src/agentsmith/projection.js";
-import type { EngineExecution } from "../../../src/agentsmith/engine-types.js";
+import type { CandidateGenerationArm, CandidateInferenceMode, CandidatePromptVariant, EngineExecution } from "../../../src/agentsmith/engine-types.js";
 import { formatAgentSmithReview } from "../../../src/agentsmith/report.js";
 import { AGENTSMITH_STRATEGY_HASH } from "../../../src/agentsmith/strategy.js";
 import { collectEvalMetrics } from "./eval-metrics.js";
@@ -30,6 +30,11 @@ import { aggregateStage1Metrics, scoreStage1Run } from "./stage-1.js";
 import { deriveEvalStatus, evaluateOracleResolutions } from "./oracle-resolution.js";
 import { evaluationStages } from "./case.js";
 import { buildContractShadowAudit } from "./contract-shadow.js";
+import {
+  SUBSTANTIVE_NORMALIZATION_HASH,
+  SUBSTANTIVE_NORMALIZATION_VERSION,
+} from "./substantive/index.js";
+import { applyEvalTreatment } from "./vllm-treatment.js";
 
 export type EvalMode =
   "holistic" | "partitioned-local" | "partitioned-evidence" | "partitioned-interactions" | "hybrid";
@@ -109,14 +114,19 @@ export function scoreInspectionTargets(
   };
 }
 
-export function configureEvalModelTarget(config: AgentSmithConfig, target: EvalModelTarget): AgentSmithConfig {
+export function configureEvalModelTarget(
+  config: AgentSmithConfig,
+  target: EvalModelTarget,
+  candidateModel?: string,
+  verifierModel?: string,
+): AgentSmithConfig {
   const capability = target === "small" ? "small" : "strong";
   const candidates = config.model_profiles.filter((profile) => profile.reviewCapability === capability);
   const candidate = candidates.find((profile) => profile.id === config.models.candidate) ?? candidates[0];
   const verifier = candidates.find((profile) => profile.id === config.models.verifier) ?? candidates[1] ?? candidate;
   if (!candidate || !verifier)
     throw new Error(`AgentSmith ${target} model profile is not configured in the locked policy`);
-  return {
+  const selectedConfig = {
     ...config,
     models: {
       ...config.models,
@@ -124,6 +134,25 @@ export function configureEvalModelTarget(config: AgentSmithConfig, target: EvalM
       verifier: verifier.id,
       ...(target === "small" ? { scout: undefined } : {}),
     },
+  };
+  const overrides = new Map<string, string>();
+  if (candidateModel !== undefined) {
+    const model = candidateModel.trim();
+    if (!model) throw new Error("Candidate model override cannot be empty");
+    overrides.set(candidate.id, model);
+  }
+  if (verifierModel !== undefined) {
+    const model = verifierModel.trim();
+    if (!model) throw new Error("Verifier model override cannot be empty");
+    overrides.set(verifier.id, model);
+  }
+  if (!overrides.size) return selectedConfig;
+  return {
+    ...selectedConfig,
+    model_profiles: selectedConfig.model_profiles.map((profile) => {
+      const model = overrides.get(profile.id);
+      return model === undefined ? profile : { ...profile, model };
+    }),
   };
 }
 
@@ -163,12 +192,21 @@ function requiredProfiles(config: AgentSmithConfig): ModelProfile[] {
 export async function validateEvalModelTarget(opts: {
   config: AgentSmithConfig;
   target: EvalModelTarget;
+  candidateModel?: string;
+  verifierModel?: string;
+  treatment?: string;
   provider?: ReviewProvider;
+  /** Eval-only transformation applied after target and treatment selection. */
+  configTransform?: (config: AgentSmithConfig) => AgentSmithConfig;
 }): Promise<AgentSmithConfig> {
-  const config = configureEvalModelTarget(opts.config, opts.target);
+  const selectedConfig = applyEvalTreatment(
+    configureEvalModelTarget(opts.config, opts.target, opts.candidateModel, opts.verifierModel),
+    opts.treatment,
+  );
+  const config = opts.configTransform ? opts.configTransform(selectedConfig) : selectedConfig;
   const missingProfile = requiredProfiles(config).length < 1;
   if (missingProfile) throw new Error(`AgentSmith ${opts.target} model profile is not configured in the locked policy`);
-  const provider = opts.provider ?? new OllamaProvider(config);
+  const provider = opts.provider ?? createReviewProvider(config);
   const health = await provider.health();
   if (!health.ok) throw new Error(`AgentSmith ${opts.target} provider unavailable: ${health.error ?? "health check failed"}`);
   const installed = new Set<string>(health.models);
@@ -185,6 +223,86 @@ function modeConfig(mode: EvalMode, config: NonNullable<ReturnType<typeof resolv
   cloned.cache = false;
   cloned.mode = mode === "holistic" ? "holistic" : mode === "hybrid" ? "hybrid" : "partitioned";
   return cloned;
+}
+
+function withEvalTimeout(
+  config: NonNullable<ReturnType<typeof resolveConfig>["config"]["agentsmith"]>,
+  timeoutMs?: number,
+) {
+  if (timeoutMs === undefined) return config;
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1) throw new Error(`Invalid eval timeout: ${timeoutMs}`);
+  config.model_profiles = config.model_profiles.map((profile) => ({
+    ...profile,
+    inference: { ...profile.inference, timeoutMs },
+  }));
+  return config;
+}
+
+function withCandidateOutputBudget(
+  config: NonNullable<ReturnType<typeof resolveConfig>["config"]["agentsmith"]>,
+  outputTokens?: number,
+  contextTokens?: number,
+) {
+  if (outputTokens === undefined && contextTokens === undefined) return config;
+  if (outputTokens !== undefined && (!Number.isInteger(outputTokens) || outputTokens < 1))
+    throw new Error(`Invalid candidate output budget: ${outputTokens}`);
+  if (contextTokens !== undefined && (!Number.isInteger(contextTokens) || contextTokens < 1024))
+    throw new Error(`Invalid candidate context budget: ${contextTokens}`);
+  config.model_profiles = config.model_profiles.map((profile) =>
+    profile.id === config.models.candidate
+      ? {
+          ...profile,
+          ...(outputTokens !== undefined ? { requestedOutputTokens: outputTokens } : {}),
+          ...(contextTokens !== undefined ? { contextTokens } : {}),
+        }
+      : profile,
+  );
+  return config;
+}
+
+function withCandidateSampling(
+  config: NonNullable<ReturnType<typeof resolveConfig>["config"]["agentsmith"]>,
+  temperature?: number,
+  topP?: number,
+  topK?: number,
+) {
+  if (temperature === undefined && topP === undefined && topK === undefined) return config;
+  if (temperature !== undefined && (!Number.isFinite(temperature) || temperature < 0 || temperature > 2))
+    throw new Error(`Invalid candidate temperature: ${temperature}`);
+  if (topP !== undefined && (!Number.isFinite(topP) || topP <= 0 || topP > 1))
+    throw new Error(`Invalid candidate top-p: ${topP}`);
+  if (topK !== undefined && (!Number.isInteger(topK) || topK < 1))
+    throw new Error(`Invalid candidate top-k: ${topK}`);
+  config.model_profiles = config.model_profiles.map((profile) =>
+    profile.id === config.models.candidate
+      ? {
+          ...profile,
+          inference: {
+            ...profile.inference,
+            ...(temperature !== undefined ? { temperature } : {}),
+            ...(topP !== undefined ? { topP } : {}),
+            ...(topK !== undefined ? { topK } : {}),
+          },
+        }
+      : profile,
+  );
+  return config;
+}
+
+function completionPerformance(completion: {
+  totalDurationNs?: number | null;
+  promptEvalDurationNs?: number | null;
+  evalDurationNs?: number | null;
+} | undefined, inputTokens: number, outputTokens: number) {
+  const rate = (tokens: number, durationNs: number | null | undefined) =>
+    durationNs && durationNs > 0 ? tokens / (durationNs / 1_000_000_000) : null;
+  return {
+    totalDurationMs: completion?.totalDurationNs && completion.totalDurationNs > 0
+      ? completion.totalDurationNs / 1_000_000
+      : null,
+    promptTokensPerSecond: rate(inputTokens, completion?.promptEvalDurationNs),
+    generationTokensPerSecond: rate(outputTokens, completion?.evalDurationNs),
+  };
 }
 
 type EvaluationResultView = {
@@ -322,6 +440,10 @@ async function prepareDeterministicEvaluation(opts: {
 
 function evaluationDiagnostics(execution: { execution: EngineExecution; result: { incompleteReasons?: unknown[] } }) {
   return {
+    substantiveNormalizer: {
+      version: SUBSTANTIVE_NORMALIZATION_VERSION,
+      hash: SUBSTANTIVE_NORMALIZATION_HASH,
+    },
     graphManifest: execution.execution.graphManifest,
     projection: {
       sourceCode: (execution.execution.sourceProjection ?? execution.execution.projection).code,
@@ -333,10 +455,25 @@ function evaluationDiagnostics(execution: { execution: EngineExecution; result: 
     candidates: execution.execution.candidates,
     candidateCalls: execution.execution.candidateBatches.map((batch) => ({
       sourceId: batch.sourceId,
+      candidateState: batch.candidateState,
       candidateIds: batch.candidates.map((candidate) => candidate.id),
       inputTokens: batch.inputTokens,
       outputTokens: batch.outputTokens,
+      prompt: batch.prompt,
+      contract: batch.contract,
+      raw: batch.raw,
       completion: batch.completion,
+      performance: completionPerformance(batch.completion, batch.inputTokens, batch.outputTokens),
+      thinking: batch.thinking,
+      reasoningSummary: batch.reasoningSummary,
+      reasonerRaw: batch.reasonerRaw,
+      reasonerThinking: batch.reasonerThinking,
+      reasonerCompletion: batch.reasonerCompletion,
+      conclusion: batch.conclusion,
+      formatterRaw: batch.formatterRaw,
+      formatterCompletion: batch.formatterCompletion,
+      reasonerDiagnostics: batch.reasonerDiagnostics,
+      formatterDiagnostics: batch.formatterDiagnostics,
       cacheStatus: batch.cacheStatus,
       descriptorFingerprint: batch.descriptorFingerprint,
       diagnostics: batch.diagnostics,
@@ -386,6 +523,24 @@ export async function runEvalCases(opts: {
   label?: string;
   allowDrafts?: boolean;
   modelTarget?: EvalModelTarget;
+  candidateModel?: string;
+  verifierModel?: string;
+  candidateArm?: CandidateGenerationArm;
+  inferenceMode?: CandidateInferenceMode;
+  candidatePromptVariant?: CandidatePromptVariant;
+  timeoutMs?: number;
+  candidateOutputTokens?: number;
+  candidateContextTokens?: number;
+  candidateTemperature?: number;
+  candidateTopP?: number;
+  candidateTopK?: number;
+  candidateThinkingTokens?: number;
+  thinkingStream?: boolean;
+  controlFlowDelta?: boolean;
+  treatment?: string;
+  thinkingTraceDir?: string;
+  /** Eval-only configuration replacement, used by diagnostic providers. */
+  configTransform?: (config: AgentSmithConfig) => AgentSmithConfig;
   onProgress?: (event: EvalProgressEvent) => void | Promise<void>;
 }) {
   const slugs = opts.slugs?.length ? opts.slugs : listEvalCases(opts.root);
@@ -418,10 +573,23 @@ export async function runEvalCases(opts: {
           cleanup = replayWorkspace.cleanup;
           const resolved = resolveConfig({ cwd: replayWorkspace.root });
           const policy = resolvePolicyForConfig(resolved);
-          const targetConfig = opts.modelTarget
-            ? configureEvalModelTarget(resolved.config.agentsmith!, opts.modelTarget)
-            : resolved.config.agentsmith!;
-          const config = modeConfig(mode, targetConfig);
+          const selectedConfig = applyEvalTreatment(
+            opts.modelTarget
+              ? configureEvalModelTarget(resolved.config.agentsmith!, opts.modelTarget, opts.candidateModel, opts.verifierModel)
+              : resolved.config.agentsmith!,
+            opts.treatment,
+          );
+          const targetConfig = opts.configTransform ? opts.configTransform(selectedConfig) : selectedConfig;
+          const config = withCandidateSampling(
+            withCandidateOutputBudget(
+              withEvalTimeout(modeConfig(mode, targetConfig), opts.timeoutMs),
+              opts.candidateOutputTokens,
+              opts.candidateContextTokens,
+            ),
+            opts.candidateTemperature,
+            opts.candidateTopP,
+            opts.candidateTopK,
+          );
           const stageReplay = replay === "isolated" ? readStageReplay(opts.root, slug, definition) : undefined;
           const componentInputs = stageReplay?.componentInputs;
           const declaredStages = evaluationStages(definition);
@@ -447,7 +615,7 @@ export async function runEvalCases(opts: {
               ? new RecordedReviewProvider(trace)
               : replay === "stage"
                 ? new PlannerReviewProvider(config)
-                : new OllamaProvider(config));
+                : createReviewProvider(config));
           const execute = (seedCandidates?: ReturnType<typeof readStageReplay>["goldenCandidates"]) =>
             executeReviewEngine({
               root: replayWorkspace.root,
@@ -459,11 +627,25 @@ export async function runEvalCases(opts: {
               assetRoot: policy.agentSmith.assetRoot,
               deterministicReport: trace.deterministicReport,
               enforceWorkspaceVersion: false,
-              variant: {
+                variant: {
                 includeInteractions: !["partitioned-local", "partitioned-evidence"].includes(mode),
                 resolveEvidence: mode !== "partitioned-local",
-                ...(seedCandidates ? { seedCandidates } : {}),
-              },
+                  ...(seedCandidates ? { seedCandidates } : {}),
+                  ...(opts.candidateArm ? { candidateArm: opts.candidateArm } : {}),
+                  ...(opts.inferenceMode ? { inferenceMode: opts.inferenceMode } : {}),
+                  ...(opts.candidatePromptVariant ? { candidatePromptVariant: opts.candidatePromptVariant } : {}),
+                  ...(opts.candidateThinkingTokens !== undefined ? { candidateThinkingTokens: opts.candidateThinkingTokens } : {}),
+                  ...(opts.controlFlowDelta ? { controlFlowDelta: true } : {}),
+                  ...(opts.thinkingStream
+                    ? {
+                        stream: true,
+                        // A live suite can repeat one fixture. Isolate each attempt so
+                        // a later call cannot append its reasoning/content to an earlier
+                        // trace and make post-hoc diagnosis ambiguous.
+                        streamTraceDir: path.join(opts.thinkingTraceDir!, slug, `r${iteration + 1}-${mode}`),
+                      }
+                    : {}),
+                },
             });
           const candidateExecution = replay === "isolated" && !deterministicOnly ? await execute() : undefined;
           const execution = deterministicOnly

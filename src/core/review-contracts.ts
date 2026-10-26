@@ -103,6 +103,18 @@ export interface ReviewBudget {
   modelCalls: number;
   contextExpansions: number;
 }
+/**
+ * A host-derived, mechanically evaluated change in a bounded guard. This is
+ * review context, not a finding or a policy claim.
+ */
+export interface ControlFlowDelta {
+  file: string;
+  startLine: number;
+  endLine: number;
+  state: string;
+  previousOutcome: "blocked" | "passes";
+  currentOutcome: "blocked" | "passes";
+}
 export interface ReviewTask {
   taskId: string;
   taskVersion: string;
@@ -120,6 +132,7 @@ export interface ReviewTask {
   expansionBudget: number;
   outputContractVersion: string;
   evidenceNeeds: EvidenceNeed[];
+  controlFlowDeltas?: ControlFlowDelta[];
   budget: ReviewBudget;
 }
 export interface CandidateReviewFinding {
@@ -253,6 +266,17 @@ export const evidenceNeedSchema = z
   .strict();
 const positiveBudget = z.number().int().positive();
 const nonNegativeBudget = z.number().int().min(0);
+const controlFlowDeltaSchema = z
+  .object({
+    file: workspacePath,
+    startLine: line,
+    endLine: line,
+    state: text(500),
+    previousOutcome: z.enum(["blocked", "passes"]),
+    currentOutcome: z.enum(["blocked", "passes"]),
+  })
+  .strict()
+  .refine((value) => value.endLine >= value.startLine, "control-flow delta range is invalid");
 export const reviewBudgetSchema = z
   .object({
     inputTokens: positiveBudget.max(1_000_000),
@@ -279,6 +303,7 @@ const taskInputSchema = z
     expansionBudget: nonNegativeBudget.max(32),
     outputContractVersion: z.literal(CANDIDATE_RESULT_VERSION),
     evidenceNeeds: z.array(evidenceNeedSchema).max(20).default([]),
+    controlFlowDeltas: z.array(controlFlowDeltaSchema).max(2).default([]),
     budget: reviewBudgetSchema.optional(),
   })
   .strict()

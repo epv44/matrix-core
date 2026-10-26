@@ -13,6 +13,8 @@ import {
   type EvalReplayMode,
 } from "./eval.js";
 import type { EvalStage } from "./stage-score.js";
+import type { CandidateGenerationArm, CandidateInferenceMode, CandidatePromptVariant } from "../../../src/agentsmith/engine-types.js";
+import type { AgentSmithConfig } from "../../../src/core/types.js";
 import {
   applySuiteProgress,
   createSuiteRunStatus,
@@ -832,6 +834,17 @@ const ratePipelineMetrics = new Set([
   "evidenceRequestLocatorValidity",
   "evidenceRequestLocatorScopeValidity",
   "strictOracleOnlyRejection",
+  "substantiveCaseCapability",
+  "substantiveCompletedCallRecognition",
+  "substantiveAttemptedCallRecognition",
+  "substantiveFindingFidelity",
+  "substantiveProviderFailureRate",
+  "substantiveLocationCompatibility",
+  "substantiveDomainCompatibility",
+  "substantiveTriggerCoverage",
+  "substantiveInvariantCoverage",
+  "substantiveImpactCoverage",
+  "substantiveContradictionFree",
 ]);
 
 function pipelineMetricUnit(name: string): PipelineMetricUnit {
@@ -1291,10 +1304,27 @@ export async function runEvalSuite(opts: {
   baseline?: EvalSuiteBaseline;
   baselineOutput?: string;
   provider?: Parameters<typeof validateEvalModelTarget>[0]["provider"];
+  configTransform?: (config: AgentSmithConfig) => AgentSmithConfig;
   runner?: EvalRunner;
   onStart?: (status: SuiteRunStatus) => void | Promise<void>;
   onProgress?: (status: SuiteRunStatus, event: EvalProgressEvent) => void | Promise<void>;
   cancelRequested?: () => boolean;
+  candidateArm?: CandidateGenerationArm;
+  inferenceMode?: CandidateInferenceMode;
+  candidatePromptVariant?: CandidatePromptVariant;
+  candidateModel?: string;
+  verifierModel?: string;
+  cases?: string[];
+  timeoutMs?: number;
+  candidateOutputTokens?: number;
+  candidateContextTokens?: number;
+  candidateTemperature?: number;
+  candidateTopP?: number;
+  candidateTopK?: number;
+  candidateThinkingTokens?: number;
+  thinkingStream?: boolean;
+  controlFlowDelta?: boolean;
+  treatment?: string;
 }) {
   if (!opts.suite || opts.suite === "draft" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(opts.suite))
     throw new Error(`Invalid AgentSmith suite ID: ${opts.suite || "<missing>"}`);
@@ -1306,9 +1336,10 @@ export async function runEvalSuite(opts: {
     throw new Error(`AgentSmith eval corpus validation failed:\n${failures.join("\n")}`);
   }
   const allSlugs = listEvalCases(opts.root, true);
+  const requestedCases = opts.cases?.length ? new Set(opts.cases) : null;
   const slugs = allSlugs.filter((slug) => {
     const { definition } = readEvalCase(opts.root, slug);
-    return definition.status === "active" && definition.suite === opts.suite;
+    return definition.status === "active" && definition.suite === opts.suite && (!requestedCases || requestedCases.has(slug));
   });
   if (!slugs.length) {
     const registered = registeredEvalSuites(opts.root);
@@ -1327,7 +1358,11 @@ export async function runEvalSuite(opts: {
   const targetConfig = await validateEvalModelTarget({
     config: resolved.config.agentsmith!,
     target: opts.modelTarget,
+    candidateModel: opts.candidateModel,
+    verifierModel: opts.verifierModel,
+    treatment: opts.treatment,
     provider: opts.provider,
+    configTransform: opts.configTransform,
   });
   const mode: EvalMode = opts.modelTarget === "small" ? "partitioned-interactions" : "holistic";
   const replay = opts.replay ?? "live";
@@ -1338,6 +1373,8 @@ export async function runEvalSuite(opts: {
   const suiteRunId = `${new Date().toISOString().replace(/[:.]/g, "-")}-${crypto.randomUUID()}`;
   const statusFile = suiteStatusPath(opts.root, suiteRunId);
   const output = opts.output ? path.resolve(opts.root, opts.output) : path.join(suiteStatusDirectory(opts.root, suiteRunId), "result.json");
+  const thinkingTraceDir = opts.thinkingStream ? path.join(opts.root, ".quality", "evals", "traces", suiteRunId) : undefined;
+  if (thinkingTraceDir) fs.mkdirSync(thinkingTraceDir, { recursive: true });
   let runStatus = createSuiteRunStatus({
     runId: suiteRunId,
     suite: opts.suite,
@@ -1363,7 +1400,24 @@ export async function runEvalSuite(opts: {
         label: opts.label,
         allowDrafts: false,
         modelTarget: opts.modelTarget,
+        candidateArm: opts.candidateArm,
+        inferenceMode: opts.inferenceMode,
+        candidatePromptVariant: opts.candidatePromptVariant,
+        candidateModel: opts.candidateModel,
+        verifierModel: opts.verifierModel,
+        timeoutMs: opts.timeoutMs,
+        candidateOutputTokens: opts.candidateOutputTokens,
+        candidateContextTokens: opts.candidateContextTokens,
+        candidateTemperature: opts.candidateTemperature,
+        candidateTopP: opts.candidateTopP,
+        candidateTopK: opts.candidateTopK,
+        candidateThinkingTokens: opts.candidateThinkingTokens,
+        thinkingStream: opts.thinkingStream,
+        controlFlowDelta: opts.controlFlowDelta,
+        treatment: opts.treatment,
+        thinkingTraceDir,
         provider: opts.provider,
+        configTransform: opts.configTransform,
         onProgress: async (event) => {
           if (opts.cancelRequested?.()) throw new Error("Suite cancelled");
           runStatus = applySuiteProgress(runStatus, event);
@@ -1395,7 +1449,14 @@ export async function runEvalSuite(opts: {
     modelTarget: opts.modelTarget,
     modelProfiles: targetConfig.model_profiles
       .filter((profile) => [targetConfig.models.candidate, targetConfig.models.verifier].includes(profile.id))
-      .map((profile) => ({ id: profile.id, model: profile.model })),
+      .map((profile) => ({
+        id: profile.id,
+        provider: profile.provider,
+        model: profile.model,
+        contextTokens: profile.contextTokens,
+        requestedOutputTokens: profile.requestedOutputTokens,
+        safetyReserveTokens: profile.safetyReserveTokens,
+      })),
     label: opts.label ?? null,
     createdAt: new Date().toISOString(),
     evalStatus: status.status,
@@ -1405,9 +1466,27 @@ export async function runEvalSuite(opts: {
     configuration: {
       suite: opts.suite,
       modelTarget: opts.modelTarget,
+      provider: targetConfig.provider,
+      providerBaseUrl: targetConfig.base_url,
+      ...(opts.candidateModel ? { candidateModel: opts.candidateModel } : {}),
+      ...(opts.verifierModel ? { verifierModel: opts.verifierModel } : {}),
+      ...(opts.candidateTemperature !== undefined ? { candidateTemperature: opts.candidateTemperature } : {}),
+      ...(opts.candidateTopP !== undefined ? { candidateTopP: opts.candidateTopP } : {}),
+      ...(opts.candidateTopK !== undefined ? { candidateTopK: opts.candidateTopK } : {}),
+      ...(opts.candidateThinkingTokens !== undefined ? { candidateThinkingTokens: opts.candidateThinkingTokens } : {}),
+      ...(opts.treatment ? { treatment: opts.treatment } : {}),
       modes: [mode],
       tiers,
       ...(opts.stages?.length ? { stages: opts.stages } : {}),
+      candidateArm: opts.candidateArm ?? "simplified-contract",
+      inferenceMode: opts.inferenceMode ?? "structured",
+      candidatePromptVariant: opts.candidatePromptVariant ?? "baseline",
+      ...(opts.cases?.length ? { cases: opts.cases } : {}),
+      ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      ...(opts.candidateOutputTokens !== undefined ? { candidateOutputTokens: opts.candidateOutputTokens } : {}),
+      ...(opts.candidateContextTokens !== undefined ? { candidateContextTokens: opts.candidateContextTokens } : {}),
+      ...(opts.thinkingStream ? { thinkingStream: true, thinkingTraceDir } : {}),
+      ...(opts.controlFlowDelta ? { controlFlowDelta: true } : {}),
     },
     corpus: { active: slugs, drafts: [], activeCount: slugs.length, draftCount: 0, activeHash: corpusHash(opts.root, slugs), evaluatedHash: corpusHash(opts.root, slugs) },
     evaluation: serializedEvaluation(status),

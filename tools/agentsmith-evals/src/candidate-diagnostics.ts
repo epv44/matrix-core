@@ -1,8 +1,10 @@
 import type { CandidateFinding } from "../../../src/core/types.js";
+import type { CandidateBatch } from "../../../src/agentsmith/engine-types.js";
 import { candidateAnchorIssue, evidenceLocatorParts } from "../../../src/agentsmith/evidence.js";
 import type { ReviewScope } from "../../../src/agentsmith/scope.js";
 import type { EvalCase } from "./case.js";
 import type { StageMetric } from "./stage-score.js";
+import { domainCompatible, evaluateConceptCoverage } from "./substantive/index.js";
 
 /**
  * Candidate diagnostics are deliberately separate from the strict candidate
@@ -84,6 +86,49 @@ function strictMatch(candidate: CandidateFinding | undefined, expected: Candidat
   return !expected.titleContains || candidate.title.toLowerCase().includes(expected.titleContains.toLowerCase());
 }
 
+interface SubstantiveEvaluation {
+  candidate: CandidateFinding;
+  location: boolean;
+  domain: boolean;
+  trigger: boolean;
+  invariant: boolean;
+  impact: boolean;
+  contradictionFree: boolean;
+  recognized: boolean;
+}
+
+function substantiveEvaluation(
+  candidate: CandidateFinding,
+  expected: CandidateExpectation,
+): SubstantiveEvaluation | null {
+  const contract = expected.substantiveConcepts;
+  if (!contract) return null;
+  const location = overlaps(candidate, expected);
+  const domain = domainCompatible(contract.domain, candidate.category);
+  const coverage = evaluateConceptCoverage(`${candidate.title} ${candidate.description}`, contract);
+  const contradictionFree = !coverage.forbidden && !coverage.impactContradiction;
+  return {
+    candidate,
+    location,
+    domain,
+    trigger: coverage.trigger,
+    invariant: coverage.invariant,
+    impact: coverage.impact,
+    contradictionFree,
+    recognized:
+      location && domain && coverage.trigger && coverage.invariant && coverage.impact && contradictionFree,
+  };
+}
+
+function recognizesAny(
+  candidates: CandidateFinding[],
+  expected: CandidateExpectation[],
+): boolean {
+  return expected.some((item) =>
+    candidates.some((candidate) => substantiveEvaluation(candidate, item)?.recognized === true),
+  );
+}
+
 function expectedFindingFor(
   definition: EvalCase,
   expected: CandidateExpectation,
@@ -160,6 +205,7 @@ export function collectCandidateNearMissDiagnostics(opts: {
   definition: EvalCase;
   scope: ReviewScope;
   candidates: CandidateFinding[];
+  candidateBatches?: CandidateBatch[];
 }): { metrics: CandidateDiagnosticMetric[]; diagnosticOnly: string[] } {
   const desired = (opts.definition.expectations.candidates?.items ?? []).filter((item) => item.expectedPresence);
   if (!desired.length) return { metrics: [], diagnosticOnly: [] };
@@ -185,6 +231,35 @@ export function collectCandidateNearMissDiagnostics(opts: {
     .map(({ actual, expected }) => textSimilarity(expected.titleContains ?? "", actual?.title ?? ""))
     .filter((value): value is number => value !== null);
   const completeClaims = pairs.filter(({ actual }) => claimCompleteness(actual?.description)).length;
+  const ruleBoundCandidates = opts.candidates.filter((candidate) => Boolean(candidate.classification));
+  const ruleBoundApplied = ruleBoundCandidates.filter(
+    (candidate) => candidate.classification?.categorySource === "rule" || candidate.classification?.severitySource === "rule",
+  );
+
+  const substantiveExpected = desired.filter((item) => Boolean(item.substantiveConcepts));
+  const substantiveEvaluations = substantiveExpected.map((expected) => ({
+    expected,
+    evaluations: opts.candidates
+      .map((candidate) => substantiveEvaluation(candidate, expected))
+      .filter((item): item is SubstantiveEvaluation => item !== null),
+  }));
+  const progressiveCount = (predicate: (item: SubstantiveEvaluation) => boolean) =>
+    substantiveEvaluations.filter(({ evaluations }) => evaluations.some(predicate)).length;
+  const substantiveRecognized = progressiveCount((item) => item.recognized);
+
+  // Substantive-call metrics are only applicable when this case declares the
+  // explicit diagnostic contract. Do not turn an uninstrumented/negative case
+  // into a false 0% quality result merely because it emitted calls.
+  const attemptedBatches = substantiveExpected.length ? (opts.candidateBatches ?? []) : [];
+  const completedBatches = attemptedBatches.filter((batch) => !batch.error);
+  const recognizedCompletedBatches = completedBatches.filter((batch) =>
+    recognizesAny(batch.candidates, substantiveExpected),
+  );
+  const findingBatches = completedBatches.filter((batch) => batch.candidates.length > 0);
+  const recognizedFindingBatches = findingBatches.filter((batch) =>
+    recognizesAny(batch.candidates, substantiveExpected),
+  );
+  const providerFailedBatches = attemptedBatches.filter((batch) => Boolean(batch.error));
 
   let requiredEvidenceKinds = 0;
   let requestedEvidenceKinds = 0;
@@ -234,12 +309,32 @@ export function collectCandidateNearMissDiagnostics(opts: {
   const diagnosticOnly = pairs
     .filter(({ actual, expected }) => actual && !strictMatch(actual, expected))
     .map(({ actual, expected }) => `${expected.id}: semantic candidate rejected by strict oracle at ${actual!.file}:${actual!.line}`);
+  diagnosticOnly.push(
+    ...substantiveEvaluations.map(({ expected, evaluations }) => {
+      const recognized = evaluations.find((item) => item.recognized);
+      if (recognized)
+        return `${expected.id}: substantive candidate recognized at ${recognized.candidate.file}:${recognized.candidate.line}`;
+      const flags = {
+        location: evaluations.some((item) => item.location),
+        domain: evaluations.some((item) => item.location && item.domain),
+        trigger: evaluations.some((item) => item.location && item.domain && item.trigger),
+        invariant: evaluations.some((item) => item.location && item.domain && item.trigger && item.invariant),
+        impact: evaluations.some((item) => item.location && item.domain && item.trigger && item.invariant && item.impact),
+        contradictionFree: evaluations.some(
+          (item) => item.location && item.domain && item.trigger && item.invariant && item.impact && item.contradictionFree,
+        ),
+      };
+      return `${expected.id}: substantive recognition miss (${Object.entries(flags).map(([name, value]) => `${name}=${value}`).join(", ")})`;
+    }),
+  );
   return {
     metrics: [
       metric("changedFileOverlap", ratio(fileOverlap, desired.length)),
       metric("changedRegionOverlap", ratio(regionOverlap, desired.length)),
       metric("categoryCompatibility", ratio(categoryCompatibleCount, desired.length)),
       metric("severityCompatibility", ratio(severityCompatibleCount, desired.length)),
+      metric("ruleBoundClassificationApplicationRate", ratio(ruleBoundApplied.length, ruleBoundCandidates.length)),
+      metric("ruleBoundClassificationCandidateRate", ratio(ruleBoundCandidates.length, opts.candidates.length)),
       metric("triggeringValueRecall", {
         ...ratio(0, 0),
         value: mean(triggeringValueRecall.map((item) => item.value).filter((value): value is number => value !== null)),
@@ -269,6 +364,53 @@ export function collectCandidateNearMissDiagnostics(opts: {
       metric("selectorKeyValidity", ratio(validLocatorShapes, selectorRequests)),
       metric("selectorResolutionRate", ratio(resolvedSelectorRequests, selectorRequests)),
       metric("strictOracleOnlyRejection", ratio(strictOracleOnlyRejected, desired.length)),
+      metric("substantiveCaseCapability", ratio(substantiveRecognized, substantiveExpected.length)),
+      metric(
+        "substantiveLocationCompatibility",
+        ratio(progressiveCount((item) => item.location), substantiveExpected.length),
+      ),
+      metric(
+        "substantiveDomainCompatibility",
+        ratio(progressiveCount((item) => item.location && item.domain), substantiveExpected.length),
+      ),
+      metric(
+        "substantiveTriggerCoverage",
+        ratio(progressiveCount((item) => item.location && item.domain && item.trigger), substantiveExpected.length),
+      ),
+      metric(
+        "substantiveInvariantCoverage",
+        ratio(
+          progressiveCount((item) => item.location && item.domain && item.trigger && item.invariant),
+          substantiveExpected.length,
+        ),
+      ),
+      metric(
+        "substantiveImpactCoverage",
+        ratio(
+          progressiveCount((item) => item.location && item.domain && item.trigger && item.invariant && item.impact),
+          substantiveExpected.length,
+        ),
+      ),
+      metric(
+        "substantiveContradictionFree",
+        ratio(substantiveRecognized, substantiveExpected.length),
+      ),
+      metric(
+        "substantiveCompletedCallRecognition",
+        ratio(recognizedCompletedBatches.length, completedBatches.length),
+      ),
+      metric(
+        "substantiveAttemptedCallRecognition",
+        ratio(recognizedCompletedBatches.length, attemptedBatches.length),
+      ),
+      metric(
+        "substantiveFindingFidelity",
+        ratio(recognizedFindingBatches.length, findingBatches.length),
+      ),
+      metric("substantiveProviderFailureRate", {
+        ...ratio(providerFailedBatches.length, attemptedBatches.length),
+        direction: "lower",
+      }),
     ],
     diagnosticOnly,
   };

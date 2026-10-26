@@ -1,4 +1,4 @@
-schemaVersion: 9
+schemaVersion: 10
 id: producer-consumer-unit-mismatch
 status: active
 kind: benchmark
@@ -56,6 +56,18 @@ expectations:
         requiredEvidenceKinds: [usage]
         requiredReasoningTerms: [timeout_ms, time.sleep, seconds]
         forbiddenReasoningTerms: []
+        substantiveConcepts:
+          domain: contract
+          triggerGroups:
+            - [timeout_ms, "timeout ms", milliseconds]
+            - [time.sleep, "time sleep", sleep]
+          invariantGroups:
+            - [seconds, "seconds api", "seconds based"]
+            - [milliseconds, millisecond]
+          impactGroups:
+            - [delay, wait, retry]
+            - ["1000", "one thousand", thousand]
+          forbidden: []
         rationale: The producer now returns milliseconds but the consumer passes the value to a seconds-based API.
   verification:
     candidates: *expected_candidates

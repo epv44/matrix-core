@@ -7,7 +7,7 @@ import { resolveConfig } from "../../core/config-resolver.js";
 import { resolvePolicyForConfig } from "../../core/resolved-policy.js";
 import { ENGINE_VERSION } from "../../core/meta.js";
 import { AGENT_SMITH, emptyReviewCoverage } from "../../core/reviewer.js";
-import { OllamaProvider, type ReviewProvider } from "../provider.js";
+import { createReviewProvider, type ReviewProvider } from "../provider.js";
 import { captureReviewScope, type ReviewScope } from "../scope.js";
 import { executeReviewEngine } from "../engine.js";
 import { isAgentSmithTraceEnabled, writeAgentSmithTrace } from "../trace.js";
@@ -142,7 +142,7 @@ export async function runReview(opts: RunReviewOptions, deps: RunReviewDeps = {}
         return result;
       }
     }
-    const provider = opts.provider ?? deps.provider ?? new OllamaProvider(config);
+    const provider = opts.provider ?? deps.provider ?? createReviewProvider(config);
     const { result, execution } = await executeReviewEngine({
       root: resolved.configRoot,
       version: opts.version,

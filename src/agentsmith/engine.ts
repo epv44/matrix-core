@@ -39,9 +39,13 @@ import {
   verifyCandidateWithModel,
 } from "./candidate-generation.js";
 import { candidateAnchorIssue, evidenceRequestId, resolveEvidenceRequests } from "./evidence.js";
+import { deriveControlFlowDeltas } from "./control-flow-delta.js";
 import { buildTaskEvidenceLocatorTable, canonicalEvidenceLocatorTable, locatorToEvidenceRequest } from "./evidence-locators.js";
 import type {
   CandidateBatch,
+  CandidateGenerationArm,
+  CandidateInferenceMode,
+  CandidatePromptVariant,
   ContractShadowAudit,
   ContractShadowAuditEntry,
   EngineExecution,
@@ -619,6 +623,7 @@ function shadowReviewTask(item: ReviewWorkItem, opts: {
     expansionBudget: 0,
     outputContractVersion: CANDIDATE_RESULT_VERSION,
     evidenceNeeds: [],
+    controlFlowDeltas: item.controlFlowDeltas ?? [],
     budget: {
       inputTokens: Math.max(1, item.estimatedTokens),
       outputTokens: Math.max(1, Math.min(100_000, opts.profile.requestedOutputTokens)),
@@ -644,6 +649,11 @@ function buildContractShadowAudit(opts: {
   profile: ModelProfile;
   existingFiles: ReadonlySet<string>;
   knownSymbols: ReadonlySet<string>;
+  candidateArm?: CandidateGenerationArm;
+  inferenceMode?: CandidateInferenceMode;
+  candidatePromptVariant?: CandidatePromptVariant;
+  stream?: boolean;
+  streamTraceDir?: string;
 }): ContractShadowAudit {
   const entries: ContractShadowAuditEntry[] = opts.selectedWorkItems.map((item) => {
     try {
@@ -653,7 +663,11 @@ function buildContractShadowAudit(opts: {
         sourceWorkItemId: item.id,
         taskId: task.taskId,
         descriptorHash: sha256(serializedDescriptor),
-        descriptorFingerprint: dispatchDescriptorFingerprint(task, opts.profile, "candidates"),
+        descriptorFingerprint: dispatchDescriptorFingerprint(
+          { task, candidateArm: opts.candidateArm ?? "simplified-contract", inferenceMode: opts.inferenceMode ?? "structured", candidatePromptVariant: opts.candidatePromptVariant ?? "baseline" },
+          opts.profile,
+          "candidates",
+        ),
         serializedDescriptor,
         validation: { valid: true },
         legacyInputFingerprint: sha256Json({ sourceWorkItemId: item.id, workItem: item }),
@@ -691,6 +705,14 @@ export async function executeReviewEngine(opts: {
     resolveEvidence?: boolean;
     /** Reviewed candidates used to isolate evidence and later pipeline stages in eval replay. */
     seedCandidates?: CandidateFinding[];
+    candidateArm?: CandidateGenerationArm;
+    inferenceMode?: CandidateInferenceMode;
+    candidatePromptVariant?: CandidatePromptVariant;
+    candidateThinkingTokens?: number;
+    /** Diagnostic-only host context for statically evaluable changed guards. */
+    controlFlowDelta?: boolean;
+    stream?: boolean;
+    streamTraceDir?: string;
   };
   enforceWorkspaceVersion?: boolean;
 }): Promise<{ result: ReviewResult; execution: EngineExecution }> {
@@ -827,7 +849,12 @@ export async function executeReviewEngine(opts: {
           estimatedTokens: 0,
         }
       : selectWorkItems(rankedWorkItems, opts.config.partitioned.maxCandidateWorkItems ?? 4, candidateInputBudget);
-  const selectedWorkItems = selection.selected;
+  const selectedWorkItems = opts.variant?.controlFlowDelta
+    ? selection.selected.map((item) => {
+        const controlFlowDeltas = deriveControlFlowDeltas({ diff: opts.scope.diff, workItem: item, maxTokens: 96 });
+        return controlFlowDeltas.length ? { ...item, controlFlowDeltas } : item;
+      })
+    : selection.selected;
   const candidateProjection =
     route.mode === "holistic" ? full : buildCandidateProjection(full, selectedWorkItems, candidateProfile);
   const omittedWorkItems = selection.omitted;
@@ -854,6 +881,9 @@ export async function executeReviewEngine(opts: {
     profile: candidateProfile,
     existingFiles: shadowExistingFiles,
     knownSymbols: shadowKnownSymbols,
+    candidateArm: opts.variant?.candidateArm,
+    inferenceMode: opts.variant?.inferenceMode,
+    candidatePromptVariant: opts.variant?.candidatePromptVariant,
   });
   stageStarted = Date.now();
   const candidateBatches: CandidateBatch[] = [];
@@ -877,7 +907,7 @@ export async function executeReviewEngine(opts: {
       try {
         const { value, cacheStatus, stale } = await cachedStage({
           root: opts.root,
-          enabled: opts.config.cache,
+        enabled: opts.config.cache,
           stage: "specialist-candidates",
           key: { snapshot: opts.scope.id, projection: full.id, profile: candidateProfile, specialist },
           descriptorFingerprint: dispatchDescriptorFingerprint(
@@ -931,12 +961,12 @@ export async function executeReviewEngine(opts: {
       try {
         const { value, cacheStatus, stale } = await cachedStage({
           root: opts.root,
-          enabled: opts.config.cache,
-          stage: "candidates",
-          key: { snapshot: opts.scope.id, item, profile: candidateProfile, evidenceLocatorTable },
+        enabled: opts.config.cache && !opts.variant?.stream,
+        stage: "candidates",
+          key: { snapshot: opts.scope.id, item, profile: candidateProfile, evidenceLocatorTable, candidateArm: opts.variant?.candidateArm ?? "simplified-contract", inferenceMode: opts.variant?.inferenceMode ?? "structured", candidatePromptVariant: opts.variant?.candidatePromptVariant ?? "baseline", candidateThinkingTokens: opts.variant?.candidateThinkingTokens ?? null },
           descriptorFingerprint:
             contractShadow.entries.find((entry) => entry.sourceWorkItemId === item.id)?.descriptorFingerprint ??
-            dispatchDescriptorFingerprint({ snapshotId: opts.scope.id, item, evidenceLocatorTable }, candidateProfile, "candidates"),
+            dispatchDescriptorFingerprint({ snapshotId: opts.scope.id, item, evidenceLocatorTable, candidateArm: opts.variant?.candidateArm ?? "simplified-contract", inferenceMode: opts.variant?.inferenceMode ?? "structured", candidatePromptVariant: opts.variant?.candidatePromptVariant ?? "baseline" }, candidateProfile, "candidates"),
           run: () =>
             executionBudget.call((signal) =>
               generateWorkItemCandidate({
@@ -946,6 +976,12 @@ export async function executeReviewEngine(opts: {
                 allowedFiles: opts.scope.changedFiles,
                 maxCandidates: opts.config.partitioned.maxCandidatesPerWorkItem ?? 2,
                 allowedEvidenceSelectors: evidenceLocatorTable.selectors,
+                arm: opts.variant?.candidateArm,
+                inferenceMode: opts.variant?.inferenceMode,
+                promptVariant: opts.variant?.candidatePromptVariant,
+                thinkingTokens: opts.variant?.candidateThinkingTokens,
+                stream: opts.variant?.stream,
+                streamTraceDir: opts.variant?.streamTraceDir,
                 signal,
               }),
             ),
@@ -956,7 +992,7 @@ export async function executeReviewEngine(opts: {
           cacheStatus,
           descriptorFingerprint:
             contractShadow.entries.find((entry) => entry.sourceWorkItemId === item.id)?.descriptorFingerprint ??
-            dispatchDescriptorFingerprint({ snapshotId: opts.scope.id, item, evidenceLocatorTable }, candidateProfile, "candidates"),
+            dispatchDescriptorFingerprint({ snapshotId: opts.scope.id, item, evidenceLocatorTable, candidateArm: opts.variant?.candidateArm ?? "simplified-contract", inferenceMode: opts.variant?.inferenceMode ?? "structured", candidatePromptVariant: opts.variant?.candidatePromptVariant ?? "baseline" }, candidateProfile, "candidates"),
         };
       } catch (error) {
         captureProviderFailure(error, providerFailures);

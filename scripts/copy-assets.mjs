@@ -6,6 +6,13 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcDir = path.join(root, "src", "agentsmith");
 const outDir = path.join(root, "dist", "agentsmith");
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+const runtimeAssets = new Set([
+  "agents/sub-agents/architecture-reviewer.md",
+  "agents/sub-agents/perf-reviewer.md",
+  "agents/sub-agents/bug-hunter.md",
+  "agents/sub-agents/semantic-reviewer.md",
+  "rules/registry.yaml",
+]);
 
 function walk(dir) {
   const out = [];
@@ -21,6 +28,7 @@ let copied = 0;
 for (const file of walk(srcDir)) {
   if (!/\.(md|ya?ml)$/.test(file)) continue;
   const rel = path.relative(srcDir, file);
+  if (!runtimeAssets.has(rel)) continue;
   const dest = path.join(outDir, rel);
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.copyFileSync(file, dest);

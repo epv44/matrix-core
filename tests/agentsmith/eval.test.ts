@@ -24,6 +24,7 @@ import { writeAgentSmithTrace } from "../../src/agentsmith/trace.js";
 import type { ReviewProvider } from "../../src/agentsmith/provider.js";
 import type { ReviewResult } from "../../src/core/types.js";
 import { sha256 } from "../../src/core/hash.js";
+import { agentSmithConfigFromPolicy } from "../../src/core/resolved-policy.js";
 
 function git(root: string, ...args: string[]) {
   const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
@@ -148,15 +149,35 @@ describe("AgentSmith eval cases", () => {
     const config = {
       model_profiles: [
         { id: "small", reviewCapability: "small", model: "small-model" },
+        { id: "small-verifier", reviewCapability: "small", model: "small-verifier-model" },
         { id: "strong", reviewCapability: "strong", model: "large-model" },
       ],
-      models: { candidate: "small", verifier: "small" },
+      models: { candidate: "small", verifier: "small-verifier" },
     } as any;
-    expect(configureEvalModelTarget(config, "small").models).toMatchObject({ candidate: "small", verifier: "small" });
+    expect(configureEvalModelTarget(config, "small").models).toMatchObject({ candidate: "small", verifier: "small-verifier" });
+    expect(configureEvalModelTarget(config, "small", "qwen3.5:4b").model_profiles).toEqual([
+      { id: "small", reviewCapability: "small", model: "qwen3.5:4b" },
+      { id: "small-verifier", reviewCapability: "small", model: "small-verifier-model" },
+      { id: "strong", reviewCapability: "strong", model: "large-model" },
+    ]);
+    expect(configureEvalModelTarget(config, "small", "candidate-model", "verifier-model").model_profiles).toEqual([
+      { id: "small", reviewCapability: "small", model: "candidate-model" },
+      { id: "small-verifier", reviewCapability: "small", model: "verifier-model" },
+      { id: "strong", reviewCapability: "strong", model: "large-model" },
+    ]);
     expect(configureEvalModelTarget(config, "large").models).toMatchObject({ candidate: "strong", verifier: "strong" });
     expect(() => configureEvalModelTarget({ ...config, model_profiles: [config.model_profiles[0]] }, "large")).toThrow(
       /large model profile/,
     );
+  });
+
+  it("marks every selected profile as vLLM when the provider is overridden", () => {
+    vi.stubEnv("MATRIXCORE_AGENTSMITH_PROVIDER", "vllm");
+    vi.stubEnv("MATRIXCORE_VLLM_URL", "http://127.0.0.1:8001/v1");
+    const config = agentSmithConfigFromPolicy(true);
+    expect(config.provider).toBe("vllm");
+    expect(config.base_url).toBe("http://127.0.0.1:8001/v1");
+    expect(config.model_profiles.every((profile) => profile.provider === "vllm")).toBe(true);
   });
 
   it("curates an unlabeled sanitized draft from a local trace", () => {
@@ -164,7 +185,7 @@ describe("AgentSmith eval cases", () => {
     try {
       curateTrace({ root, traceId, slug: "case-one" });
       const { definition } = readEvalCase(root, "case-one");
-      expect(definition).toMatchObject({ schemaVersion: 9, status: "draft", expectations: {} });
+      expect(definition).toMatchObject({ schemaVersion: 10, status: "draft", expectations: {} });
       expect(definition.source.fixture).toBeTruthy();
       expect(() => curateTrace({ root, traceId, slug: "case-one" })).toThrow(/already exists/);
     } finally {

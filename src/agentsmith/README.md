@@ -66,6 +66,8 @@ The four specialist prompt bodies retain the 0.4 architecture, performance, corr
 
 `ReviewProvider` implements `health(signal)` and `invoke({ profile, prompt, outputKind, allowedFiles, maxCandidates, signal })`, returning raw output, token usage, and optional completion metadata. Providers never download models implicitly.
 
+The built-in providers are selected from `AgentSmithConfig.provider`: `ollama` uses the native Ollama API, while `vllm` uses the OpenAI-compatible `/v1` API. The vLLM path supports Qwen reasoning/content separation and passes an optional bounded `thinking_token_budget` through diagnostic inference overrides. Local vLLM serving must be configured separately; MatrixCore never downloads or starts a model server.
+
 ## Local traces and evals
 
 Tracing is local by default and has no uploader. It retains the newest 20 schema-v5 traces within a

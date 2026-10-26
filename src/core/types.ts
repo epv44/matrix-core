@@ -144,6 +144,8 @@ export interface PolicyCheck {
 }
 
 export type ReviewMode = "holistic" | "partitioned" | "hybrid";
+/** `openai-responses` is accepted only by the eval-only diagnostic runner. */
+export type ReviewProviderName = "ollama" | "vllm" | "openai-responses";
 export type ReviewCapability = "small" | "strong";
 export type ReviewPath = "generic" | "specialist";
 export type ReviewCategory = "correctness" | "security" | "performance" | "contract";
@@ -159,14 +161,14 @@ export interface TokenEstimatorProfile {
 
 export interface ModelProfile {
   id: string;
-  provider: "ollama";
+  provider: ReviewProviderName;
   model: string;
   contextTokens: number;
   reviewCapability: ReviewCapability;
   requestedOutputTokens: number;
   safetyReserveTokens: number;
   tokenizer: TokenEstimatorProfile;
-  inference: { temperature: number; thinking: boolean; timeoutMs: number };
+  inference: { temperature: number; topP?: number; topK?: number; thinking: boolean; timeoutMs: number };
 }
 
 export interface ModelRoleBindings {
@@ -273,7 +275,7 @@ export interface AgentModelConfig {
 export interface AgentSmithConfig {
   enabled: boolean;
   advisory: boolean;
-  provider: string;
+  provider: ReviewProviderName;
   base_url: string;
   mode: ReviewMode | "auto";
   model_profiles: ModelProfile[];
@@ -440,6 +442,12 @@ export interface CandidateFinding {
   suggestion?: string;
   primarySymbol?: string;
   ruleId?: string;
+  /** Audit-only provenance for rule-bound candidate classification. */
+  classification?: {
+    basisRuleId: string;
+    categorySource: "model" | "rule";
+    severitySource: "model" | "rule";
+  };
   evidenceRequests: EvidenceRequest[];
   candidateConfidence: number;
 }

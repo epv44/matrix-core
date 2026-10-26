@@ -53,6 +53,8 @@ const modelProfileSchema = z
     inference: z
       .object({
         temperature: z.number().min(0).max(2),
+        topP: z.number().positive().max(1).optional(),
+        topK: z.number().int().positive().optional(),
         thinking: z.boolean(),
         timeoutMs: z.number().int().min(1000).max(1_800_000),
       })

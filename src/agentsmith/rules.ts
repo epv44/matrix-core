@@ -82,10 +82,24 @@ export function selectRules(
         ];
   return rules
     .filter((rule) => matches(rule, { languages, text: code, edges, paths }))
-    .sort((left, right) => left.id.localeCompare(right.id))
+    // A declared severity is policy metadata, not a model-generated risk score.
+    // Preserve these rules under a bounded rule cap so a task can see the
+    // applicable policy that owns its classification.
+    .sort((left, right) => {
+      const severityRank = { critical: 4, high: 3, medium: 2, low: 1 } as const;
+      const leftRank = left.severity ? severityRank[left.severity] : 0;
+      const rightRank = right.severity ? severityRank[right.severity] : 0;
+      return rightRank - leftRank || left.id.localeCompare(right.id);
+    })
     .slice(0, limit)
     .map((rule) => {
       const text = verbose ? `${rule.short}\n${rule.explanation}` : rule.short;
-      return { id: rule.id, text, estimatedTokens: Math.ceil(text.length / 3) };
+      return {
+        id: rule.id,
+        text,
+        estimatedTokens: Math.ceil(text.length / 3),
+        categories: [...rule.categories],
+        ...(rule.severity ? { severity: rule.severity } : {}),
+      };
     });
 }

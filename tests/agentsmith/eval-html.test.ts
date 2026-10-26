@@ -99,4 +99,46 @@ describe("eval HTML renderer", () => {
     expect(html).toContain("UNPROVEN");
     expect(html).toContain("COMPLETED");
   });
+  it("renders substantive diagnostic labels with explicit call denominators", () => {
+    const html = renderEvalHtml({
+      run: {
+        status: "pass",
+        pipeline: {
+          stages: [
+            {
+              id: "candidates",
+              name: "Candidate generation",
+              purpose: "Generate candidates.",
+              status: "pass",
+              runs: 1,
+              applicableRuns: 1,
+              evaluatedRuns: 1,
+              partialRuns: 0,
+              blockedRuns: 0,
+              notEvaluableRuns: 0,
+              notApplicableRuns: 0,
+              blockedBy: [],
+              diagnostics: [],
+              metrics: [
+                {
+                  name: "substantiveCompletedCallRecognition",
+                  value: 0.75,
+                  numerator: 3,
+                  denominator: 4,
+                  direction: "higher",
+                  unit: "rate",
+                  aggregation: "ratio",
+                  runs: 1,
+                  primary: false,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    expect(html).toContain("Completed-call substantive recognition");
+    expect(html).toContain("75.0%");
+    expect(html).toContain("3/4");
+  });
 });

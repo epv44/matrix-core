@@ -8,6 +8,10 @@ function ratio(numerator: number, denominator: number): number | null {
   return denominator > 0 ? numerator / denominator : null;
 }
 
+function tokensPerSecond(tokens: number, durationNs: number | null | undefined): number | null {
+  return durationNs && durationNs > 0 ? tokens / (durationNs / 1_000_000_000) : null;
+}
+
 function isMaterialSeverity(candidate: { severity: string }): boolean {
   return ["critical", "high"].includes(candidate.severity);
 }
@@ -123,6 +127,25 @@ export function collectEvalMetrics(opts: {
   ]).size;
   const shortlisted = result.candidates?.shortlisted ?? execution.candidates.length - candidateOmissions.length;
   const evidence = evidenceMetrics(execution);
+  const providerCalls = [
+    ...(execution.candidateBatches ?? []).map((batch) => ({
+      inputTokens: batch.inputTokens,
+      outputTokens: batch.outputTokens,
+      completion: batch.completion,
+    })),
+    ...execution.verification.map((item) => ({
+      inputTokens: 0,
+      outputTokens: 0,
+      completion: item.completion,
+    })),
+  ];
+  const promptEvalTokens = providerCalls.reduce((sum, call) => sum + call.inputTokens, 0);
+  const generationTokens = providerCalls.reduce((sum, call) => sum + call.outputTokens, 0);
+  const promptEvalDurationNs = providerCalls.reduce(
+    (sum, call) => sum + (call.completion?.promptEvalDurationNs ?? 0),
+    0,
+  );
+  const evalDurationNs = providerCalls.reduce((sum, call) => sum + (call.completion?.evalDurationNs ?? 0), 0);
   const selectorContractDrops = (execution.candidateBatches ?? []).reduce(
     (sum, batch) => sum + (batch.contractDrops?.length ?? 0),
     0,
@@ -217,6 +240,10 @@ export function collectEvalMetrics(opts: {
       reviewedChangedLinesPerSecond: opts.durationMs > 0 ? changedLines.reviewed / (opts.durationMs / 1000) : null,
       reviewedChangedLinesPerThousandInputTokens:
         execution.inputTokens > 0 ? changedLines.reviewed / (execution.inputTokens / 1000) : null,
+      promptEvalDurationMs: promptEvalDurationNs / 1_000_000,
+      generationDurationMs: evalDurationNs / 1_000_000,
+      promptTokensPerSecond: tokensPerSecond(promptEvalTokens, promptEvalDurationNs),
+      generationTokensPerSecond: tokensPerSecond(generationTokens, evalDurationNs),
     },
     honesty,
   };

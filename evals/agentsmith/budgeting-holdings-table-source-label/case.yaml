@@ -1,4 +1,4 @@
-schemaVersion: 9
+schemaVersion: 10
 id: budgeting-holdings-table-source-label
 status: active
 kind: benchmark
@@ -131,6 +131,17 @@ expectations:
         requiredEvidenceKinds: [implementation, test]
         requiredReasoningTerms: [cash_snapshot, Account balance]
         forbiddenReasoningTerms: [runtime error]
+        substantiveConcepts:
+          domain: contract
+          triggerGroups:
+            - [cash_snapshot, "cash snapshot"]
+            - ["Account balance", "account-balance"]
+          invariantGroups:
+            - ["Cash snapshot", source, label]
+          impactGroups:
+            - [cash_snapshot, "cash snapshot"]
+            - ["Account balance", mislabeled, "wrong label"]
+          forbidden: ["runtime error"]
         rationale: The human-reviewed UI contract requires cash_snapshot to display as Cash snapshot, but the third source value is collapsed into the account-balance label.
       - id: line-height-false-positive
         file: frontend/e2e/dashboard.spec.ts

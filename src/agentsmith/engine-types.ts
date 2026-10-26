@@ -12,7 +12,41 @@ import type {
   SpecialistReviewerId,
 } from "../core/types.js";
 import type { GraphContextEdge, GraphSnapshot, GraphSymbol } from "../core/graph/types.js";
+import type { ControlFlowDelta } from "../core/review-contracts.js";
 import type { ProviderCompletionMetadata, ProviderUsage, ReviewOutputKind } from "./provider.js";
+
+/** Candidate-generation behaviors that can be compared by the eval harness. */
+export type CandidateGenerationArm =
+  | "host-defaults"
+  | "deterministic-evidence"
+  | "host-derived-metadata"
+  | "simplified-contract"
+  | "rule-bound-classification";
+
+export type CandidateInferenceMode =
+  | "structured"
+  | "thinking-no-format"
+  | "thinking-structured"
+  | "thinking-conclusion-then-structured";
+
+export type CandidateConclusionDecision = "finding" | "no_finding" | "insufficient_context";
+
+export interface CandidateConclusion {
+  decision: CandidateConclusionDecision;
+  decisiveRuntimeState: string;
+  evaluation: Record<string, string>;
+  violatedRule: string;
+  defect: string;
+}
+
+/** Prompt variants used for controlled candidate-generation experiments. */
+export type CandidatePromptVariant =
+  | "baseline"
+  | "branch-analysis-v1"
+  | "branch-analysis-state-scan-v2"
+  | "branch-analysis-delta-first-v3"
+  | "branch-analysis-type-outcome-v2"
+  | "branch-analysis-guard-pass-through-v2";
 
 export type OmissionReason =
   | "binary"
@@ -105,6 +139,8 @@ export interface ReviewWorkItem {
   promptVisibleRanges?: Array<{ file: string; start: number; end: number }>;
   graphEdges: GraphContextEdge[];
   rules: RenderedRule[];
+  /** Optional host-derived, mechanically proven guard-state changes. */
+  controlFlowDeltas?: ControlFlowDelta[];
   deterministicReport?: string;
   contextSummaries?: string[];
   estimatedTokens: number;
@@ -148,6 +184,9 @@ export interface RenderedRule {
   id: string;
   text: string;
   estimatedTokens: number;
+  /** Immutable classification policy carried from the selected rule registry entry. */
+  categories: ReviewCategory[];
+  severity?: ReviewSeverity;
 }
 
 export interface ScoutFinding {
@@ -170,7 +209,26 @@ export interface CandidateBatch {
   inputTokens: number;
   outputTokens: number;
   prompt?: string;
+  /** Candidate-generation contract retained for cross-provider diagnostic comparison. */
+  contract?: {
+    candidateArm: CandidateGenerationArm;
+    inferenceMode?: CandidateInferenceMode;
+    promptVariant?: CandidatePromptVariant;
+    systemPromptSha256: string;
+    outputSchemaSha256: string;
+  };
   raw?: string;
+  thinking?: string;
+  /** Provider-supplied reasoning summary; never raw chain-of-thought. */
+  reasoningSummary?: string;
+  reasonerRaw?: string;
+  reasonerThinking?: string;
+  reasonerCompletion?: ProviderCompletionMetadata;
+  conclusion?: CandidateConclusion;
+  formatterRaw?: string;
+  formatterCompletion?: ProviderCompletionMetadata;
+  reasonerDiagnostics?: ProviderFailureDiagnostic[];
+  formatterDiagnostics?: ProviderFailureDiagnostic[];
   completion?: ProviderCompletionMetadata;
   cacheStatus?: "hit" | "miss";
   descriptorFingerprint?: string;
@@ -208,6 +266,7 @@ export interface ProviderFailureDiagnostic {
   outputKind: ReviewOutputKind;
   prompt: string;
   raw: string;
+  thinking?: string;
   usage: ProviderUsage;
   completion: ProviderCompletionMetadata;
   parseError: string;

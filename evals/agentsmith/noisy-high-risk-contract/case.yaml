@@ -1,4 +1,4 @@
-schemaVersion: 9
+schemaVersion: 10
 id: noisy-high-risk-contract
 status: active
 kind: benchmark
@@ -90,6 +90,19 @@ expectations:
         requiredEvidenceKinds: [type, usage]
         requiredReasoningTerms: [totalCents, totalDollars, "100"]
         forbiddenReasoningTerms: [telemetry]
+        substantiveConcepts:
+          domain: contract
+          triggerGroups:
+            - [totalCents, "total cents", cents]
+            - [totalDollars, "total dollars", dollars]
+            - ["100", "one hundred"]
+          invariantGroups:
+            - [currency, unit, dollars, cents]
+            - [totalDollars, "total dollars"]
+          impactGroups:
+            - ["100x", "one hundred times", overcharge, "over charge"]
+            - [charge, charged, checkout]
+          forbidden: [telemetry]
         rationale: The selected producer, type contract, and consumer prove a 100x charge despite eight unrelated changed files.
   verification:
     candidates: *expected_candidates

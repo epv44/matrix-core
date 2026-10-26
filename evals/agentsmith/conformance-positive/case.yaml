@@ -1,4 +1,4 @@
-schemaVersion: 5
+schemaVersion: 10
 id: conformance-positive
 status: active
 kind: conformance
@@ -13,6 +13,14 @@ source:
     digest: 13dc717431e120784e78bfed79e8af859e09670bcd79534e5456420047757df6
   project: synthetic
 sanitization: { reviewed: true, absolutePathsRemoved: true, sensitiveContentReviewed: true, redistributable: true }
+groundTruth:
+  reviewed: true
+  reviewedBy: product-owner
+  reviewedAt: "2026-08-29T00:00:00.000Z"
+  contractFamily: typescript-nullable-return-contract
+  exhaustiveCandidates: true
+evaluationScope:
+  stages: [snapshot, planning, candidates, verification, aggregation]
 expectations:
   snapshot:
     files:
@@ -32,6 +40,18 @@ expectations:
         expectedPresence: true
         expectedVerdict: verified
         requiredEvidenceKinds: [callers, usage]
+        substantiveConcepts:
+          domain: contract
+          triggerGroups:
+            - [undefined, optional, nullable]
+            - [loadUrl, "load url"]
+          invariantGroups:
+            - [trim, normalizedUrl, "normalized url"]
+            - [undefined, optional, nullable]
+          impactGroups:
+            - [throw, crash, dereference, failure]
+            - [trim, normalizedUrl, "normalized url"]
+          forbidden: []
         rationale: loadUrl can now return undefined while normalizedUrl unconditionally calls trim.
   verification:
     candidates: *expected_candidates

@@ -1,4 +1,4 @@
-schemaVersion: 9
+schemaVersion: 10
 id: local-off-by-one
 status: active
 kind: benchmark
@@ -53,6 +53,19 @@ expectations:
         requiredEvidenceKinds: [definition]
         requiredReasoningTerms: [exclusive, page_size]
         forbiddenReasoningTerms: []
+        substantiveConcepts:
+          domain: correctness
+          triggerGroups:
+            - [page_size, "page size"]
+            - [exclusive, slice]
+            - ["subtract one", "minus one", "off by one", off-by-one]
+          invariantGroups:
+            - [page_size, "page size"]
+            - [items, page]
+          impactGroups:
+            - [drop, omit, missing, "one fewer", "page size minus one"]
+            - [item, items]
+          forbidden: []
         rationale: Python slice end indices are exclusive, so subtracting one returns page_size minus one items.
   verification:
     candidates: *expected_candidates

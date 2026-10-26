@@ -1,4 +1,4 @@
-schemaVersion: 9
+schemaVersion: 10
 id: async-resource-lifecycle
 status: active
 kind: benchmark
@@ -56,6 +56,17 @@ expectations:
         requiredEvidenceKinds: [callers]
         requiredReasoningTerms: [setInterval, runCycle, clearInterval]
         forbiddenReasoningTerms: []
+        substantiveConcepts:
+          domain: performance
+          triggerGroups:
+            - [setInterval, interval, heartbeat]
+            - [runCycle, "run cycle", cycle]
+          invariantGroups:
+            - [clearInterval, "clear interval", cleanup]
+          impactGroups:
+            - [leak, accumulate, "keeps running", "remains running", orphaned]
+            - [interval, timer, heartbeat]
+          forbidden: []
         rationale: Each completed cycle leaves a referenced interval alive and repeated cycles accumulate timers.
   verification:
     candidates: *expected_candidates

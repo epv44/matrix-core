@@ -941,6 +941,7 @@ export function evaluateStages(opts: {
       definition,
       scope: trace.scope,
       candidates: candidateStageExecution.candidates,
+      candidateBatches: candidateStageExecution.candidateBatches,
     });
     const selectorContractDrops = (candidateStageExecution.candidateBatches ?? []).reduce(
       (sum, batch) => sum + (batch.contractDrops?.length ?? 0),

@@ -1,4 +1,4 @@
-schemaVersion: 9
+schemaVersion: 10
 id: caller-null-contract
 status: active
 kind: benchmark
@@ -56,6 +56,18 @@ expectations:
         requiredEvidenceKinds: [callers]
         requiredReasoningTerms: [displayName, name, "null"]
         forbiddenReasoningTerms: []
+        substantiveConcepts:
+          domain: contract
+          triggerGroups:
+            - ["null", nullable, optional]
+            - [loadProfile, "load profile", profile]
+          invariantGroups:
+            - [displayName, "display name", caller]
+            - ["null check", nullable, optional]
+          impactGroups:
+            - [dereference, crash, throw, failure]
+            - [name, displayName, "display name"]
+          forbidden: []
         rationale: The changed producer can return null while its direct caller dereferences name unconditionally.
   verification:
     candidates: *expected_candidates

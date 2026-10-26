@@ -264,13 +264,26 @@ export function resolvePolicyForConfig(resolved: ResolvedConfig): ResolvedPolicy
 
 export function agentSmithConfigFromPolicy(enabled: boolean, policy = resolvePolicy()): AgentSmithConfig {
   const profile = policy.agentSmith;
+  const configuredProvider = process.env.MATRIXCORE_AGENTSMITH_PROVIDER;
+  if (configuredProvider !== undefined && configuredProvider !== "ollama" && configuredProvider !== "vllm")
+    throw new Error(`Unsupported AgentSmith provider: ${configuredProvider}`);
+  const policyProvider = profile.provider;
+  if (policyProvider !== "ollama" && policyProvider !== "vllm")
+    throw new Error(`Unsupported AgentSmith policy provider: ${policyProvider}`);
+  const provider = configuredProvider ?? policyProvider;
+  const modelProfiles = profile.models.map((modelProfile) =>
+    provider === "vllm" ? { ...modelProfile, provider: "vllm" as const } : modelProfile,
+  );
   return {
     enabled,
     advisory: true,
-    provider: profile.provider,
-    base_url: process.env.MATRIXCORE_OLLAMA_URL ?? "http://127.0.0.1:11434",
+    provider,
+    base_url:
+      provider === "vllm"
+        ? process.env.MATRIXCORE_VLLM_URL ?? "http://127.0.0.1:8000/v1"
+        : process.env.MATRIXCORE_OLLAMA_URL ?? "http://127.0.0.1:11434",
     mode: "auto",
-    model_profiles: profile.models,
+    model_profiles: modelProfiles,
     models: profile.defaultModels,
     routing: profile.routing,
     graph: profile.graph,

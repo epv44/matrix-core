@@ -14,6 +14,7 @@ import {
   type EvalSuiteOutputFormat,
 } from "./suite.js";
 import { renderEvalHtml } from "./html-report.js";
+import type { CandidateGenerationArm, CandidateInferenceMode, CandidatePromptVariant } from "../../../src/agentsmith/engine-types.js";
 import { findLatestSuiteStatus, readSuiteRunStatus } from "./suite-status.js";
 import {
   readStage1Baseline,
@@ -22,6 +23,7 @@ import {
   writeStage1Baseline,
   type Stage1EvalReport,
 } from "./stage-1.js";
+import { resolveEvalTreatment } from "./vllm-treatment.js";
 
 const program = new Command();
 program.name("eval").description("Repository-only AgentSmith diagnostic evaluation lab");
@@ -138,6 +140,13 @@ const stages: EvalStage[] = [
   "aggregation",
   "reporting",
 ];
+const candidateArms: CandidateGenerationArm[] = [
+  "host-defaults",
+  "deterministic-evidence",
+  "host-derived-metadata",
+  "simplified-contract",
+  "rule-bound-classification",
+];
 
 async function runTargetEval(opts: {
   target?: string;
@@ -152,6 +161,21 @@ async function runTargetEval(opts: {
   tier?: EvalReplayMode;
   stages?: EvalStage[];
   repeat?: number;
+  arm?: CandidateGenerationArm;
+  inferenceMode?: CandidateInferenceMode;
+  candidatePromptVariant?: CandidatePromptVariant;
+  candidateModel?: string;
+  verifierModel?: string;
+  cases?: string[];
+  timeoutMs?: number;
+  candidateOutputTokens?: number;
+  candidateContextTokens?: number;
+  candidateTemperature?: number;
+  candidateTopP?: number;
+  candidateTopK?: number;
+  candidateThinkingTokens?: number;
+  thinkingStream?: boolean;
+  treatment?: string;
 }) {
   if (opts.target !== "agentsmith") throw new Error(`Unsupported eval target: ${opts.target ?? "<missing>"}`);
   if (!opts.suite) throw new Error("--suite is required");
@@ -161,6 +185,19 @@ async function runTargetEval(opts: {
   const repeat = opts.repeat ?? 1;
   if (!Number.isInteger(repeat) || repeat < 1) throw new Error(`Invalid repeat count: ${repeat}`);
   if (opts.stages?.some((stage) => !stages.includes(stage))) throw new Error("Invalid pipeline stage");
+  if (opts.arm && !candidateArms.includes(opts.arm)) throw new Error(`Invalid candidate arm: ${opts.arm}`);
+  if (opts.inferenceMode && !["structured", "thinking-no-format", "thinking-structured", "thinking-conclusion-then-structured"].includes(opts.inferenceMode)) throw new Error(`Invalid candidate inference mode: ${opts.inferenceMode}`);
+  const promptVariants: CandidatePromptVariant[] = ["baseline", "branch-analysis-v1", "branch-analysis-state-scan-v2", "branch-analysis-delta-first-v3", "branch-analysis-type-outcome-v2", "branch-analysis-guard-pass-through-v2"];
+  if (opts.candidatePromptVariant && !promptVariants.includes(opts.candidatePromptVariant)) throw new Error(`Invalid candidate prompt variant: ${opts.candidatePromptVariant}`);
+  if (opts.candidatePromptVariant !== "baseline" && opts.arm && !["simplified-contract", "rule-bound-classification"].includes(opts.arm))
+    throw new Error("Branch-analysis prompt variants are only supported by the simplified-contract or rule-bound-classification arms");
+  if (opts.inferenceMode === "thinking-conclusion-then-structured" && opts.arm && opts.arm !== "simplified-contract")
+    throw new Error("thinking-conclusion-then-structured is only supported by the simplified-contract arm");
+  if (opts.thinkingStream && !opts.inferenceMode?.startsWith("thinking-"))
+    throw new Error("--thinking-stream requires a thinking inference mode");
+  const treatment = resolveEvalTreatment(opts.treatment);
+  if (treatment && (opts.candidateModel || opts.verifierModel || opts.candidateOutputTokens !== undefined || opts.candidateContextTokens !== undefined || opts.candidateTopP !== undefined || opts.candidateTopK !== undefined || opts.candidateThinkingTokens !== undefined || opts.timeoutMs !== undefined || opts.arm || opts.inferenceMode !== "structured" || opts.thinkingStream))
+    throw new Error("--treatment only permits --candidate-temperature and --candidate-prompt-variant experimental overrides");
   if ((opts.baseline || opts.createBaseline) && (replay !== "live" || opts.stages?.length))
     throw new Error("Suite baselines are only supported for the complete live suite");
   const repositoryRoot = root(opts.root);
@@ -181,6 +218,22 @@ async function runTargetEval(opts: {
     replay,
     stages: opts.stages,
     repeat,
+    candidateArm: treatment?.candidateArm ?? opts.arm,
+    inferenceMode: treatment?.inferenceMode ?? opts.inferenceMode,
+    candidatePromptVariant: opts.candidatePromptVariant === "baseline" ? treatment?.candidatePromptVariant ?? opts.candidatePromptVariant : opts.candidatePromptVariant,
+    candidateModel: opts.candidateModel,
+    verifierModel: opts.verifierModel,
+    candidateTemperature: opts.candidateTemperature ?? treatment?.candidateTemperature,
+    candidateTopP: treatment?.candidateTopP ?? opts.candidateTopP,
+    candidateTopK: treatment?.candidateTopK ?? opts.candidateTopK,
+    candidateThinkingTokens: treatment?.candidateThinkingTokens ?? opts.candidateThinkingTokens,
+    thinkingStream: treatment?.thinkingStream ?? opts.thinkingStream,
+    controlFlowDelta: treatment?.controlFlowDelta,
+    timeoutMs: treatment?.timeoutMs ?? opts.timeoutMs,
+    treatment: opts.treatment,
+    cases: opts.cases,
+    candidateOutputTokens: opts.candidateOutputTokens,
+    candidateContextTokens: opts.candidateContextTokens,
     output: jsonOutput,
     baseline,
     baselineOutput: opts.createBaseline,
@@ -346,11 +399,26 @@ program
   .option("--tier <tier>", "Suite replay tier: stage, recorded, isolated, or live", "live")
   .option("--stage <stage...>", "Run only the selected pipeline stage(s)")
   .option("--repeat <count>", "Runs per case", (value) => Number(value), 1)
+  .option("--arm <arm>", `Candidate arm: ${candidateArms.join(", ")}`)
+  .option("--inference-mode <mode>", "Candidate inference mode: structured, thinking-no-format, thinking-structured, or thinking-conclusion-then-structured", "structured")
+  .option("--candidate-prompt-variant <variant>", "Candidate prompt variant: baseline, branch-analysis-v1, branch-analysis-state-scan-v2, branch-analysis-delta-first-v3, branch-analysis-type-outcome-v2, or branch-analysis-guard-pass-through-v2", "baseline")
+  .option("--candidate-model <model>", "Override the candidate model for diagnostic evals only")
+  .option("--verifier-model <model>", "Override the verifier model for diagnostic evals only")
+  .option("--case <case...>", "Limit the diagnostic run to selected eval cases")
+  .option("--timeout-ms <milliseconds>", "Override model request timeout for this eval", (value) => Number(value))
+  .option("--candidate-output-tokens <tokens>", "Override candidate model output budget for this diagnostic eval", (value) => Number(value))
+  .option("--candidate-context-tokens <tokens>", "Override candidate model context budget for this diagnostic eval", (value) => Number(value))
+  .option("--candidate-temperature <temperature>", "Override candidate temperature for this diagnostic eval", (value) => Number(value))
+  .option("--candidate-top-p <value>", "Override candidate top-p for this diagnostic eval", (value) => Number(value))
+  .option("--candidate-top-k <value>", "Override candidate top-k for this diagnostic eval", (value) => Number(value))
+  .option("--candidate-thinking-tokens <tokens>", "Override vLLM reasoning token budget for this diagnostic eval", (value) => Number(value))
+  .option("--thinking-stream", "Stream and persist provider thinking chunks for diagnostics", false)
+  .option("--treatment <id>", "Named reproducible provider treatment")
   .action(async (opts) => {
     if (!opts.target && !opts.suite) throw new Error("--target agentsmith and --suite <registered-suite> are required");
     if (opts.model !== "small" && opts.model !== "large") throw new Error(`Invalid model target: ${opts.model}`);
     if (!["text", "json", "html"].includes(opts.format)) throw new Error(`Invalid eval format: ${opts.format}`);
-    await runTargetEval({ ...opts, model: opts.model, format: opts.format });
+    await runTargetEval({ ...opts, model: opts.model, format: opts.format, cases: opts.case });
   });
 
 await program.parseAsync(process.argv);

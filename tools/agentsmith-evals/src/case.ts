@@ -17,7 +17,7 @@ import {
 import { computeWorkspaceVersion } from "../../../src/core/version.js";
 import { sha256 } from "../../../src/core/hash.js";
 
-export const EVAL_CASE_SCHEMA_VERSION = 9;
+export const EVAL_CASE_SCHEMA_VERSION = 10;
 export const STAGE_REPLAY_SCHEMA_VERSION = 1;
 const slugPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -149,6 +149,15 @@ export const expectedFindingSchema = z.object({
   minimumEvidence: z.array(minimumEvidenceSchema).optional(),
 });
 
+const substantiveConceptGroupSchema = z.array(z.string().trim().min(1)).min(1);
+const substantiveConceptsSchema = z.object({
+  domain: categorySchema,
+  triggerGroups: z.array(substantiveConceptGroupSchema).min(1),
+  invariantGroups: z.array(substantiveConceptGroupSchema).min(1),
+  impactGroups: z.array(substantiveConceptGroupSchema).min(1),
+  forbidden: z.array(z.string().trim().min(1)).default([]),
+});
+
 const expectedCandidateSchema = z.object({
   id: z.string().min(1),
   file: z.string().min(1),
@@ -162,6 +171,7 @@ const expectedCandidateSchema = z.object({
   requiredEvidenceKinds: z.array(evidenceKindSchema).default([]),
   requiredReasoningTerms: z.array(z.string().min(1)).default([]),
   forbiddenReasoningTerms: z.array(z.string().min(1)).default([]),
+  substantiveConcepts: substantiveConceptsSchema.optional(),
   rationale: z.string().min(1),
 });
 
@@ -313,6 +323,7 @@ export const evalCaseSchema = z
       z.literal(6),
       z.literal(7),
       z.literal(8),
+      z.literal(9),
       z.literal(EVAL_CASE_SCHEMA_VERSION),
     ]),
     id: z.string().min(1),
@@ -411,7 +422,7 @@ export const evalCaseSchema = z
         context.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["evaluationScope", "stages"],
-          message: "active schema-v9 cases require at least one evaluation stage",
+          message: "active schema-v9+ cases require at least one evaluation stage",
         });
       const seen = new Set<string>();
       let prior = -1;
@@ -487,6 +498,12 @@ export const evalCaseSchema = z
           code: z.ZodIssueCode.custom,
           path: ["expectations", "candidates", "items", index, "expectedVerdict"],
           message: "an absent candidate oracle must have rejected as its terminal disposition",
+        });
+      if (value.schemaVersion >= 10 && candidate.expectedPresence && !candidate.substantiveConcepts)
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["expectations", "candidates", "items", index, "substantiveConcepts"],
+          message: "schema-v10 positive candidate oracles require substantiveConcepts",
         });
     });
     const declaredIds = new Set(declaredCandidates.map((candidate) => candidate.id));

@@ -99,6 +99,28 @@ function candidateMetric(stages: ReturnType<typeof evaluateStages>, name: string
   return stages.find((stage) => stage.stage === "candidates")?.metrics.find((metric) => metric.name === name);
 }
 
+const substantiveExpected = {
+  ...expected,
+  substantiveConcepts: {
+    domain: "contract",
+    triggerGroups: [["null", "nullable"], ["producer"]],
+    invariantGroups: [["caller"], ["nullable", "null check"]],
+    impactGroups: [["dereference", "crash"]],
+    forbidden: ["safe fallback"],
+  },
+} as const;
+
+function candidateBatch(sourceId: string, candidates: any[], overrides: Record<string, unknown> = {}) {
+  return {
+    sourceId,
+    candidateState: candidates.length ? "finding" : "no_finding",
+    candidates,
+    inputTokens: 0,
+    outputTokens: 0,
+    ...overrides,
+  } as any;
+}
+
 describe("Phase 0 candidate-quality measurement contracts", () => {
   it("keeps file, region, category, severity, and title matching strict for the oracle", () => {
     const nearMisses = [
@@ -440,6 +462,122 @@ describe("Phase 0 candidate-quality measurement contracts", () => {
     expect(audits.filter((audit) => audit.oracleSatisfied)).toHaveLength(1);
     expect(audits.find((audit) => audit.oracleId === expected.id)?.oracleSatisfied).toBe(true);
     expect(audits.find((audit) => audit.oracleId === secondExpected.id)?.oracleSatisfied).toBe(false);
+  });
+
+  it("evaluates every candidate for substantive recognition before nearest-pair diagnostics", () => {
+    const diagnosticDefinition = definition({
+      candidates: { items: [substantiveExpected] },
+      verification: { candidates: [substantiveExpected] },
+      aggregation: { outcome: "findings", findings: [] },
+    });
+    const nearestButWrong = candidate({
+      id: "nearest",
+      line: 10,
+      title: "Nearby contract note",
+      description: "The producer and caller remain compatible.",
+    });
+    const substantive = candidate({
+      id: "substantive",
+      line: 12,
+      severity: "medium",
+      title: "Nullable producer result reaches caller",
+      description: "The producer returns null, violating the caller nullable invariant and causing a dereference crash.",
+    });
+    const diagnostics = collectCandidateNearMissDiagnostics({
+      definition: diagnosticDefinition,
+      scope: trace().scope,
+      candidates: [nearestButWrong, substantive] as any,
+      candidateBatches: [candidateBatch("unit", [nearestButWrong, substantive])],
+    });
+    const metric = (name: string) => diagnostics.metrics.find((item) => item.name === name);
+
+    expect(metric("substantiveCaseCapability")).toMatchObject({ value: 1, numerator: 1, denominator: 1 });
+    expect(metric("substantiveCompletedCallRecognition")).toMatchObject({ value: 1, numerator: 1, denominator: 1 });
+    expect(metric("strictCandidateMatchRate")?.value).toBe(0);
+
+    const stages = evaluateStages({
+      definition: diagnosticDefinition,
+      trace: trace(),
+      execution: {
+        ...execution([nearestButWrong, substantive]),
+        candidateBatches: [candidateBatch("unit", [nearestButWrong, substantive])],
+      },
+      result: { findings: [], coverage: {}, outcome: "clear" } as any,
+      tier: "live",
+      hermetic: false,
+    });
+    expect(candidateMetric(stages, "substantiveCaseCapability")).toMatchObject({ value: 1, numerator: 1, denominator: 1 });
+    expect(candidateMetric(stages, "expectedCandidateRecall")).toMatchObject({ value: 0, numerator: 0, denominator: 1 });
+  });
+
+  it("reports completed, attempted, finding-fidelity, and failure denominators independently", () => {
+    const diagnosticDefinition = definition({
+      candidates: { items: [substantiveExpected] },
+      verification: { candidates: [substantiveExpected] },
+      aggregation: { outcome: "findings", findings: [] },
+    });
+    const recognized = candidate({
+      title: "Nullable producer crashes caller",
+      description: "The producer returns null and violates the nullable caller invariant, causing a dereference crash.",
+    });
+    const completed = collectCandidateNearMissDiagnostics({
+      definition: diagnosticDefinition,
+      scope: trace().scope,
+      candidates: [recognized] as any,
+      candidateBatches: [
+        candidateBatch("one", [recognized]),
+        candidateBatch("two", [{ ...recognized, id: "candidate-2" }]),
+        candidateBatch("three", [{ ...recognized, id: "candidate-3" }]),
+        candidateBatch("four", []),
+      ],
+    });
+    const completedMetric = (name: string) => completed.metrics.find((item) => item.name === name);
+    expect(completedMetric("substantiveCompletedCallRecognition")).toMatchObject({ numerator: 3, denominator: 4, value: 0.75 });
+    expect(completedMetric("substantiveAttemptedCallRecognition")).toMatchObject({ numerator: 3, denominator: 4, value: 0.75 });
+    expect(completedMetric("substantiveFindingFidelity")).toMatchObject({ numerator: 3, denominator: 3, value: 1 });
+    expect(completedMetric("substantiveProviderFailureRate")).toMatchObject({ numerator: 0, denominator: 4, value: 0 });
+
+    const failed = collectCandidateNearMissDiagnostics({
+      definition: diagnosticDefinition,
+      scope: trace().scope,
+      candidates: [recognized] as any,
+      candidateBatches: [
+        candidateBatch("one", [recognized]),
+        candidateBatch("two", [{ ...recognized, id: "candidate-2" }]),
+        candidateBatch("three", [{ ...recognized, id: "candidate-3" }]),
+        candidateBatch("four", [], { error: "provider timeout" }),
+      ],
+    });
+    const failedMetric = (name: string) => failed.metrics.find((item) => item.name === name);
+    expect(failedMetric("substantiveCompletedCallRecognition")).toMatchObject({ numerator: 3, denominator: 3, value: 1 });
+    expect(failedMetric("substantiveAttemptedCallRecognition")).toMatchObject({ numerator: 3, denominator: 4, value: 0.75 });
+    expect(failedMetric("substantiveFindingFidelity")).toMatchObject({ numerator: 3, denominator: 3, value: 1 });
+    expect(failedMetric("substantiveProviderFailureRate")).toMatchObject({ numerator: 1, denominator: 4, value: 0.25 });
+  });
+
+  it("rejects schema-v10 positive candidate labels without substantive concepts", () => {
+    const parsed = evalCaseSchema.safeParse({
+      schemaVersion: 10,
+      id: "missing-substantive-contract",
+      status: "draft",
+      kind: "benchmark",
+      suite: "component",
+      source: { traceId: "trace", traceSchemaVersion: 5, fixture: null, project: "test" },
+      sanitization: {
+        reviewed: false,
+        absolutePathsRemoved: true,
+        sensitiveContentReviewed: false,
+        redistributable: false,
+        sensitiveContentExemptions: [],
+      },
+      groundTruth: { reviewed: true, reviewedBy: "test", reviewedAt: "2026-08-28T00:00:00.000Z", contractFamily: "test", exhaustiveCandidates: true },
+      evaluationScope: { stages: ["candidates"] },
+      expectations: { candidates: { items: [expected] } },
+    });
+    expect(parsed.success).toBe(false);
+    expect(parsed.error?.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining("substantiveConcepts") })]),
+    );
   });
 
   it("serializes the same scorecard deterministically and preserves N/A denominators", () => {

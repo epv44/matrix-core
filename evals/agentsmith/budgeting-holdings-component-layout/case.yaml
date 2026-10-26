@@ -1,4 +1,4 @@
-schemaVersion: 9
+schemaVersion: 10
 id: budgeting-holdings-component-layout
 status: active
 kind: benchmark
@@ -160,6 +160,17 @@ expectations:
         requiredEvidenceKinds: [implementation, test]
         requiredReasoningTerms: [cash_snapshot, Account balance]
         forbiddenReasoningTerms: [runtime error]
+        substantiveConcepts:
+          domain: contract
+          triggerGroups:
+            - [cash_snapshot, "cash snapshot"]
+            - ["Account balance", "account-balance"]
+          invariantGroups:
+            - ["Cash snapshot", source, label]
+          impactGroups:
+            - [cash_snapshot, "cash snapshot"]
+            - ["Account balance", mislabeled, "wrong label"]
+          forbidden: ["runtime error"]
         rationale: The backend and API contract expose cash_snapshot, but the component maps every non-holdings source to Account balance.
       - id: line-height-false-positive
         file: frontend/e2e/dashboard.spec.ts

@@ -1,4 +1,4 @@
-schemaVersion: 9
+schemaVersion: 10
 id: auth-guard-bypass
 status: active
 kind: benchmark
@@ -56,6 +56,19 @@ expectations:
         requiredEvidenceKinds: [type]
         requiredReasoningTerms: [member, "&&", deleteUser]
         forbiddenReasoningTerms: []
+        substantiveConcepts:
+          domain: security
+          triggerGroups:
+            - [member, "non admin", unauthorized]
+            - [logical_and, short_circuit_guard]
+            - [deleteUser, "delete user", deletion]
+          invariantGroups:
+            - [admin, administrator]
+            - [authorization, authorize, "role check", "admin only"]
+          impactGroups:
+            - [member, "non admin", unauthorized]
+            - [deleteUser, "delete user", deletion]
+          forbidden: []
         rationale: A present member session makes the first side of the conjunction false, so deletion proceeds.
   verification:
     candidates: *expected_candidates

@@ -1,0 +1,21 @@
+diff --git a/tools/server/server-schema.cpp b/tools/server/server-schema.cpp
+index 54e126aa0..7d0527766 100644
+--- a/tools/server/server-schema.cpp
++++ b/tools/server/server-schema.cpp
+@@ -313,6 +313,16 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
+     // Token-level fields (require vocab)
+     //
+ 
++    // Preserve compatibility with callers that render the prompt outside of
++    // llama-server. The generation prompt is replayed into grammar and
++    // reasoning-budget samplers so delimiters already appended by the caller
++    // affect sampler state before the first generated token.
++    add((new field_str("generation_prompt"))
++        ->set_desc("Generation-prompt suffix already present in the rendered prompt")
++        ->set_handler([&](field_eval_context & ctx, const json & data) {
++            ctx.params.sampling.generation_prompt = data.at("generation_prompt").get<std::string>();
++        }));
++
+     add((new field_json("preserved_tokens"))
+         ->set_desc("List of token strings that must not be split during tokenization")
+         ->set_handler([&](field_eval_context & ctx, const json & data) {
