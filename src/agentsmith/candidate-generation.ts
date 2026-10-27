@@ -96,7 +96,7 @@ function candidateSystemPrompt(
   inferenceMode: CandidateInferenceMode | undefined,
 ): string | undefined {
   const behavior = variant ? branchAnalysisBehaviorByVariant[variant] : undefined;
-  if ((arm === "simplified-contract" || arm === "rule-bound-classification") && behavior)
+  if ((arm === "simplified-contract" || arm === "rule-bound-classification" || arm === "host-referenced-witness") && behavior)
     return branchAnalysisSystemPrompt(behavior, ["ollama", "vllm", "openai-responses"].includes(provider) && inferenceMode === "thinking-structured");
   return undefined;
 }
@@ -225,6 +225,29 @@ const simplifiedCandidateResponseSchema = z
   .object({
     state: z.enum(["finding", "no_finding", "insufficient_context"]),
     candidates: z.array(simplifiedCandidateSchema).max(2).default([]),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.state === "finding" && value.candidates.length === 0)
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "finding state requires at least one candidate" });
+    if (value.state !== "finding" && value.candidates.length > 0)
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${value.state} state cannot contain candidates` });
+  });
+const witnessCandidateSchema = z
+  .object({
+    file: z.string().min(1),
+    line: z.number().int().positive(),
+    endLine: z.number().int().positive().optional(),
+    witnessKey: z.string().min(1).max(240),
+    basisRuleId: z.string().min(1).max(240),
+    impact: z.string().min(1).max(240),
+    confidence: z.number().min(0).max(1),
+  })
+  .strict();
+const witnessCandidateResponseSchema = z
+  .object({
+    state: z.enum(["finding", "no_finding", "insufficient_context"]),
+    candidates: z.array(witnessCandidateSchema).max(2).default([]),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -402,6 +425,7 @@ async function invokeStructured<T>(opts: {
   maxCandidates?: number;
   evidenceSelectorKeys?: string[];
   allowedRuleIds?: string[];
+  allowedWitnessKeys?: string[];
   candidateArm?: CandidateGenerationArm;
   inferenceMode?: CandidateInferenceMode;
   systemPrompt?: string;
@@ -421,6 +445,7 @@ async function invokeStructured<T>(opts: {
       maxCandidates: opts.maxCandidates,
       evidenceSelectorKeys: opts.evidenceSelectorKeys,
       allowedRuleIds: opts.allowedRuleIds,
+      allowedWitnessKeys: opts.allowedWitnessKeys,
       candidateArm: opts.candidateArm,
       inferenceMode: opts.inferenceMode,
       systemPrompt: opts.systemPrompt,
@@ -579,6 +604,83 @@ function deterministicEvidenceDefaults(
     .map((selector) => selectorToEvidenceRequest(selector, "deterministic host-selected evidence for candidate adjudication"));
 }
 
+function witnessEvidenceDefaults(
+  item: ReviewWorkItem,
+  selectors: readonly TaskEvidenceSelector[],
+  ownerQualifiedName: string,
+) {
+  const readsType = item.graphEdges.some((edge) => edge.kind === "reads-type");
+  const rank = (selector: TaskEvidenceSelector) => {
+    const kind = selector.key.slice(selector.key.lastIndexOf(".") + 1);
+    if (readsType && kind === "type" && selector.key.startsWith("related-")) return 0;
+    if (kind === "implementation" && selector.locator.canonicalValue === ownerQualifiedName) return 1;
+    return 2;
+  };
+  return [...selectors]
+    .sort((left, right) => rank(left) - rank(right) || left.key.localeCompare(right.key))
+    .slice(0, 2)
+    .map((selector) =>
+      selectorToEvidenceRequest(selector, "deterministic host-selected witness evidence for candidate adjudication"),
+    );
+}
+
+function expandWitnessCandidate(
+  value: z.infer<typeof witnessCandidateSchema>,
+  item: ReviewWorkItem,
+  selectors: readonly TaskEvidenceSelector[],
+): Omit<CandidateFinding, "id"> {
+  const witness = item.controlFlowWitnesses?.find((entry) => entry.witnessKey === value.witnessKey);
+  if (!witness) throw new CandidateConclusionError("candidate referenced an unknown control-flow witness");
+  if (
+    value.file !== witness.file ||
+    value.line !== witness.startLine ||
+    (value.endLine ?? value.line) !== witness.endLine
+  )
+    throw new CandidateConclusionError("candidate location does not match its control-flow witness");
+  const basisRule = item.rules.find(
+    (rule) =>
+      rule.id === value.basisRuleId && rule.categories.length === 1 && rule.severity !== undefined,
+  );
+  if (!basisRule) throw new CandidateConclusionError("candidate referenced a rule without host-owned classification");
+  const category = basisRule.categories[0]!;
+  const severity = basisRule.severity;
+  if (!severity) throw new CandidateConclusionError("candidate referenced a rule without host-owned severity");
+  const currentBehavior = witness.currentOutcome === "passes"
+    ? `condition ${witness.currentGuard} evaluates false, so the blocking branch is skipped`
+    : `condition ${witness.currentGuard} evaluates true, so the blocking branch executes`;
+  const title = `${category} defect: ${witness.currentGuard} allows ${witness.state}`.slice(0, 80);
+  const description = [
+    `Trigger: ${witness.state}; ${currentBehavior} in ${witness.ownerSymbol.qualifiedName}.`,
+    `Invariant: ${basisRule.text}`,
+    `Impact: ${value.impact}`,
+  ].join(" ");
+  return {
+    sourceWorkItemIds: [item.id],
+    sourceReviewers: [],
+    file: witness.file,
+    line: witness.startLine,
+    endLine: witness.endLine,
+    severity,
+    category,
+    title,
+    description,
+    primarySymbol: witness.ownerSymbol.qualifiedName,
+    ruleId: basisRule.id,
+    classification: {
+      basisRuleId: basisRule.id,
+      categorySource: "rule",
+      severitySource: "rule",
+    },
+    witness: {
+      version: witness.version,
+      witnessId: witness.witnessId,
+      witnessKey: witness.witnessKey,
+    },
+    evidenceRequests: witnessEvidenceDefaults(item, selectors, witness.ownerSymbol.qualifiedName),
+    candidateConfidence: value.confidence,
+  };
+}
+
 function projectionText(projection: ReviewProjection) {
   return [
     `Snapshot: ${projection.metadata.snapshotId}`,
@@ -635,6 +737,15 @@ function workItemText(item: ReviewWorkItem, includeRuleClassification = false) {
           ),
         ]
       : []),
+    ...(item.controlFlowWitnesses?.length
+      ? [
+          "Control-flow witnesses (host-derived references; each state is mechanically evaluated but is not itself a finding):",
+          ...item.controlFlowWitnesses.map(
+            (witness) =>
+              `- ${witness.witnessKey}: ${witness.file}:${witness.startLine}; owner ${witness.ownerSymbol.qualifiedName}; state ${witness.state}; previous guard ${witness.previousGuard} => ${witness.previousOutcome}; current guard ${witness.currentGuard} => ${witness.currentOutcome}; operators ${witness.operatorTokens.join(" ")}.`,
+          ),
+        ]
+      : []),
     "Code:",
     ...item.code.flatMap((code) => [
       `--- ${code.file}:${code.startLine}-${code.endLine} [${code.changed ? "changed" : "supporting"}]`,
@@ -681,6 +792,13 @@ function ruleBoundClassificationInstructions(providerOwnsSerialization = false) 
     ? "The serving API supplies and enforces the response schema."
     : "Return only the required JSON object.";
   return `Each finding must name basisRuleId: exactly one visible rule whose stated requirement the concrete runtime state violates. Do not select a rule merely because its keywords appear in code. Select security.authorization-boundary only when the candidate demonstrates an executable authorization bypass. The host validates basisRuleId and derives category when that rule has one declared category and severity when that rule declares one. ${serialization}`;
+}
+
+function witnessCandidateInstructions(providerOwnsSerialization = false) {
+  const serialization = providerOwnsSerialization
+    ? "The serving API supplies and enforces the response schema."
+    : "Return only the required JSON object.";
+  return `Evaluate only the supplied control-flow witnesses against the visible rules. A witness proves the listed state and guard outcome, but it does not prove a policy violation. Return a finding only when that witnessed outcome violates exactly one visible rule. Preserve the exact witnessKey, file, line, optional endLine, and basisRuleId. Describe only the concrete observable impact; the host owns title, trigger, invariant, category, severity, evidence requests, and identifiers. Do not invent or modify witnesses, rules, locations, states, or guards. ${serialization}`;
 }
 
 function validateRuleBoundCandidateResponse(value: unknown, maxCandidates: number, item: ReviewWorkItem) {
@@ -833,7 +951,15 @@ export async function generateWorkItemCandidate(opts: {
   thinkingTokens?: number;
   signal?: AbortSignal;
 }): Promise<CandidateBatch> {
-  const arm = opts.arm ?? "simplified-contract";
+  const requestedArm = opts.arm ?? "simplified-contract";
+  const hostClassifiedRuleIds = opts.item.rules
+    .filter((rule) => rule.categories.length === 1 && rule.severity !== undefined)
+    .map((rule) => rule.id);
+  const witnessEligible = Boolean(opts.item.controlFlowWitnesses?.length && hostClassifiedRuleIds.length);
+  const arm: CandidateGenerationArm =
+    requestedArm === "host-referenced-witness" && !witnessEligible
+      ? "rule-bound-classification"
+      : requestedArm;
   if (opts.inferenceMode === "thinking-conclusion-then-structured")
     return generateConclusionThenStructuredCandidate({
       item: opts.item,
@@ -855,7 +981,8 @@ export async function generateWorkItemCandidate(opts: {
   const selectors = opts.allowedEvidenceSelectors ?? [];
   const boundedSelectors = opts.allowedEvidenceSelectors !== undefined;
   const ruleBound = arm === "rule-bound-classification";
-  const legacy = arm !== "simplified-contract" && !ruleBound;
+  const witnessBound = arm === "host-referenced-witness";
+  const legacy = arm !== "simplified-contract" && !ruleBound && !witnessBound;
   const providerOwnsSerialization = ["ollama", "vllm", "openai-responses"].includes(opts.profile.provider) && opts.inferenceMode === "thinking-structured";
   const systemPrompt = candidateSystemPrompt(opts.promptVariant, arm, opts.profile.provider, opts.inferenceMode);
   const outputSchema = reviewOutputSchema(
@@ -864,11 +991,14 @@ export async function generateWorkItemCandidate(opts: {
     opts.maxCandidates,
     selectors.map((selector) => selector.key),
     arm,
-    ruleBound ? opts.item.rules.map((rule) => rule.id) : undefined,
+    ruleBound ? opts.item.rules.map((rule) => rule.id) : witnessBound ? hostClassifiedRuleIds : undefined,
+    witnessBound ? opts.item.controlFlowWitnesses?.map((witness) => witness.witnessKey) : undefined,
   );
   const prompt = legacy
     ? `${candidateInstructions(opts.maxCandidates, false, arm === "host-defaults" && boundedSelectors, providerOwnsSerialization)}\n${directedQuestion(opts.item)}\n${focus}\n${arm === "host-defaults" ? selectorPromptText(selectors) : "Evidence is owned by the host; do not request selectors."}\n\n${workItemText(opts.item)}`
-    : `${simplifiedCandidateInstructions(opts.maxCandidates, providerOwnsSerialization)}${ruleBound ? `\n${ruleBoundClassificationInstructions(providerOwnsSerialization)}` : ""}\n${directedQuestion(opts.item)}\n${focus}\nDo not request more context; reason only from the supplied bounded task.\n\n${workItemText(opts.item, ruleBound)}`;
+    : witnessBound
+      ? `${witnessCandidateInstructions(providerOwnsSerialization)}\n${directedQuestion(opts.item)}\n${focus}\nDo not request more context; reason only from the supplied bounded task.\n\n${workItemText(opts.item, true)}`
+      : `${simplifiedCandidateInstructions(opts.maxCandidates, providerOwnsSerialization)}${ruleBound ? `\n${ruleBoundClassificationInstructions(providerOwnsSerialization)}` : ""}\n${directedQuestion(opts.item)}\n${focus}\nDo not request more context; reason only from the supplied bounded task.\n\n${workItemText(opts.item, ruleBound)}`;
   const legacySchema = z.object({
     c: z.array(
       compactCandidateSchema.extend({
@@ -889,7 +1019,14 @@ export async function generateWorkItemCandidate(opts: {
     // Keep the selector table available to the bounded repair path even when a
     // compatibility fixture returns the legacy shape under the simplified arm.
     evidenceSelectorKeys: selectors.map((selector) => selector.key),
-    ...(ruleBound ? { allowedRuleIds: opts.item.rules.map((rule) => rule.id) } : {}),
+    ...(ruleBound
+      ? { allowedRuleIds: opts.item.rules.map((rule) => rule.id) }
+      : witnessBound
+        ? { allowedRuleIds: hostClassifiedRuleIds }
+        : {}),
+    ...(witnessBound
+      ? { allowedWitnessKeys: opts.item.controlFlowWitnesses!.map((witness) => witness.witnessKey) }
+      : {}),
     candidateArm: arm,
     inferenceMode: opts.inferenceMode,
     systemPrompt,
@@ -903,7 +1040,9 @@ export async function generateWorkItemCandidate(opts: {
     validate: (value) =>
       legacy
         ? legacySchema.parse(value)
-        : ruleBound
+        : witnessBound
+          ? witnessCandidateResponseSchema.parse(value)
+          : ruleBound
           ? validateRuleBoundCandidateResponse(value, opts.maxCandidates, opts.item)
           : workItemCandidateResponseSchema(opts.maxCandidates).parse(value),
   });
@@ -911,7 +1050,9 @@ export async function generateWorkItemCandidate(opts: {
   const contractDrops: NonNullable<CandidateBatch["contractDrops"]> = [];
   const candidates = "state" in parsed
     ? parsed.candidates.map((value) => {
-        const candidate = expandSimplifiedCandidate(value, opts.item, selectors, arm);
+        const candidate = witnessBound
+          ? expandWitnessCandidate(value as z.infer<typeof witnessCandidateSchema>, opts.item, selectors)
+          : expandSimplifiedCandidate(value as z.infer<typeof simplifiedCandidateSchema>, opts.item, selectors, arm);
         return { ...candidate, id: candidateId(candidate) };
       })
     : parsed.c.flatMap((value, candidateIndex) => {
@@ -949,7 +1090,9 @@ export async function generateWorkItemCandidate(opts: {
     ...response.usage,
     prompt,
     contract: {
-      candidateArm: arm,
+      candidateArm: requestedArm,
+      requestedCandidateArm: requestedArm,
+      effectiveCandidateArm: arm,
       inferenceMode: opts.inferenceMode,
       promptVariant: opts.promptVariant,
       systemPromptSha256: sha256(systemPrompt ?? ""),

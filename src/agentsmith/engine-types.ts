@@ -12,7 +12,7 @@ import type {
   SpecialistReviewerId,
 } from "../core/types.js";
 import type { GraphContextEdge, GraphSnapshot, GraphSymbol } from "../core/graph/types.js";
-import type { ControlFlowDelta } from "../core/review-contracts.js";
+import type { ControlFlowDelta, ControlFlowWitness } from "../core/review-contracts.js";
 import type { ProviderCompletionMetadata, ProviderUsage, ReviewOutputKind } from "./provider.js";
 
 /** Candidate-generation behaviors that can be compared by the eval harness. */
@@ -21,7 +21,8 @@ export type CandidateGenerationArm =
   | "deterministic-evidence"
   | "host-derived-metadata"
   | "simplified-contract"
-  | "rule-bound-classification";
+  | "rule-bound-classification"
+  | "host-referenced-witness";
 
 export type CandidateInferenceMode =
   | "structured"
@@ -141,6 +142,8 @@ export interface ReviewWorkItem {
   rules: RenderedRule[];
   /** Optional host-derived, mechanically proven guard-state changes. */
   controlFlowDeltas?: ControlFlowDelta[];
+  /** Optional host-owned references used by the witness candidate contract. */
+  controlFlowWitnesses?: ControlFlowWitness[];
   deterministicReport?: string;
   contextSummaries?: string[];
   estimatedTokens: number;
@@ -212,6 +215,8 @@ export interface CandidateBatch {
   /** Candidate-generation contract retained for cross-provider diagnostic comparison. */
   contract?: {
     candidateArm: CandidateGenerationArm;
+    requestedCandidateArm?: CandidateGenerationArm;
+    effectiveCandidateArm?: CandidateGenerationArm;
     inferenceMode?: CandidateInferenceMode;
     promptVariant?: CandidatePromptVariant;
     systemPromptSha256: string;

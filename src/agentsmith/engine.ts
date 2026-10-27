@@ -39,7 +39,7 @@ import {
   verifyCandidateWithModel,
 } from "./candidate-generation.js";
 import { candidateAnchorIssue, evidenceRequestId, resolveEvidenceRequests } from "./evidence.js";
-import { deriveControlFlowDeltas } from "./control-flow-delta.js";
+import { deriveControlFlowDeltas, deriveControlFlowWitnesses } from "./control-flow-delta.js";
 import { buildTaskEvidenceLocatorTable, canonicalEvidenceLocatorTable, locatorToEvidenceRequest } from "./evidence-locators.js";
 import type {
   CandidateBatch,
@@ -263,7 +263,7 @@ function candidateKey(candidate: CandidateFinding) {
   // primary symbol can legitimately occur in multiple work items; merging on
   // those fields alone can replace the evidence and line anchor for one
   // defect with another defect discovered in a neighboring unit.
-  return `${candidate.file}:${candidate.line}:${candidate.endLine ?? candidate.line}:${candidate.primarySymbol ?? ""}:${candidate.category}:${candidate.ruleId ?? candidate.title.toLowerCase().replace(/\W+/g, "-")}`;
+  return `${candidate.file}:${candidate.line}:${candidate.endLine ?? candidate.line}:${candidate.primarySymbol ?? ""}:${candidate.category}:${candidate.ruleId ?? ""}:${candidate.witness?.witnessId ?? candidate.id}`;
 }
 
 function evidenceRequestKey(request: CandidateFinding["evidenceRequests"][number]) {
@@ -624,6 +624,7 @@ function shadowReviewTask(item: ReviewWorkItem, opts: {
     outputContractVersion: CANDIDATE_RESULT_VERSION,
     evidenceNeeds: [],
     controlFlowDeltas: item.controlFlowDeltas ?? [],
+    ...(item.controlFlowWitnesses?.length ? { controlFlowWitnesses: item.controlFlowWitnesses } : {}),
     budget: {
       inputTokens: Math.max(1, item.estimatedTokens),
       outputTokens: Math.max(1, Math.min(100_000, opts.profile.requestedOutputTokens)),
@@ -849,10 +850,27 @@ export async function executeReviewEngine(opts: {
           estimatedTokens: 0,
         }
       : selectWorkItems(rankedWorkItems, opts.config.partitioned.maxCandidateWorkItems ?? 4, candidateInputBudget);
-  const selectedWorkItems = opts.variant?.controlFlowDelta
+  const usesControlFlowContext =
+    opts.variant?.controlFlowDelta || opts.variant?.candidateArm === "host-referenced-witness";
+  const selectedWorkItems = usesControlFlowContext
     ? selection.selected.map((item) => {
         const controlFlowDeltas = deriveControlFlowDeltas({ diff: opts.scope.diff, workItem: item, maxTokens: 96 });
-        return controlFlowDeltas.length ? { ...item, controlFlowDeltas } : item;
+        const controlFlowWitnesses =
+          opts.variant?.candidateArm === "host-referenced-witness"
+            ? deriveControlFlowWitnesses({
+                diff: opts.scope.diff,
+                workItem: item,
+                snapshotId: opts.scope.id,
+                maxTokens: 192,
+              })
+            : [];
+        return controlFlowDeltas.length || controlFlowWitnesses.length
+          ? {
+              ...item,
+              ...(controlFlowDeltas.length ? { controlFlowDeltas } : {}),
+              ...(controlFlowWitnesses.length ? { controlFlowWitnesses } : {}),
+            }
+          : item;
       })
     : selection.selected;
   const candidateProjection =
@@ -1269,9 +1287,21 @@ export async function executeReviewEngine(opts: {
         root: opts.root,
         enabled: opts.config.cache,
         stage: "verification",
-        key: { snapshot: opts.scope.id, candidate, evidence: evidence[candidate.id], profile: verifierProfile },
+        key: {
+          snapshot: opts.scope.id,
+          candidate,
+          evidence: evidence[candidate.id],
+          profile: verifierProfile,
+          verificationContract: "legacy-verdict/v1",
+        },
         descriptorFingerprint: dispatchDescriptorFingerprint(
-          { snapshotId: opts.scope.id, candidate, evidence: evidence[candidate.id], profile: verifierProfile },
+          {
+            snapshotId: opts.scope.id,
+            candidate,
+            evidence: evidence[candidate.id],
+            profile: verifierProfile,
+            verificationContract: "legacy-verdict/v1",
+          },
           verifierProfile,
           "verification",
         ),
@@ -1299,7 +1329,13 @@ export async function executeReviewEngine(opts: {
       const judged = judgedStage.value;
       judged.result.cacheStatus = judgedStage.cacheStatus;
       judged.result.descriptorFingerprint = dispatchDescriptorFingerprint(
-        { snapshotId: opts.scope.id, candidate, evidence: evidence[candidate.id], profile: verifierProfile },
+        {
+          snapshotId: opts.scope.id,
+          candidate,
+          evidence: evidence[candidate.id],
+          profile: verifierProfile,
+          verificationContract: "legacy-verdict/v1",
+        },
         verifierProfile,
         "verification",
       );

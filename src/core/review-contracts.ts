@@ -115,6 +115,31 @@ export interface ControlFlowDelta {
   previousOutcome: "blocked" | "passes";
   currentOutcome: "blocked" | "passes";
 }
+/**
+ * A host-derived reference to one mechanically evaluated control-flow state.
+ * The model sees witnessKey; witnessId remains deterministic audit provenance.
+ */
+export interface ControlFlowWitness {
+  version: "control-flow-witness/v1";
+  witnessId: string;
+  witnessKey: string;
+  snapshotId: string;
+  ownerSymbol: {
+    file: string;
+    qualifiedName: string;
+    startLine: number;
+    endLine: number;
+  };
+  file: string;
+  startLine: number;
+  endLine: number;
+  previousGuard: string;
+  currentGuard: string;
+  operatorTokens: string[];
+  state: string;
+  previousOutcome: "blocked" | "passes";
+  currentOutcome: "blocked" | "passes";
+}
 export interface ReviewTask {
   taskId: string;
   taskVersion: string;
@@ -133,6 +158,7 @@ export interface ReviewTask {
   outputContractVersion: string;
   evidenceNeeds: EvidenceNeed[];
   controlFlowDeltas?: ControlFlowDelta[];
+  controlFlowWitnesses?: ControlFlowWitness[];
   budget: ReviewBudget;
 }
 export interface CandidateReviewFinding {
@@ -277,6 +303,43 @@ const controlFlowDeltaSchema = z
   })
   .strict()
   .refine((value) => value.endLine >= value.startLine, "control-flow delta range is invalid");
+const controlFlowWitnessSchema = z
+  .object({
+    version: z.literal("control-flow-witness/v1"),
+    witnessId: text(200),
+    witnessKey: text(240),
+    snapshotId: text(300),
+    ownerSymbol: z
+      .object({
+        file: workspacePath,
+        qualifiedName: text(240),
+        startLine: line,
+        endLine: line,
+      })
+      .strict(),
+    file: workspacePath,
+    startLine: line,
+    endLine: line,
+    previousGuard: text(1_000),
+    currentGuard: text(1_000),
+    operatorTokens: z.array(text(40)).min(1).max(32),
+    state: text(500),
+    previousOutcome: z.enum(["blocked", "passes"]),
+    currentOutcome: z.enum(["blocked", "passes"]),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.endLine < value.startLine)
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "control-flow witness range is invalid" });
+    if (value.ownerSymbol.endLine < value.ownerSymbol.startLine)
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "control-flow witness owner range is invalid" });
+    if (
+      value.ownerSymbol.file !== value.file ||
+      value.startLine < value.ownerSymbol.startLine ||
+      value.endLine > value.ownerSymbol.endLine
+    )
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "control-flow witness must be contained by its owner symbol" });
+  });
 export const reviewBudgetSchema = z
   .object({
     inputTokens: positiveBudget.max(1_000_000),
@@ -304,6 +367,7 @@ const taskInputSchema = z
     outputContractVersion: z.literal(CANDIDATE_RESULT_VERSION),
     evidenceNeeds: z.array(evidenceNeedSchema).max(20).default([]),
     controlFlowDeltas: z.array(controlFlowDeltaSchema).max(2).default([]),
+    controlFlowWitnesses: z.array(controlFlowWitnessSchema).max(2).optional(),
     budget: reviewBudgetSchema.optional(),
   })
   .strict()
@@ -490,6 +554,10 @@ export function validateReviewTask(value: unknown, options: ContractValidationOp
     ...task.unit.context,
     ...task.allowedEvidenceLocators.flatMap(locatorFiles).map((file) => ({ file })),
     ...(options.evidenceLocatorTable?.scopePaths ?? []).map((file) => ({ file })),
+    ...(task.controlFlowWitnesses ?? []).flatMap((witness) => [
+      { file: witness.file },
+      { file: witness.ownerSymbol.file },
+    ]),
   ];
   if (files)
     for (const ref of refs)
@@ -500,6 +568,16 @@ export function validateReviewTask(value: unknown, options: ContractValidationOp
         throw new Error(`review task references unknown symbol: ${ref.name}`);
   if (task.tokenBudget < task.unit.estimatedTokens || task.budget.inputTokens < task.unit.estimatedTokens)
     throw new Error("tokenBudget is smaller than estimatedTokens");
+  const witnessIds = new Set<string>();
+  const witnessKeys = new Set<string>();
+  for (const witness of task.controlFlowWitnesses ?? []) {
+    if (witness.snapshotId !== task.snapshotId)
+      throw new Error("control-flow witness snapshot does not match the review task");
+    if (witnessIds.has(witness.witnessId) || witnessKeys.has(witness.witnessKey))
+      throw new Error("control-flow witness references must be unique within a review task");
+    witnessIds.add(witness.witnessId);
+    witnessKeys.add(witness.witnessKey);
+  }
   const needOptions = options.evidenceLocatorTable
     ? { ...options, expectedSnapshotId: task.snapshotId }
     : { ...options, allowedEvidenceLocators: task.allowedEvidenceLocators };

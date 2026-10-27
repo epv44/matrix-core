@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "caseId": "auth-guard-bypass",
+  "fixtureDigest": "462820155f19c18c540e8b5da6972bf601431cbd2002d7d60a0a1224d3acb1a0",
+  "reviewed": true,
+  "contractEvidence": [],
+  "goldenCandidates": [
+    {
+      "id": "replay-supported-member-bypass",
+      "sourceWorkItemIds": [],
+      "sourceReviewers": [],
+      "file": "src/routes.ts",
+      "line": 5,
+      "endLine": 5,
+      "severity": "critical",
+      "category": "security",
+      "title": "Member session bypasses the admin guard",
+      "description": "Trigger: session is present with role member; !session is false, so !session && role !== admin evaluates false, the blocking throw is skipped, and deleteUser continues. Invariant: only admin sessions may delete users. Impact: the member reaches deletion through deleteUser.",
+      "suggestion": "Reject when the session is absent or the role is not admin.",
+      "primarySymbol": "deleteUser",
+      "ruleId": "security.authorization-boundary",
+      "evidenceRequests": [
+        {
+          "kind": "type",
+          "locatorMode": "symbol",
+          "symbol": "Session",
+          "pathHint": "src/auth.ts",
+          "reason": "Confirm that a present session can have the non-admin member role."
+        }
+      ],
+      "candidateConfidence": 1
+    },
+    {
+      "id": "replay-contradicted-member-blocked",
+      "sourceWorkItemIds": [],
+      "sourceReviewers": [],
+      "file": "src/routes.ts",
+      "line": 5,
+      "endLine": 5,
+      "severity": "critical",
+      "category": "security",
+      "title": "Member sessions are blocked by the admin guard",
+      "description": "Trigger: session is present with role member; !session && role !== admin evaluates true and the blocking throw executes. Invariant: non-admin member sessions are blocked by the guard. Impact: the member cannot reach deletion through deleteUser.",
+      "primarySymbol": "deleteUser",
+      "ruleId": "security.authorization-boundary",
+      "evidenceRequests": [
+        {
+          "kind": "type",
+          "locatorMode": "symbol",
+          "symbol": "Session",
+          "pathHint": "src/auth.ts",
+          "reason": "Confirm that member is a valid role before evaluating the guard."
+        }
+      ],
+      "candidateConfidence": 1
+    },
+    {
+      "id": "replay-unsupported-retention-policy",
+      "sourceWorkItemIds": [],
+      "sourceReviewers": [],
+      "file": "src/routes.ts",
+      "line": 5,
+      "severity": "medium",
+      "category": "contract",
+      "title": "External retention policy may be violated",
+      "description": "Trigger: an admin calls deleteUser. Invariant: an external retention policy requires a seven-day delay. Impact: immediate deletion violates that retention policy.",
+      "primarySymbol": "deleteUser",
+      "evidenceRequests": [],
+      "candidateConfidence": 0.5
+    }
+  ],
+  "verificationExpectations": [
+    {
+      "candidateId": "replay-supported-member-bypass",
+      "expectedVerdict": "verified",
+      "rationale": "The guard expression and Session role union directly establish the member-session authorization bypass."
+    },
+    {
+      "candidateId": "replay-contradicted-member-blocked",
+      "expectedVerdict": "rejected",
+      "rationale": "The conjunction short-circuits for a present session, directly contradicting the claim that members are blocked."
+    },
+    {
+      "candidateId": "replay-unsupported-retention-policy",
+      "expectedVerdict": "insufficient_evidence",
+      "rationale": "The frozen fixture contains no retention-policy contract from which the claim could be established or disproven."
+    }
+  ]
+}

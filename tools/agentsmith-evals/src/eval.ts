@@ -23,12 +23,20 @@ import { formatAgentSmithReview } from "../../../src/agentsmith/report.js";
 import { AGENTSMITH_STRATEGY_HASH } from "../../../src/agentsmith/strategy.js";
 import { collectEvalMetrics } from "./eval-metrics.js";
 import { PlannerReviewProvider, RecordedReviewProvider } from "./eval-provider.js";
-import { corpusHash, listEvalCases, materializeEvalRun, readEvalCase, readStageReplay } from "./case.js";
+import {
+  corpusHash,
+  evaluationStages,
+  listEvalCases,
+  materializeEvalRun,
+  readEvalCase,
+  readStageReplay,
+  type EvalCase,
+  type StageReplayArtifact,
+} from "./case.js";
 import { evaluateStages, formatStageScorecard, type EvalStage } from "./stage-score.js";
 import { findingMatches, type ExpectedFinding } from "./matching.js";
 import { aggregateStage1Metrics, scoreStage1Run } from "./stage-1.js";
 import { deriveEvalStatus, evaluateOracleResolutions } from "./oracle-resolution.js";
-import { evaluationStages } from "./case.js";
 import { buildContractShadowAudit } from "./contract-shadow.js";
 import {
   SUBSTANTIVE_NORMALIZATION_HASH,
@@ -500,6 +508,41 @@ function evaluationDiagnostics(execution: { execution: EngineExecution; result: 
   };
 }
 
+function withStageReplayVerificationExpectations(
+  definition: EvalCase,
+  stageReplay: StageReplayArtifact | undefined,
+): EvalCase {
+  if (!stageReplay?.verificationExpectations.length) return definition;
+  const candidates = new Map(stageReplay.goldenCandidates.map((candidate) => [candidate.id, candidate]));
+  const verification = stageReplay.verificationExpectations.map((expectation) => {
+    const candidate = candidates.get(expectation.candidateId);
+    if (!candidate)
+      throw new Error(`Stage replay verification expectation references missing candidate ${expectation.candidateId}`);
+    return {
+      id: expectation.candidateId,
+      file: candidate.file,
+      lineStart: candidate.line,
+      lineEnd: candidate.endLine ?? candidate.line,
+      category: candidate.category,
+      severity: candidate.severity,
+      titleContains: candidate.title,
+      expectedPresence: true,
+      expectedVerdict: expectation.expectedVerdict,
+      requiredEvidenceKinds: [],
+      requiredReasoningTerms: [],
+      forbiddenReasoningTerms: [],
+      rationale: expectation.rationale,
+    };
+  });
+  return {
+    ...definition,
+    expectations: {
+      ...definition.expectations,
+      verification: { candidates: verification },
+    },
+  };
+}
+
 export interface EvalProgressEvent {
   tier: EvalReplayMode;
   caseId: string;
@@ -559,9 +602,6 @@ export async function runEvalCases(opts: {
     const scored = definition.status === "active";
     const expectedFindings = definition.expectations.aggregation?.findings ?? [];
     const expectedOutcome = definition.expectations.aggregation?.outcome ?? null;
-    const expectedCandidates =
-      definition.expectations.verification?.candidates ?? definition.expectations.candidates?.items ?? [];
-    const rejectedCandidates = expectedCandidates.filter((candidate) => candidate.expectedVerdict !== "verified");
     const results = [];
     for (let iteration = 0; iteration < repeat; iteration++)
       for (const mode of modes) {
@@ -596,6 +636,18 @@ export async function runEvalCases(opts: {
           const selectedStages = (opts.stages?.length
             ? declaredStages.filter((stage) => opts.stages!.includes(stage))
             : declaredStages) as EvalStage[];
+          const isolatedVerificationOnly =
+            replay === "isolated" && selectedStages.length === 1 && selectedStages[0] === "verification";
+          const evaluationDefinition = isolatedVerificationOnly
+            ? withStageReplayVerificationExpectations(definition, stageReplay)
+            : definition;
+          const expectedCandidates =
+            evaluationDefinition.expectations.verification?.candidates ??
+            evaluationDefinition.expectations.candidates?.items ??
+            [];
+          const rejectedCandidates = expectedCandidates.filter(
+            (candidate) => candidate.expectedVerdict !== "verified",
+          );
           const deterministicOnly =
             selectedStages.length > 0 &&
             selectedStages.every((stage) =>
@@ -647,7 +699,8 @@ export async function runEvalCases(opts: {
                     : {}),
                 },
             });
-          const candidateExecution = replay === "isolated" && !deterministicOnly ? await execute() : undefined;
+          const candidateExecution =
+            replay === "isolated" && !deterministicOnly && !isolatedVerificationOnly ? await execute() : undefined;
           const execution = deterministicOnly
             ? await prepareDeterministicEvaluation({
                 root: replayWorkspace.root,
@@ -710,7 +763,7 @@ export async function runEvalCases(opts: {
             definition.expectations.planning ?? definition.expectations.graph ?? { files: [], symbols: [], edges: [] },
           );
           let stages = evaluateStages({
-            definition,
+            definition: evaluationDefinition,
             trace,
             execution: execution.execution,
             result: execution.result,
@@ -748,7 +801,7 @@ export async function runEvalCases(opts: {
           const oracleResolutions = deterministicOnly
             ? []
             : evaluateOracleResolutions({
-                definition,
+                definition: evaluationDefinition,
                 execution: execution.execution,
                 result: execution.result as Awaited<ReturnType<typeof executeReviewEngine>>["result"],
                 stage1,

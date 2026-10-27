@@ -146,6 +146,7 @@ const candidateArms: CandidateGenerationArm[] = [
   "host-derived-metadata",
   "simplified-contract",
   "rule-bound-classification",
+  "host-referenced-witness",
 ];
 
 async function runTargetEval(opts: {
@@ -189,8 +190,8 @@ async function runTargetEval(opts: {
   if (opts.inferenceMode && !["structured", "thinking-no-format", "thinking-structured", "thinking-conclusion-then-structured"].includes(opts.inferenceMode)) throw new Error(`Invalid candidate inference mode: ${opts.inferenceMode}`);
   const promptVariants: CandidatePromptVariant[] = ["baseline", "branch-analysis-v1", "branch-analysis-state-scan-v2", "branch-analysis-delta-first-v3", "branch-analysis-type-outcome-v2", "branch-analysis-guard-pass-through-v2"];
   if (opts.candidatePromptVariant && !promptVariants.includes(opts.candidatePromptVariant)) throw new Error(`Invalid candidate prompt variant: ${opts.candidatePromptVariant}`);
-  if (opts.candidatePromptVariant !== "baseline" && opts.arm && !["simplified-contract", "rule-bound-classification"].includes(opts.arm))
-    throw new Error("Branch-analysis prompt variants are only supported by the simplified-contract or rule-bound-classification arms");
+  if (opts.candidatePromptVariant !== "baseline" && opts.arm && !["simplified-contract", "rule-bound-classification", "host-referenced-witness"].includes(opts.arm))
+    throw new Error("Branch-analysis prompt variants are only supported by the simplified-contract, rule-bound-classification, or host-referenced-witness arms");
   if (opts.inferenceMode === "thinking-conclusion-then-structured" && opts.arm && opts.arm !== "simplified-contract")
     throw new Error("thinking-conclusion-then-structured is only supported by the simplified-contract arm");
   if (opts.thinkingStream && !opts.inferenceMode?.startsWith("thinking-"))
@@ -418,7 +419,13 @@ program
     if (!opts.target && !opts.suite) throw new Error("--target agentsmith and --suite <registered-suite> are required");
     if (opts.model !== "small" && opts.model !== "large") throw new Error(`Invalid model target: ${opts.model}`);
     if (!["text", "json", "html"].includes(opts.format)) throw new Error(`Invalid eval format: ${opts.format}`);
-    await runTargetEval({ ...opts, model: opts.model, format: opts.format, cases: opts.case });
+    await runTargetEval({
+      ...opts,
+      model: opts.model,
+      format: opts.format,
+      cases: opts.case,
+      stages: opts.stage,
+    });
   });
 
 await program.parseAsync(process.argv);

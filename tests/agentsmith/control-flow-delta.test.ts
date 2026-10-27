@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveControlFlowDeltas } from "../../src/agentsmith/control-flow-delta.js";
+import { deriveControlFlowDeltas, deriveControlFlowWitnesses } from "../../src/agentsmith/control-flow-delta.js";
 import type { ReviewWorkItem } from "../../src/agentsmith/engine-types.js";
 
 const symbol = {
@@ -61,6 +61,38 @@ describe("control-flow delta", () => {
         currentOutcome: "passes",
       }),
     ]);
+  });
+
+  it("derives deterministic owner-contained witness references without exposing the host ID as the label", () => {
+    const first = deriveControlFlowWitnesses({
+      diff: authDiff,
+      workItem: item(),
+      snapshotId: "snapshot-auth",
+    });
+    const second = deriveControlFlowWitnesses({
+      diff: authDiff,
+      workItem: item(),
+      snapshotId: "snapshot-auth",
+    });
+    expect(first).toEqual(second);
+    expect(first).toEqual([
+      expect.objectContaining({
+        version: "control-flow-witness/v1",
+        witnessKey: "deleteUser.guard-5.state-1",
+        snapshotId: "snapshot-auth",
+        file: "src/routes.ts",
+        startLine: 5,
+        state: 'session present, role = "member"',
+        previousGuard: '!session || session.role !== "admin"',
+        currentGuard: '!session && role !== "admin"',
+        operatorTokens: expect.arrayContaining(["!", "&&", "!=="]),
+        previousOutcome: "blocked",
+        currentOutcome: "passes",
+        ownerSymbol: expect.objectContaining({ qualifiedName: "deleteUser", startLine: 3, endLine: 7 }),
+      }),
+    ]);
+    expect(first[0]?.witnessId).toMatch(/^[a-f0-9]{64}$/);
+    expect(first[0]?.witnessKey).not.toContain(first[0]!.witnessId);
   });
 
   it("emits no delta when a syntactic rewrite preserves finite-state behavior", () => {

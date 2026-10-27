@@ -83,6 +83,37 @@ describe("OllamaProvider v2", () => {
     expect(candidate.properties.basisRuleId).toEqual({ type: "string", enum: ["security.authorization-boundary"] });
   });
 
+  it("limits witness candidates to host-owned references and model-owned impact", async () => {
+    const config = agentSmithConfigFromPolicy(true);
+    let requestBody: any;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+      requestBody = JSON.parse(String(init.body));
+      return new Response(JSON.stringify({ response: '{"state":"no_finding","candidates":[]}' }));
+    }));
+    await new OllamaProvider(config).invoke({
+      profile: config.model_profiles[0],
+      prompt: "review",
+      outputKind: "candidates",
+      candidateArm: "host-referenced-witness",
+      allowedRuleIds: ["security.authorization-boundary"],
+      allowedWitnessKeys: ["deleteUser.guard-4.state-1"],
+    });
+    const candidate = requestBody.format.properties.candidates.items;
+    expect(candidate.required).toEqual([
+      "file", "line", "witnessKey", "basisRuleId", "impact", "confidence",
+    ]);
+    expect(candidate.properties.witnessKey).toEqual({
+      type: "string",
+      enum: ["deleteUser.guard-4.state-1"],
+    });
+    expect(candidate.properties.basisRuleId).toEqual({
+      type: "string",
+      enum: ["security.authorization-boundary"],
+    });
+    for (const hostOwned of ["severity", "category", "trigger", "invariant", "title", "evidenceRequests", "id"])
+      expect(candidate.properties).not.toHaveProperty(hostOwned);
+  });
+
   it("passes configured top-p and top-k sampling values", async () => {
     const config = agentSmithConfigFromPolicy(true);
     const profile = {

@@ -1,5 +1,6 @@
 import ts from "typescript";
-import type { ControlFlowDelta } from "../core/review-contracts.js";
+import { sha256Json } from "../core/hash.js";
+import type { ControlFlowDelta, ControlFlowWitness } from "../core/review-contracts.js";
 import type { ReviewWorkItem } from "./engine-types.js";
 
 const UNKNOWN = Symbol("unknown-control-flow-value");
@@ -192,4 +193,105 @@ export function deriveControlFlowDeltas(opts: { diff: string; workItem: ReviewWo
     }
   }
   return deltas;
+}
+
+function operatorTokens(expression: ts.Expression): string[] {
+  const result: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isBinaryExpression(node)) result.push(node.operatorToken.getText());
+    else if (ts.isPrefixUnaryExpression(node)) result.push(node.operator === ts.SyntaxKind.ExclamationToken ? "!" : ts.tokenToString(node.operator) ?? node.getText());
+    ts.forEachChild(node, visit);
+  };
+  visit(expression);
+  return [...new Set(result)];
+}
+
+/**
+ * Derive bounded, owner-contained references for mechanically proven guard
+ * state changes. A witness is context for a model decision, never a finding.
+ */
+export function deriveControlFlowWitnesses(opts: {
+  diff: string;
+  workItem: ReviewWorkItem;
+  snapshotId: string;
+  maxTokens?: number;
+}): ControlFlowWitness[] {
+  const source = opts.workItem.code.map((snippet) => snippet.content).join("\n");
+  const aliases = optionalAliases(source);
+  const witnesses: ControlFlowWitness[] = [];
+  let usedTokens = 0;
+  for (const guard of changedGuards(opts.diff)) {
+    const owner = opts.workItem.primarySymbols
+      .filter(
+        (symbol) =>
+          symbol.file === guard.file && symbol.startLine <= guard.line && symbol.endLine >= guard.line,
+      )
+      .sort(
+        (left, right) =>
+          left.endLine - left.startLine - (right.endLine - right.startLine) ||
+          left.qualifiedName.localeCompare(right.qualifiedName),
+      )[0];
+    if (!owner) continue;
+    const previousGuard = guard.oldStatement.expression.getText();
+    const currentGuard = guard.newStatement.expression.getText();
+    const operators = operatorTokens(guard.newStatement.expression);
+    if (!operators.length) continue;
+    let stateIndex = 0;
+    for (const state of statesFor(source)) {
+      const previous = evaluate(guard.oldStatement.expression, state.values, aliases);
+      const current = evaluate(guard.newStatement.expression, state.values, aliases);
+      if (typeof previous !== "boolean" || typeof current !== "boolean" || previous === current) continue;
+      stateIndex += 1;
+      const delta: ControlFlowDelta = {
+        file: guard.file,
+        startLine: guard.line,
+        endLine: guard.line,
+        state: state.label,
+        previousOutcome: previous ? "blocked" : "passes",
+        currentOutcome: current ? "blocked" : "passes",
+      };
+      if (!visible(opts.workItem, delta)) continue;
+      const identity = {
+        version: "control-flow-witness/v1" as const,
+        snapshotId: opts.snapshotId,
+        workItemId: opts.workItem.id,
+        owner: `${owner.file}:${owner.qualifiedName}:${owner.startLine}:${owner.endLine}`,
+        file: guard.file,
+        line: guard.line,
+        previousGuard,
+        currentGuard,
+        state: state.label,
+        previousOutcome: delta.previousOutcome,
+        currentOutcome: delta.currentOutcome,
+      };
+      const witness: ControlFlowWitness = {
+        version: identity.version,
+        witnessId: sha256Json(identity),
+        witnessKey: `${owner.qualifiedName}.guard-${guard.line}.state-${stateIndex}`,
+        snapshotId: opts.snapshotId,
+        ownerSymbol: {
+          file: owner.file,
+          qualifiedName: owner.qualifiedName,
+          startLine: owner.startLine,
+          endLine: owner.endLine,
+        },
+        file: guard.file,
+        startLine: guard.line,
+        endLine: guard.line,
+        previousGuard,
+        currentGuard,
+        operatorTokens: operators,
+        state: state.label,
+        previousOutcome: delta.previousOutcome,
+        currentOutcome: delta.currentOutcome,
+      };
+      const estimated = Math.ceil(
+        (witness.witnessKey.length + witness.state.length + previousGuard.length + currentGuard.length + 80) / 3,
+      );
+      if (witnesses.length >= 2 || usedTokens + estimated > (opts.maxTokens ?? 192)) return witnesses;
+      usedTokens += estimated;
+      witnesses.push(witness);
+    }
+  }
+  return witnesses;
 }

@@ -22,6 +22,8 @@ export const VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_MAX_FIT_THINKI
 export const VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT = "vllm-metal-thinking-4b-rule-bound-delta-first-output-3k-thinking-2k-long-timeout" as const;
 /** Ollama/llama.cpp hard-budget treatment matched to the final 4B control. */
 export const OLLAMA_THINKING_9B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT = "ollama-thinking-9b-rule-bound-delta-first-output-3k-thinking-2k-long-timeout" as const;
+/** Matched candidate-fidelity treatment using host-referenced control-flow witnesses. */
+export const OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT = "ollama-thinking-9b-host-referenced-witness-delta-first-output-3k-thinking-2k-long-timeout" as const;
 export type EvalTreatmentId =
   | typeof VLLM_METAL_THINKING_4B_TREATMENT
   | typeof VLLM_METAL_THINKING_4B_CONTROL_FLOW_DELTA_TREATMENT
@@ -33,7 +35,8 @@ export type EvalTreatmentId =
   | typeof VLLM_METAL_THINKING_4B_RULE_BOUND_STATE_SCAN_OUTPUT_MAX_FIT_THINKING_1K_TREATMENT
   | typeof VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_MAX_FIT_THINKING_1K_TREATMENT
   | typeof VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT
-  | typeof OLLAMA_THINKING_9B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT;
+  | typeof OLLAMA_THINKING_9B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT
+  | typeof OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT;
 /** @deprecated Use EvalTreatmentId; retained for existing diagnostic imports. */
 export type VllmEvalTreatment = EvalTreatmentId;
 
@@ -266,6 +269,27 @@ const EVAL_TREATMENTS: Record<EvalTreatmentId, EvalTreatmentSettings> = {
     verifierOutputTokens: 512,
     timeoutMs: 900_000,
     candidateArm: "rule-bound-classification",
+    inferenceMode: "thinking-structured",
+    candidatePromptVariant: "branch-analysis-delta-first-v3",
+    thinkingStream: true,
+    controlFlowDelta: true,
+  },
+  [OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT]: {
+    id: OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT,
+    provider: "ollama",
+    baseUrl: "http://127.0.0.1:11435",
+    candidateModel: "qwen3.5:9b-q4_K_M",
+    verifierModel: "qwen3.5:9b-q4_K_M",
+    candidateContextTokens: 6144,
+    candidateOutputTokens: 3072,
+    candidateTemperature: 0.6,
+    candidateTopP: 0.95,
+    candidateTopK: 20,
+    candidateThinkingTokens: 2048,
+    verifierContextTokens: 6144,
+    verifierOutputTokens: 512,
+    timeoutMs: 900_000,
+    candidateArm: "host-referenced-witness",
     inferenceMode: "thinking-structured",
     candidatePromptVariant: "branch-analysis-delta-first-v3",
     thinkingStream: true,

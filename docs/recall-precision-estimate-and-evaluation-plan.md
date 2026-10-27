@@ -1024,3 +1024,48 @@ of canonical operator, symbol, and rule terms into candidate fields; (2) verifie
 an evidence-complete authorization bypass; and (3) treatment of intentionally narrow work items so
 an honest `insufficient_context` does not obscure the successful interaction review. Strict oracle
 semantics and hard budgets remain unchanged while these layers are diagnosed.
+
+### Host-referenced witness candidate result and verifier gate
+
+The candidate-fidelity follow-up replaced model-authored trigger, invariant, category, severity,
+title, evidence defaults, and identifiers with host projection from a canonical control-flow witness
+and one model-selected visible rule. The model retained only the bounded semantic choice: whether a
+supplied witness violates a visible rule, plus impact and confidence. Witness and rule references are
+validated against the frozen work item before a candidate can be constructed.
+
+The first matched `auth-guard-bypass` repetition moved strict expected-candidate recall from the
+previous five-repetition control's `1/5` (`20%`) to `1/1` (`100%`). Strict candidate match rate,
+substantive case capability, completed-call recognition, and finding fidelity were all `100%` in the
+treatment repetition. This confirms the candidate-projection hypothesis for the targeted case: the
+model recognized the defect and the host preserved the canonical operator, runtime state, rule,
+location, and evidence request in the final candidate.
+
+The repetition is not promotable. It emitted two candidates for one expected finding, so candidate
+precision was `1/2` (`50%`). A third candidate call timed out before verification, producing a
+partial run. Verified finding recall and final finding recall remained `0%`. These results require a
+matched multi-repetition check only after redundant work-item execution and verifier behavior are
+addressed; the single successful repetition is evidence of candidate-fidelity movement, not a new
+baseline.
+
+Artifacts: [host-witness HTML](../.quality/evals/ollama-9b-host-referenced-witness-auth-r1.html)
+and [host-witness JSON](../.quality/evals/ollama-9b-host-referenced-witness-auth-r1.json).
+
+An isolated verification replay was added with three frozen candidates and explicit expected
+dispositions: a supported member-session bypass, a contradicted claim that the same member is
+blocked, and an unsupported retention-policy claim. The legacy verifier achieved `1/3` oracle
+resolution accuracy. An atomic-claim experiment also ended at `1/3`, with verified finding recall
+`0%`; its final run marked both the supported and contradicted authorization candidates
+`insufficient_evidence`, raised an omitted-required-evidence consistency error, and made execution
+partial. This was a semantic adjudication failure, not a timeout, malformed JSON, or provider
+transport failure.
+
+The atomic experiment exceeded the three-attempt repair limit without convergence and is blocked.
+Its runtime/provider/treatment code was removed rather than retained as an unpromoted path. The
+reusable isolated-stage replay harness, frozen oracle, and generated artifacts remain. A future,
+manually approved verifier experiment should first make verifier inference settings and traces
+explicit and supply immutable canonical rule text or validated witness/rule provenance as verifier
+input. It must not treat missing evidence as support, relax the replay oracle, or add
+fixture-specific authorization wording.
+
+Artifacts: [legacy isolated verifier HTML](../.quality/evals/ollama-9b-isolated-verifier-control-r1-stage-filtered.html)
+and [final atomic diagnostic HTML](../.quality/evals/ollama-9b-isolated-atomic-verifier-final-r1.html).

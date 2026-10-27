@@ -58,6 +58,161 @@ const item: ReviewWorkItem = {
 };
 
 describe("candidate structured output", () => {
+  it("projects a host-referenced witness into deterministic candidate semantics", async () => {
+    const related = {
+      ...symbol,
+      file: "src/auth.ts",
+      kind: "interface" as const,
+      name: "Session",
+      qualifiedName: "Session",
+      contentHash: "session",
+    };
+    const witnessItem: ReviewWorkItem = {
+      ...item,
+      kind: "interaction",
+      relatedSymbols: [related],
+      graphEdges: [{
+        source: "src/a.ts:value",
+        target: "src/auth.ts:Session",
+        targetText: "Session",
+        kind: "reads-type",
+        confidence: "exact",
+        provider: "typescript-compiler",
+        sourceSymbol: symbol,
+        targetSymbol: related,
+      }],
+      rules: [{
+        id: "security.authorization-boundary",
+        text: "Only administrators may cross this authorization boundary.",
+        estimatedTokens: 12,
+        categories: ["security"],
+        severity: "critical",
+      }],
+      controlFlowWitnesses: [{
+        version: "control-flow-witness/v1",
+        witnessId: "a".repeat(64),
+        witnessKey: "value.guard-1.state-1",
+        snapshotId: "snapshot-a",
+        ownerSymbol: { file: "src/a.ts", qualifiedName: "value", startLine: 1, endLine: 1 },
+        file: "src/a.ts",
+        startLine: 1,
+        endLine: 1,
+        previousGuard: "!session || role !== \"admin\"",
+        currentGuard: "!session && role !== \"admin\"",
+        operatorTokens: ["!", "&&", "!=="],
+        state: 'session present, role = "member"',
+        previousOutcome: "blocked",
+        currentOutcome: "passes",
+      }],
+    };
+    const calls: Array<Parameters<ReviewProvider["invoke"]>[0]> = [];
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async (input) => {
+        calls.push(input);
+        return {
+          raw: JSON.stringify({ state: "finding", candidates: [{
+            file: "src/a.ts",
+            line: 1,
+            endLine: 1,
+            witnessKey: "value.guard-1.state-1",
+            basisRuleId: "security.authorization-boundary",
+            impact: "a member can execute the protected operation",
+            confidence: 0.9,
+          }] }),
+          usage: { inputTokens: 10, outputTokens: 10 },
+        };
+      },
+    };
+    const selectors = buildTaskEvidenceSelectors({ snapshotId: "snapshot-a", workItem: witnessItem });
+    const result = await generateWorkItemCandidate({
+      item: witnessItem,
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 1,
+      allowedEvidenceSelectors: selectors,
+      arm: "host-referenced-witness",
+    });
+    expect(calls[0]?.candidateArm).toBe("host-referenced-witness");
+    expect(calls[0]?.allowedWitnessKeys).toEqual(["value.guard-1.state-1"]);
+    expect(calls[0]?.prompt).not.toContain("a".repeat(64));
+    expect(result.contract).toMatchObject({
+      requestedCandidateArm: "host-referenced-witness",
+      effectiveCandidateArm: "host-referenced-witness",
+    });
+    expect(result.candidates[0]).toMatchObject({
+      file: "src/a.ts",
+      line: 1,
+      severity: "critical",
+      category: "security",
+      primarySymbol: "value",
+      ruleId: "security.authorization-boundary",
+      witness: { witnessId: "a".repeat(64), witnessKey: "value.guard-1.state-1" },
+    });
+    expect(result.candidates[0]?.description).toContain('Trigger: session present, role = "member"');
+    expect(result.candidates[0]?.description).toContain('!session && role !== "admin"');
+    expect(result.candidates[0]?.evidenceRequests.map((request) => request.kind)).toEqual(["type", "implementation"]);
+  });
+
+  it("fails closed when a witness candidate changes its host-owned reference", async () => {
+    const witnessItem: ReviewWorkItem = {
+      ...item,
+      rules: [{ id: "security.visible", text: "Visible rule", estimatedTokens: 1, categories: ["security"], severity: "critical" }],
+      controlFlowWitnesses: [{
+        version: "control-flow-witness/v1", witnessId: "b".repeat(64), witnessKey: "value.guard-1.state-1",
+        snapshotId: "snapshot-a", ownerSymbol: { file: "src/a.ts", qualifiedName: "value", startLine: 1, endLine: 1 },
+        file: "src/a.ts", startLine: 1, endLine: 1, previousGuard: "a || b", currentGuard: "a && b",
+        operatorTokens: ["&&"], state: "a = false", previousOutcome: "blocked", currentOutcome: "passes",
+      }],
+    };
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async () => ({
+        raw: JSON.stringify({ state: "finding", candidates: [{
+          file: "src/a.ts", line: 1, witnessKey: "invented.guard-9.state-9",
+          basisRuleId: "security.visible", impact: "bad", confidence: 1,
+        }] }),
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+    };
+    await expect(generateWorkItemCandidate({
+      item: witnessItem, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 1,
+      arm: "host-referenced-witness", inferenceMode: "thinking-structured",
+    })).rejects.toThrow(/unknown control-flow witness/);
+  });
+
+  it("falls back to the rule-bound contract without changing its prompt or wire inputs", async () => {
+    const ruleBoundItem: ReviewWorkItem = {
+      ...item,
+      rules: [{ id: "security.visible", text: "Visible rule", estimatedTokens: 1, categories: ["security"], severity: "critical" }],
+    };
+    const calls: Array<Parameters<ReviewProvider["invoke"]>[0]> = [];
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async (input) => {
+        calls.push(input);
+        return { raw: JSON.stringify({ state: "no_finding", candidates: [] }), usage: { inputTokens: 1, outputTokens: 1 } };
+      },
+    };
+    const fallback = await generateWorkItemCandidate({
+      item: ruleBoundItem, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 1,
+      arm: "host-referenced-witness",
+    });
+    await generateWorkItemCandidate({
+      item: ruleBoundItem, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 1,
+      arm: "rule-bound-classification",
+    });
+    expect(calls[0]).toMatchObject({ candidateArm: "rule-bound-classification", allowedRuleIds: ["security.visible"] });
+    expect(calls[0]?.allowedWitnessKeys).toBeUndefined();
+    expect(calls[0]?.prompt).toBe(calls[1]?.prompt);
+    expect(calls[0]?.systemPrompt).toBe(calls[1]?.systemPrompt);
+    expect(fallback.contract).toMatchObject({
+      requestedCandidateArm: "host-referenced-witness",
+      effectiveCandidateArm: "rule-bound-classification",
+    });
+  });
+
   it("derives declared classification only from the candidate's visible basis rule", async () => {
     const ruleBoundItem: ReviewWorkItem = {
       ...item,

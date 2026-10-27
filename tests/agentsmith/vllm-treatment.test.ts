@@ -3,6 +3,7 @@ import { agentSmithConfigFromPolicy } from "../../src/core/resolved-policy.js";
 import {
   applyEvalTreatment,
   resolveEvalTreatment,
+  OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT,
   OLLAMA_THINKING_9B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT,
   VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT,
   VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_MAX_FIT_THINKING_1K_TREATMENT,
@@ -95,4 +96,22 @@ describe("provider diagnostic treatments", () => {
       requestedOutputTokens: 3072,
     });
   });
+
+  it("changes only the candidate contract in the matched host-witness treatment", () => {
+    const control = resolveEvalTreatment(
+      OLLAMA_THINKING_9B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT,
+    )!;
+    const treatment = resolveEvalTreatment(
+      OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT,
+    )!;
+    const { candidateArm: controlArm, ...controlSettings } = control;
+    const { candidateArm: treatmentArm, ...treatmentSettings } = treatment;
+    expect(controlArm).toBe("rule-bound-classification");
+    expect(treatmentArm).toBe("host-referenced-witness");
+    expect(treatmentSettings).toEqual({
+      ...controlSettings,
+      id: OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT,
+    });
+  });
+
 });

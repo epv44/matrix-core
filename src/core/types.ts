@@ -448,6 +448,12 @@ export interface CandidateFinding {
     categorySource: "model" | "rule";
     severitySource: "model" | "rule";
   };
+  /** Audit-only provenance for a host-referenced control-flow witness. */
+  witness?: {
+    version: "control-flow-witness/v1";
+    witnessId: string;
+    witnessKey: string;
+  };
   evidenceRequests: EvidenceRequest[];
   candidateConfidence: number;
 }

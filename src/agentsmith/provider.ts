@@ -41,6 +41,7 @@ export interface ReviewProviderInput {
   maxCandidates?: number;
   evidenceSelectorKeys?: string[];
   allowedRuleIds?: string[];
+  allowedWitnessKeys?: string[];
   candidateArm?: CandidateGenerationArm;
   inferenceMode?: CandidateInferenceMode;
   systemPrompt?: string;
@@ -133,6 +134,7 @@ export function reviewOutputSchema(
   evidenceSelectorKeys?: string[],
   candidateArm: CandidateGenerationArm = "simplified-contract",
   allowedRuleIds?: string[],
+  allowedWitnessKeys?: string[],
 ) {
   if (kind === "citation-selection")
     return {
@@ -199,12 +201,13 @@ export function reviewOutputSchema(
       },
     };
   const ruleBound = candidateArm === "rule-bound-classification";
+  const witnessBound = candidateArm === "host-referenced-witness";
   const candidateOutput = {
     type: "object",
     additionalProperties: false,
-    required: kind === "specialist" || (candidateArm !== "simplified-contract" && !ruleBound) ? [kind === "specialist" ? "summary" : "c"] : ["state", "candidates"],
+    required: kind === "specialist" || (candidateArm !== "simplified-contract" && !ruleBound && !witnessBound) ? [kind === "specialist" ? "summary" : "c"] : ["state", "candidates"],
     properties: {
-      ...(kind === "specialist" || (candidateArm !== "simplified-contract" && !ruleBound)
+      ...(kind === "specialist" || (candidateArm !== "simplified-contract" && !ruleBound && !witnessBound)
         ? {
             ...(kind === "specialist" ? { summary: { type: "string", minLength: 1, maxLength: 1200 } } : {}),
             c: {
@@ -226,18 +229,28 @@ export function reviewOutputSchema(
               items: {
                 type: "object",
                 additionalProperties: false,
-                required: ["file", "line", "severity", "category", "trigger", "invariant", "impact", "confidence", ...(ruleBound ? ["basisRuleId"] : [])],
+                required: witnessBound
+                  ? ["file", "line", "witnessKey", "basisRuleId", "impact", "confidence"]
+                  : ["file", "line", "severity", "category", "trigger", "invariant", "impact", "confidence", ...(ruleBound ? ["basisRuleId"] : [])],
                 properties: {
                   file: allowedFiles?.length ? { type: "string", enum: [...new Set(allowedFiles)] } : { type: "string", minLength: 1 },
                   line: { type: "integer", minimum: 1 },
                   endLine: { type: "integer", minimum: 1 },
-                  severity: { type: "string", enum: ["critical", "high", "medium", "low"] },
-                  category: { type: "string", enum: ["correctness", "security", "performance", "contract"] },
-                  trigger: { type: "string", minLength: 1, maxLength: 160 },
-                  invariant: { type: "string", minLength: 1, maxLength: 240 },
+                  ...(witnessBound
+                    ? {
+                        witnessKey: allowedWitnessKeys?.length
+                          ? { type: "string", enum: [...new Set(allowedWitnessKeys)] }
+                          : { type: "string", minLength: 1 },
+                      }
+                    : {
+                        severity: { type: "string", enum: ["critical", "high", "medium", "low"] },
+                        category: { type: "string", enum: ["correctness", "security", "performance", "contract"] },
+                        trigger: { type: "string", minLength: 1, maxLength: 160 },
+                        invariant: { type: "string", minLength: 1, maxLength: 240 },
+                      }),
                   impact: { type: "string", minLength: 1, maxLength: 240 },
                   confidence: { type: "number", minimum: 0, maximum: 1 },
-                  ...(ruleBound
+                  ...(ruleBound || witnessBound
                     ? {
                         basisRuleId: allowedRuleIds?.length
                           ? { type: "string", enum: [...new Set(allowedRuleIds)] }
@@ -353,6 +366,7 @@ export class OllamaProvider implements ReviewProvider {
                   input.evidenceSelectorKeys,
                   input.candidateArm,
                   input.allowedRuleIds,
+                  input.allowedWitnessKeys,
                 ),
               }),
           keep_alive: `${Math.ceil(this.config.maxDurationMs / 60_000) + 5}m`,
@@ -501,7 +515,7 @@ function vllmResponseFormat(input: ReviewProviderInput) {
     json_schema: {
       name: `agentsmith_${input.outputKind.replace(/[^A-Za-z0-9_]/g, "_")}`,
       strict: true,
-      schema: reviewOutputSchema(input.outputKind, input.allowedFiles, input.maxCandidates, input.evidenceSelectorKeys, input.candidateArm, input.allowedRuleIds),
+      schema: reviewOutputSchema(input.outputKind, input.allowedFiles, input.maxCandidates, input.evidenceSelectorKeys, input.candidateArm, input.allowedRuleIds, input.allowedWitnessKeys),
     },
   };
 }
@@ -708,7 +722,7 @@ export class OpenAIResponsesProvider implements ReviewProvider {
           name: `agentsmith_${input.outputKind.replace(/[^A-Za-z0-9_]/g, "_")}`,
           strict: true,
           schema: openAiStrictSchema(
-            reviewOutputSchema(input.outputKind, input.allowedFiles, input.maxCandidates, input.evidenceSelectorKeys, input.candidateArm, input.allowedRuleIds),
+            reviewOutputSchema(input.outputKind, input.allowedFiles, input.maxCandidates, input.evidenceSelectorKeys, input.candidateArm, input.allowedRuleIds, input.allowedWitnessKeys),
           ),
         },
       },

@@ -23,6 +23,10 @@ groundTruth:
   reviewedAt: "2026-08-29T00:00:00.000Z"
   contractFamily: typescript-admin-authorization-guard
   exhaustiveCandidates: true
+stageReplay:
+  path: stage-replay.json
+  sha256: 57e7d48bf52480318d1bf197b5fdce85f6a47cb9c56d8f8e5296f8c3b88f8961
+  reviewed: true
 evaluationScope:
   stages: [snapshot, graph, planning, projection, candidates, verification, aggregation, reporting]
 expectations:

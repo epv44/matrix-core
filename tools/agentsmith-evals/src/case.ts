@@ -85,23 +85,61 @@ const goldenCandidateSchema = z.object({
   candidateConfidence: z.number().min(0).max(1),
 });
 
-const stageReplayArtifactSchema = z.object({
-  schemaVersion: z.literal(STAGE_REPLAY_SCHEMA_VERSION),
-  caseId: z.string().min(1),
-  fixtureDigest: z.string().regex(/^[a-f0-9]{64}$/),
-  reviewed: z.literal(true),
-  contractEvidence: z.array(z.object({ path: z.string().min(1), content: z.string().min(1) })).default([]),
-  goldenCandidates: z.array(goldenCandidateSchema).min(1),
-  /** Optional frozen inputs for isolated component scorecards. */
-  componentInputs: z
-    .object({
-      graphManifest: z.unknown().optional(),
-      planningWorkItems: z.array(z.unknown()).optional(),
-      rankingWorkItems: z.array(z.unknown()).optional(),
-      selection: z.object({ rankedWorkItemIds: z.array(z.string().min(1)).default([]) }).optional(),
-    })
-    .optional(),
-});
+const stageReplayArtifactSchema = z
+  .object({
+    schemaVersion: z.literal(STAGE_REPLAY_SCHEMA_VERSION),
+    caseId: z.string().min(1),
+    fixtureDigest: z.string().regex(/^[a-f0-9]{64}$/),
+    reviewed: z.literal(true),
+    contractEvidence: z.array(z.object({ path: z.string().min(1), content: z.string().min(1) })).default([]),
+    goldenCandidates: z.array(goldenCandidateSchema).min(1),
+    verificationExpectations: z
+      .array(
+        z.object({
+          candidateId: z.string().min(1),
+          expectedVerdict: verdictSchema,
+          rationale: z.string().min(1),
+        }),
+      )
+      .default([]),
+    /** Optional frozen inputs for isolated component scorecards. */
+    componentInputs: z
+      .object({
+        graphManifest: z.unknown().optional(),
+        planningWorkItems: z.array(z.unknown()).optional(),
+        rankingWorkItems: z.array(z.unknown()).optional(),
+        selection: z.object({ rankedWorkItemIds: z.array(z.string().min(1)).default([]) }).optional(),
+      })
+      .optional(),
+  })
+  .superRefine((value, context) => {
+    if (!value.verificationExpectations.length) return;
+    const candidateIds = new Set(value.goldenCandidates.map((candidate) => candidate.id));
+    const expectationIds = new Set<string>();
+    value.verificationExpectations.forEach((expectation, index) => {
+      if (!candidateIds.has(expectation.candidateId))
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["verificationExpectations", index, "candidateId"],
+          message: "verification expectation must reference a golden candidate",
+        });
+      if (expectationIds.has(expectation.candidateId))
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["verificationExpectations", index, "candidateId"],
+          message: "verification expectation candidate IDs must be unique",
+        });
+      expectationIds.add(expectation.candidateId);
+    });
+    value.goldenCandidates.forEach((candidate, index) => {
+      if (!expectationIds.has(candidate.id))
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["goldenCandidates", index, "id"],
+          message: "every golden candidate requires a verification expectation",
+        });
+    });
+  });
 
 export interface StageReplayArtifact {
   schemaVersion: 1;
@@ -110,6 +148,11 @@ export interface StageReplayArtifact {
   reviewed: true;
   contractEvidence: Array<{ path: string; content: string }>;
   goldenCandidates: CandidateFinding[];
+  verificationExpectations: Array<{
+    candidateId: string;
+    expectedVerdict: "verified" | "likely" | "rejected" | "insufficient_evidence";
+    rationale: string;
+  }>;
   componentInputs?: {
     graphManifest?: unknown;
     planningWorkItems?: unknown[];
