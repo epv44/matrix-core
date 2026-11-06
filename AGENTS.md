@@ -123,3 +123,10 @@ Preferred sequence:
 9. routing + escalation + shadow mode.
 
 Do not mix unrelated architectural stages into the same checkpoint.
+
+## Cursor Cloud specific instructions
+
+- Bootstrap with `npm ci`, then `npm run build`. The image Node satisfies `engines` (`>=18`); GitHub Actions uses Node 24.
+- `node dist/core/cli.js doctor` checks the toolchain. `node dist/core/cli.js run` is the deterministic gate and does not call a model.
+- `npm test` runs Vitest. `npm run test:integration:packed` installs a packed tarball and exercises the CLI, stdio MCP server, and completion hook.
+- `quality review` and `quality completion` call a local Ollama server only when AgentSmith is enabled. Do not pull those models for ordinary install, test, or gate work.
