@@ -123,3 +123,11 @@ Preferred sequence:
 9. routing + escalation + shadow mode.
 
 Do not mix unrelated architectural stages into the same checkpoint.
+
+## Cursor Cloud specific instructions
+
+- Bootstrap with `npm ci`, then `npm run build`. The image Node satisfies `engines` (`>=18`); GitHub Actions uses Node 24.
+- `node dist/core/cli.js doctor` checks the toolchain. `node dist/core/cli.js run` is the deterministic gate and does not call a model.
+- `npm test` runs Vitest. `npm run test:integration:packed` installs a packed tarball and exercises the CLI, stdio MCP server, and completion hook.
+- Boot starts a Linux build of the `mann1x/ollama` think-budget pin `97c08679` with `docs/patches/ollama-think-budget-generation-prompt.patch` applied. It listens on `127.0.0.1:11434`, uses `/opt/ollama/models`, and already has `qwen3.5:9b-q4_K_M`. Flash attention and `q8_0` KV cache match the Mac diagnostic. The 122B model is not installed.
+- `quality review` uses that server. Bounded thinking sends `options.think_budget` through `/api/generate`. Set `num_ctx` on manual probes; the model card context is 262144 tokens.
