@@ -150,9 +150,69 @@ describe("candidate structured output", () => {
       ruleId: "security.authorization-boundary",
       witness: { witnessId: "a".repeat(64), witnessKey: "value.guard-1.state-1" },
     });
+    expect(result.candidates[0]?.title).toMatch(/allows/);
+    expect(result.candidates[0]?.title).not.toMatch(/blocks/);
     expect(result.candidates[0]?.description).toContain('Trigger: session present, role = "member"');
     expect(result.candidates[0]?.description).toContain('!session && role !== "admin"');
     expect(result.candidates[0]?.evidenceRequests.map((request) => request.kind)).toEqual(["type", "implementation"]);
+  });
+
+  it("titles blocked control-flow witnesses as blocks, not allows", async () => {
+    const witnessItem: ReviewWorkItem = {
+      ...item,
+      rules: [{
+        id: "security.authorization-boundary",
+        text: "Authorization must remain enforced.",
+        estimatedTokens: 1,
+        categories: ["security"],
+        severity: "critical",
+      }],
+      controlFlowWitnesses: [{
+        version: "control-flow-witness/v1",
+        witnessId: "a".repeat(64),
+        witnessKey: "value.guard-1.state-1",
+        snapshotId: "snapshot-a",
+        ownerSymbol: { file: "src/a.ts", qualifiedName: "value", startLine: 1, endLine: 1 },
+        file: "src/a.ts",
+        startLine: 1,
+        endLine: 1,
+        previousGuard: "a || b",
+        currentGuard: "a && b",
+        operatorTokens: ["&&"],
+        state: "a = true",
+        previousOutcome: "passes",
+        currentOutcome: "blocked",
+      }],
+    };
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async () => ({
+        raw: JSON.stringify({
+          state: "finding",
+          candidates: [{
+            file: "src/a.ts",
+            line: 1,
+            endLine: 1,
+            witnessKey: "value.guard-1.state-1",
+            basisRuleId: "security.authorization-boundary",
+            impact: "callers are denied",
+            confidence: 0.9,
+          }],
+        }),
+        usage: { inputTokens: 10, outputTokens: 10 },
+      }),
+    };
+    const result = await generateWorkItemCandidate({
+      item: witnessItem,
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 1,
+      allowedEvidenceSelectors: buildTaskEvidenceSelectors({ snapshotId: "snapshot-a", workItem: witnessItem }),
+      arm: "host-referenced-witness",
+    });
+    expect(result.candidates[0]?.title).toMatch(/blocks/);
+    expect(result.candidates[0]?.title).not.toMatch(/allows/);
   });
 
   it("fails closed when a witness candidate changes its host-owned reference", async () => {
@@ -176,10 +236,58 @@ describe("candidate structured output", () => {
         usage: { inputTokens: 1, outputTokens: 1 },
       }),
     };
-    await expect(generateWorkItemCandidate({
+    const result = await generateWorkItemCandidate({
       item: witnessItem, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 1,
       arm: "host-referenced-witness", inferenceMode: "thinking-structured",
-    })).rejects.toThrow(/unknown control-flow witness/);
+    });
+    expect(result.candidates).toEqual([]);
+    expect(result.candidateState).toBe("no_finding");
+    expect(result.contractDrops).toEqual([
+      expect.objectContaining({ candidateIndex: 0, reason: "unknown-witness" }),
+    ]);
+  });
+
+  it("coerces mismatched witness candidate locations to the host-owned witness range", async () => {
+    const witnessItem: ReviewWorkItem = {
+      ...item,
+      rules: [{ id: "security.visible", text: "Visible rule", estimatedTokens: 1, categories: ["security"], severity: "critical" }],
+      controlFlowWitnesses: [{
+        version: "control-flow-witness/v1", witnessId: "b".repeat(64), witnessKey: "value.guard-1.state-1",
+        snapshotId: "snapshot-a", ownerSymbol: { file: "src/a.ts", qualifiedName: "value", startLine: 5, endLine: 7 },
+        file: "src/a.ts", startLine: 5, endLine: 7, previousGuard: "a || b", currentGuard: "a && b",
+        operatorTokens: ["&&"], state: "a = true", previousOutcome: "passes", currentOutcome: "blocked",
+      }],
+    };
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async () => ({
+        raw: JSON.stringify({
+          state: "finding",
+          candidates: [{
+            file: "src/other.ts",
+            line: 99,
+            endLine: 100,
+            witnessKey: "value.guard-1.state-1",
+            basisRuleId: "security.visible",
+            impact: "unauthorized path",
+            confidence: 0.8,
+          }],
+        }),
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+    };
+    const result = await generateWorkItemCandidate({
+      item: witnessItem, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 1,
+      arm: "host-referenced-witness", inferenceMode: "thinking-structured",
+    });
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      file: "src/a.ts",
+      line: 5,
+      endLine: 7,
+      ruleId: "security.visible",
+    });
+    expect(result.contractDrops ?? []).toEqual([]);
   });
 
   it("falls back to the rule-bound contract without changing its prompt or wire inputs", async () => {

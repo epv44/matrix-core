@@ -14,6 +14,7 @@ import {
 } from "./eval.js";
 import type { EvalStage } from "./stage-score.js";
 import type { CandidateGenerationArm, CandidateInferenceMode, CandidatePromptVariant } from "../../../src/agentsmith/engine-types.js";
+import type { VerificationContractId } from "../../../src/agentsmith/verification-provenance.js";
 import type { AgentSmithConfig } from "../../../src/core/types.js";
 import {
   applySuiteProgress,
@@ -1324,6 +1325,9 @@ export async function runEvalSuite(opts: {
   candidateThinkingTokens?: number;
   thinkingStream?: boolean;
   controlFlowDelta?: boolean;
+  verificationContract?: VerificationContractId;
+  verifierInferenceMode?: CandidateInferenceMode;
+  verifierThinkingTokens?: number;
   treatment?: string;
 }) {
   if (!opts.suite || opts.suite === "draft" || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(opts.suite))
@@ -1414,6 +1418,9 @@ export async function runEvalSuite(opts: {
         candidateThinkingTokens: opts.candidateThinkingTokens,
         thinkingStream: opts.thinkingStream,
         controlFlowDelta: opts.controlFlowDelta,
+        verificationContract: opts.verificationContract,
+        verifierInferenceMode: opts.verifierInferenceMode,
+        verifierThinkingTokens: opts.verifierThinkingTokens,
         treatment: opts.treatment,
         thinkingTraceDir,
         provider: opts.provider,
@@ -1487,6 +1494,9 @@ export async function runEvalSuite(opts: {
       ...(opts.candidateContextTokens !== undefined ? { candidateContextTokens: opts.candidateContextTokens } : {}),
       ...(opts.thinkingStream ? { thinkingStream: true, thinkingTraceDir } : {}),
       ...(opts.controlFlowDelta ? { controlFlowDelta: true } : {}),
+      ...(opts.verificationContract ? { verificationContract: opts.verificationContract } : {}),
+      ...(opts.verifierInferenceMode ? { verifierInferenceMode: opts.verifierInferenceMode } : {}),
+      ...(opts.verifierThinkingTokens !== undefined ? { verifierThinkingTokens: opts.verifierThinkingTokens } : {}),
     },
     corpus: { active: slugs, drafts: [], activeCount: slugs.length, draftCount: 0, activeHash: corpusHash(opts.root, slugs), evaluatedHash: corpusHash(opts.root, slugs) },
     evaluation: serializedEvaluation(status),

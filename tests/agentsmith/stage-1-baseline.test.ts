@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   aggregateStage1Metrics,
   classifyStage1Finding,
+  scoreStage1Run,
   scoreStage1Selection,
   serializeStage1Baseline,
   summarizeStage1Baseline,
@@ -169,6 +170,46 @@ describe("Stage 1 selection and attribution", () => {
     [{ coverageBudgetFailure: false, selected: true, candidateFound: true, verifiedFound: true }, "found"],
   ] as const)("applies failure attribution precedence for %j", (input, expected) => {
     expect(classifyStage1Finding(input)).toBe(expected);
+  });
+
+  it("does not blame coverage-budget-failure on gold that was selected and candidate-matched", () => {
+    const gold = {
+      ...selectionGold(),
+      file: "src/consumer.ts",
+      lineStart: 10,
+      lineEnd: 11,
+      titleContains: undefined,
+    };
+    const item = workItem("interaction", [
+      {
+        file: "src/consumer.ts",
+        startLine: 10,
+        endLine: 11,
+        content: "use(parseConfig())",
+        symbol: "use",
+      },
+      {
+        file: "src/producer.ts",
+        startLine: 4,
+        endLine: 8,
+        content: "return null",
+        symbol: "parseConfig",
+      },
+      { file: "src/schema.ts", startLine: 1, endLine: 2, content: "Config | null", symbol: "Config" },
+    ]);
+    const scored = scoreStage1Run({
+      goldFindings: [gold],
+      workItems: [item],
+      candidates: [{ file: "src/consumer.ts", line: 10, title: "contract miss" }],
+      verifiedFindings: [],
+      coverageBudgetFailure: true,
+    });
+    expect(scored.gold[0]).toMatchObject({
+      selection: { selected: true },
+      candidateFound: true,
+      verifiedFound: false,
+      attribution: "verification-rejection",
+    });
   });
 });
 

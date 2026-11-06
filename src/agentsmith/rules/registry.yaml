@@ -1,6 +1,7 @@
 - id: correctness.control-flow
   languages: [python, typescript, go, rust]
   categories: [correctness]
+  severity: medium
   triggers:
     - keywords: [if, else, switch, match, return, throw, raise]
   short: Check changed control flow, error propagation, boundary conditions, and state transitions.
@@ -22,6 +23,7 @@
 - id: contract.producer-consumer
   languages: [python, typescript, go, rust]
   categories: [contract, correctness]
+  severity: high
   triggers:
     - edgeKinds: [calls, producer-consumer, schema-user, serialization]
   short: Compare values produced by changed code with assumptions made by consumers.
@@ -29,6 +31,7 @@
 - id: contract.value-provenance
   languages: [python, typescript, go, rust]
   categories: [contract, correctness]
+  severity: low
   triggers:
     - edgeKinds: [reads-type, producer-consumer, serialization]
   short: Trace every producer value variant through typed consumers and user-visible mappings; preserve distinct semantic variants.
@@ -44,6 +47,7 @@
 - id: performance.changed-complexity
   languages: [python, typescript, go, rust]
   categories: [performance]
+  severity: medium
   triggers:
     - keywords: [for, while, map, reduce, query, await, lock]
   short: Check changed hot paths for multiplicative work, repeated I/O, blocking, and unbounded growth.

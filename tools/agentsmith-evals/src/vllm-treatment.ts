@@ -1,5 +1,7 @@
 import type { AgentSmithConfig } from "../../../src/core/types.js";
 import type { CandidateGenerationArm, CandidateInferenceMode, CandidatePromptVariant } from "../../../src/agentsmith/engine-types.js";
+import type { VerificationContractId } from "../../../src/agentsmith/verification-provenance.js";
+import { WITNESS_RULE_PROVENANCE_CONTRACT } from "../../../src/agentsmith/verification-provenance.js";
 
 /**
  * Reproducible, explicitly named provider treatments used by diagnostic evals.
@@ -24,6 +26,9 @@ export const VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K
 export const OLLAMA_THINKING_9B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT = "ollama-thinking-9b-rule-bound-delta-first-output-3k-thinking-2k-long-timeout" as const;
 /** Matched candidate-fidelity treatment using host-referenced control-flow witnesses. */
 export const OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT = "ollama-thinking-9b-host-referenced-witness-delta-first-output-3k-thinking-2k-long-timeout" as const;
+/** Opt-in verifier experiment: witness/rule provenance + bounded verifier thinking. */
+export const OLLAMA_9B_WITNESS_RULE_PROVENANCE_VERIFIER_THINKING_TREATMENT =
+  "ollama-9b-witness-rule-provenance-verifier-thinking-output-3k-thinking-2k-long-timeout" as const;
 export type EvalTreatmentId =
   | typeof VLLM_METAL_THINKING_4B_TREATMENT
   | typeof VLLM_METAL_THINKING_4B_CONTROL_FLOW_DELTA_TREATMENT
@@ -36,7 +41,8 @@ export type EvalTreatmentId =
   | typeof VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_MAX_FIT_THINKING_1K_TREATMENT
   | typeof VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT
   | typeof OLLAMA_THINKING_9B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT
-  | typeof OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT;
+  | typeof OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT
+  | typeof OLLAMA_9B_WITNESS_RULE_PROVENANCE_VERIFIER_THINKING_TREATMENT;
 /** @deprecated Use EvalTreatmentId; retained for existing diagnostic imports. */
 export type VllmEvalTreatment = EvalTreatmentId;
 
@@ -54,6 +60,9 @@ export interface EvalTreatmentSettings {
   candidateThinkingTokens: number;
   verifierContextTokens: number;
   verifierOutputTokens: number;
+  verifierThinkingTokens?: number;
+  verifierInferenceMode?: CandidateInferenceMode;
+  verificationContract?: VerificationContractId;
   timeoutMs: number;
   candidateArm: CandidateGenerationArm;
   inferenceMode: CandidateInferenceMode;
@@ -295,6 +304,30 @@ const EVAL_TREATMENTS: Record<EvalTreatmentId, EvalTreatmentSettings> = {
     thinkingStream: true,
     controlFlowDelta: true,
   },
+  [OLLAMA_9B_WITNESS_RULE_PROVENANCE_VERIFIER_THINKING_TREATMENT]: {
+    id: OLLAMA_9B_WITNESS_RULE_PROVENANCE_VERIFIER_THINKING_TREATMENT,
+    provider: "ollama",
+    baseUrl: "http://127.0.0.1:11435",
+    candidateModel: "qwen3.5:9b-q4_K_M",
+    verifierModel: "qwen3.5:9b-q4_K_M",
+    candidateContextTokens: 6144,
+    candidateOutputTokens: 3072,
+    candidateTemperature: 0.6,
+    candidateTopP: 0.95,
+    candidateTopK: 20,
+    candidateThinkingTokens: 2048,
+    verifierContextTokens: 6144,
+    verifierOutputTokens: 3072,
+    verifierThinkingTokens: 2048,
+    verifierInferenceMode: "thinking-structured",
+    verificationContract: WITNESS_RULE_PROVENANCE_CONTRACT,
+    timeoutMs: 900_000,
+    candidateArm: "host-referenced-witness",
+    inferenceMode: "thinking-structured",
+    candidatePromptVariant: "branch-analysis-delta-first-v3",
+    thinkingStream: true,
+    controlFlowDelta: true,
+  },
 };
 
 export function resolveEvalTreatment(value?: string): EvalTreatmentSettings | undefined {
@@ -335,13 +368,19 @@ export function applyEvalTreatment(config: AgentSmithConfig, treatment?: string)
         };
       }
       if (profile.id === config.models.verifier) {
+        const verifierThinking = settings.verifierInferenceMode?.startsWith("thinking-") === true;
         return {
           ...profile,
           provider,
           model: settings.verifierModel,
           contextTokens: settings.verifierContextTokens,
           requestedOutputTokens: settings.verifierOutputTokens,
-          inference: { ...profile.inference, thinking: false, timeoutMs: settings.timeoutMs },
+          inference: {
+            ...profile.inference,
+            thinking: verifierThinking,
+            timeoutMs: settings.timeoutMs,
+            ...(verifierThinking ? { temperature: settings.candidateTemperature, topP: settings.candidateTopP, topK: settings.candidateTopK } : {}),
+          },
         };
       }
       return profile;

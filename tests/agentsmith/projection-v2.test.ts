@@ -401,4 +401,206 @@ describe("adaptive projection planning", () => {
     expect(tokenLimited.selected).toHaveLength(1);
     expect(tokenLimited.estimatedTokens).toBeLessThanOrEqual(40);
   });
+
+  it("reserves the best-ranked fitting local/interaction pair, not the first nested-loop hit", () => {
+    const snippet = (tokens: number) => ({
+      id: `s-${tokens}`,
+      file: "src/a.ts",
+      startLine: 1,
+      endLine: 2,
+      content: "x",
+      changed: true,
+      score: 1,
+      reason: "test",
+      estimatedTokens: tokens,
+    });
+    const item = (
+      id: string,
+      kind: ReviewWorkItem["kind"],
+      rank: number,
+      contentTokens: number,
+    ): ReviewWorkItem => ({
+      id,
+      kind,
+      rank,
+      priority: 1000 - rank,
+      primarySymbols: [changed],
+      relatedSymbols: kind === "interaction" ? [consumer] : [],
+      code: [snippet(contentTokens)],
+      graphEdges: kind === "interaction" ? [edge] : [],
+      rules: [],
+      estimatedTokens: 900 + contentTokens,
+      rankFactors: {
+        edgeRisk: kind === "interaction" ? 50 : 0,
+        changedEndpoints: 1,
+        productionSurface: 1,
+        changedLines: 1,
+        graphDegree: 1,
+      },
+    });
+    // Nested-loop first hit would be lowLocal+lowIx; best combined rank is highLocal+highIx.
+    const lowLocal = item("local:low", "local", 10, 100);
+    const highLocal = item("local:high", "local", 1, 100);
+    const lowIx = item("interaction:low", "interaction", 11, 100);
+    const highIx = item("interaction:high", "interaction", 2, 100);
+    const selected = selectWorkItems([lowLocal, highLocal, lowIx, highIx], 2, 5_000).selected;
+    expect(selected.map((entry) => entry.id).sort()).toEqual(["interaction:high", "local:high"]);
+  });
+
+  it("keeps the start of a changed hunk when the focus itself must truncate", () => {
+    const lines = Array.from({ length: 80 }, (_, index) => `line-${index + 1}`);
+    // Defect anchors are typically near the first changed lines of a hunk.
+    lines[19] = "MARKER_START_OF_HUNK value_source Account balance";
+    const body = lines.join("\n");
+    const wideSymbol = {
+      ...changed,
+      name: "WideCard",
+      qualifiedName: "WideCard",
+      startLine: 1,
+      endLine: 80,
+    };
+    const wideGraph: GraphContext = {
+      ...graph,
+      changedSymbols: [wideSymbol],
+      nodes: [{ symbol: wideSymbol, score: 130, distance: 0 }],
+      edges: [],
+    };
+    const wideScope: ReviewScope = {
+      ...scope,
+      fileContents: { "api.ts": body },
+      diff:
+        "diff --git a/api.ts b/api.ts\n+++ b/api.ts\n@@ -20,31 +20,31 @@\n" +
+        Array.from({ length: 31 }, (_, index) => `+line-${index + 20}`).join("\n"),
+    };
+    const projection = buildProjection({ scope: wideScope, graph: wideGraph, profile: small, rules: [], kind: "full" });
+    for (const code of projection.code) {
+      if (code.file === "api.ts") {
+        code.changedLineRanges = [{ start: 20, end: 50 }];
+        code.content = body;
+        code.startLine = 1;
+        code.endLine = 80;
+        code.estimatedTokens = 10_000;
+        code.symbol = "WideCard";
+      }
+    }
+    const items = buildWorkItems({
+      projection,
+      graph: wideGraph,
+      profile: small,
+      rules: [],
+      inputBudgetTokens: 120,
+      policy: {
+        maxParallelUnits: 20,
+        maxRulesPerUnit: 4,
+        maxUnitsPerChangedSymbol: 4,
+        preferSemanticBoundaries: true,
+        hunkFallback: true,
+      },
+    });
+    const local = items.find((item) => item.kind === "local");
+    expect(local?.code.some((snippet) => snippet.content.includes("MARKER_START_OF_HUNK"))).toBe(true);
+  });
+
+  it("does not drop later focus lines by over-trimming then locking a too-small window", () => {
+    // Reproduces the budgeting-holdings failure mode: a wide focus with modest
+    // budget must still cover an anchor a dozen lines into the changed range.
+    const lines = Array.from({ length: 120 }, (_, index) => `line-${index + 1}`);
+    lines[27] = "const source = row.value_source === \"holdings\" ? \"Holdings\" : \"Account balance\";";
+    const body = lines.join("\n");
+    const wideSymbol = {
+      ...changed,
+      name: "HoldingsCard",
+      qualifiedName: "HoldingsCard",
+      startLine: 1,
+      endLine: 120,
+    };
+    const wideGraph: GraphContext = {
+      ...graph,
+      changedSymbols: [wideSymbol],
+      nodes: [{ symbol: wideSymbol, score: 130, distance: 0 }],
+      edges: [],
+    };
+    const wideScope: ReviewScope = {
+      ...scope,
+      fileContents: { "api.ts": body },
+      diff: "diff --git a/api.ts b/api.ts\n+++ b/api.ts\n@@ -16,60 +16,60 @@\n",
+    };
+    const projection = buildProjection({ scope: wideScope, graph: wideGraph, profile: small, rules: [], kind: "full" });
+    for (const code of projection.code) {
+      if (code.file === "api.ts") {
+        code.changedLineRanges = [
+          { start: 10, end: 20 },
+          { start: 16, end: 72 },
+        ];
+        code.content = body;
+        code.startLine = 1;
+        code.endLine = 120;
+        code.estimatedTokens = 20_000;
+        code.symbol = "HoldingsCard";
+      }
+    }
+    const items = buildWorkItems({
+      projection,
+      graph: wideGraph,
+      profile: small,
+      rules: [],
+      // Tight enough that a naive equal-trim leaves a window ending before line 28.
+      inputBudgetTokens: 350,
+      policy: {
+        maxParallelUnits: 20,
+        maxRulesPerUnit: 4,
+        maxUnitsPerChangedSymbol: 4,
+        preferSemanticBoundaries: true,
+        hunkFallback: true,
+      },
+    });
+    const local = items.find((item) => item.kind === "local");
+    const covered = local?.code.some(
+      (snippet) =>
+        snippet.content.includes("value_source") && snippet.content.includes("Account balance"),
+    );
+    expect(covered).toBe(true);
+  });
+
+  it("charges shared prompt overhead once so multiple work items fit a 4144-style packing budget", () => {
+    const snippet = (tokens: number, id: string) => ({
+      id,
+      file: "src/a.ts",
+      startLine: 1,
+      endLine: 2,
+      content: "x",
+      changed: true,
+      score: 1,
+      reason: "test",
+      estimatedTokens: tokens,
+    });
+    const item = (id: string, kind: ReviewWorkItem["kind"], rank: number): ReviewWorkItem => ({
+      id,
+      kind,
+      rank,
+      priority: 100 - rank,
+      primarySymbols: [changed],
+      relatedSymbols: kind === "interaction" ? [consumer] : [],
+      code: [snippet(800, `${id}-code`)],
+      graphEdges: kind === "interaction" ? [edge] : [],
+      rules: [],
+      estimatedTokens: 900 + 800,
+      rankFactors: {
+        edgeRisk: kind === "interaction" ? 40 : 0,
+        changedEndpoints: 1,
+        productionSurface: 1,
+        changedLines: 1,
+        graphDegree: 1,
+      },
+    });
+    const local = item("local:a", "local", 1);
+    const interaction = item("interaction:a", "interaction", 2);
+    const extra1 = item("local:b", "local", 3);
+    const extra2 = item("local:c", "local", 4);
+    // Double-counting overhead: 1700*3 = 5100 > 4144. Single shared overhead: 900 + 800*4 = 4100.
+    const packed = selectWorkItems([local, interaction, extra1, extra2], 4, 4144);
+    expect(packed.selected).toHaveLength(4);
+    expect(packed.estimatedTokens).toBeLessThanOrEqual(4144);
+    expect(packed.tokenOmitted).toHaveLength(0);
+  });
 });

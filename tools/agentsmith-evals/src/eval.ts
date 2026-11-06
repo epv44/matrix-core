@@ -19,6 +19,7 @@ import {
   selectWorkItems,
 } from "../../../src/agentsmith/projection.js";
 import type { CandidateGenerationArm, CandidateInferenceMode, CandidatePromptVariant, EngineExecution } from "../../../src/agentsmith/engine-types.js";
+import type { VerificationContractId } from "../../../src/agentsmith/verification-provenance.js";
 import { formatAgentSmithReview } from "../../../src/agentsmith/report.js";
 import { AGENTSMITH_STRATEGY_HASH } from "../../../src/agentsmith/strategy.js";
 import { collectEvalMetrics } from "./eval-metrics.js";
@@ -494,6 +495,7 @@ function evaluationDiagnostics(execution: { execution: EngineExecution; result: 
       confidence: item.confidence,
       reasoningSummary: item.reasoningSummary,
       supportingEvidenceIds: item.supportingEvidenceIds,
+      thinking: item.thinking,
       completion: item.completion,
       cacheStatus: item.cacheStatus,
       descriptorFingerprint: item.descriptorFingerprint,
@@ -580,6 +582,9 @@ export async function runEvalCases(opts: {
   candidateThinkingTokens?: number;
   thinkingStream?: boolean;
   controlFlowDelta?: boolean;
+  verificationContract?: VerificationContractId;
+  verifierInferenceMode?: CandidateInferenceMode;
+  verifierThinkingTokens?: number;
   treatment?: string;
   thinkingTraceDir?: string;
   /** Eval-only configuration replacement, used by diagnostic providers. */
@@ -688,6 +693,11 @@ export async function runEvalCases(opts: {
                   ...(opts.candidatePromptVariant ? { candidatePromptVariant: opts.candidatePromptVariant } : {}),
                   ...(opts.candidateThinkingTokens !== undefined ? { candidateThinkingTokens: opts.candidateThinkingTokens } : {}),
                   ...(opts.controlFlowDelta ? { controlFlowDelta: true } : {}),
+                  ...(opts.verificationContract ? { verificationContract: opts.verificationContract } : {}),
+                  ...(opts.verifierInferenceMode ? { verifierInferenceMode: opts.verifierInferenceMode } : {}),
+                  ...(opts.verifierThinkingTokens !== undefined
+                    ? { verifierThinkingTokens: opts.verifierThinkingTokens }
+                    : {}),
                   ...(opts.thinkingStream
                     ? {
                         stream: true,

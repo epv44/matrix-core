@@ -18,6 +18,14 @@ import type {
   ScoutFinding,
   VerificationResult,
 } from "./engine-types.js";
+import {
+  buildProvenanceVerificationPrompt,
+  type VerificationProvenance,
+} from "./verification-provenance.js";
+import {
+  filterRulesForCallsWitnessFallback,
+  filterRulesForReadsTypeWitnessFallback,
+} from "./rules.js";
 
 const BRANCH_ANALYSIS_BEHAVIOR_PROMPT = `You are performing bounded executable code-review analysis.
 
@@ -631,12 +639,8 @@ function expandWitnessCandidate(
 ): Omit<CandidateFinding, "id"> {
   const witness = item.controlFlowWitnesses?.find((entry) => entry.witnessKey === value.witnessKey);
   if (!witness) throw new CandidateConclusionError("candidate referenced an unknown control-flow witness");
-  if (
-    value.file !== witness.file ||
-    value.line !== witness.startLine ||
-    (value.endLine ?? value.line) !== witness.endLine
-  )
-    throw new CandidateConclusionError("candidate location does not match its control-flow witness");
+  // Host owns witness location. Model file/line mismatches are ignored rather than
+  // aborting the work item; the emitted candidate always uses the bound witness range.
   const basisRule = item.rules.find(
     (rule) =>
       rule.id === value.basisRuleId && rule.categories.length === 1 && rule.severity !== undefined,
@@ -648,7 +652,9 @@ function expandWitnessCandidate(
   const currentBehavior = witness.currentOutcome === "passes"
     ? `condition ${witness.currentGuard} evaluates false, so the blocking branch is skipped`
     : `condition ${witness.currentGuard} evaluates true, so the blocking branch executes`;
-  const title = `${category} defect: ${witness.currentGuard} allows ${witness.state}`.slice(0, 80);
+  // Title polarity must match the witness outcome: blocked witnesses must not be titled "allows".
+  const polarityVerb = witness.currentOutcome === "passes" ? "allows" : "blocks";
+  const title = `${category} defect: ${witness.currentGuard} ${polarityVerb} ${witness.state}`.slice(0, 80);
   const description = [
     `Trigger: ${witness.state}; ${currentBehavior} in ${witness.ownerSymbol.qualifiedName}.`,
     `Invariant: ${basisRule.text}`,
@@ -760,8 +766,10 @@ function directedQuestion(item: ReviewWorkItem): string {
   }
   const edgeKinds = new Set(item.graphEdges.map((edge) => edge.kind));
   const checks = [
-    edgeKinds.has("calls") && "check argument, return-value, and unit compatibility",
-    edgeKinds.has("reads-type") && "check nullability, discriminated variants, and value preservation",
+    edgeKinds.has("calls") &&
+      "check argument, return-value, scale, and unit compatibility between producer contracts and consumer callees",
+    edgeKinds.has("reads-type") &&
+      "check nullability, discriminated variants, value preservation, and user-visible labels/mappings",
     edgeKinds.has("exports") && "check public/API compatibility",
     (edgeKinds.has("producer-consumer") || edgeKinds.has("serialization")) && "check state, ownership, cleanup, and ordering invariants",
     (edgeKinds.has("schema-user") || edgeKinds.has("config")) && "check field, shape, and configuration compatibility",
@@ -792,6 +800,28 @@ function ruleBoundClassificationInstructions(providerOwnsSerialization = false) 
     ? "The serving API supplies and enforces the response schema."
     : "Return only the required JSON object.";
   return `Each finding must name basisRuleId: exactly one visible rule whose stated requirement the concrete runtime state violates. Do not select a rule merely because its keywords appear in code. Select security.authorization-boundary only when the candidate demonstrates an executable authorization bypass. The host validates basisRuleId and derives category when that rule has one declared category and severity when that rule declares one. ${serialization}`;
+}
+
+function callsWitnessFallbackInstructions(): string {
+  return [
+    "Witnesses were unavailable for this calls interaction; classify against the visible edge-relevant rules only.",
+    "Before concluding no_finding, compare the producer return contract (units, scale, shapes, failure modes) with each consumer callee assumption.",
+    "Treat a unit mismatch as a finding when a producer name, type, or literal encodes one unit or scale",
+    "(for example milliseconds) and the consumer passes that value unchanged into a callee that expects another",
+    "(for example seconds); do not dismiss that as configuration or missing-key handling.",
+    "For repeated caller invocations, prefer performance.changed-complexity when work or resources accumulate across calls;",
+    "name both relationship sides in the trigger or impact when the defect depends on the call edge.",
+  ].join(" ");
+}
+
+function readsTypeWitnessFallbackInstructions(): string {
+  return [
+    "Witnesses were unavailable for this reads-type interaction; classify against the visible edge-relevant rules only.",
+    "Before concluding no_finding, compare producer discriminants and typed variants with each consumer mapping or label.",
+    "Treat a collapsed or relabeled producer value as a finding when the consumer maps a distinct producer discriminant",
+    "(for example cash_snapshot) onto a different user-visible label than the producer contract names;",
+    "prefer contract.value-provenance for those label/mapping mismatches.",
+  ].join(" ");
 }
 
 function witnessCandidateInstructions(providerOwnsSerialization = false) {
@@ -952,17 +982,35 @@ export async function generateWorkItemCandidate(opts: {
   signal?: AbortSignal;
 }): Promise<CandidateBatch> {
   const requestedArm = opts.arm ?? "simplified-contract";
-  const hostClassifiedRuleIds = opts.item.rules
+  const fellBackFromWitness =
+    requestedArm === "host-referenced-witness" &&
+    !(opts.item.controlFlowWitnesses?.length &&
+      opts.item.rules.some((rule) => rule.categories.length === 1 && rule.severity !== undefined));
+  const callsInteraction =
+    opts.item.kind === "interaction" && opts.item.graphEdges.some((edge) => edge.kind === "calls");
+  const readsTypeInteraction =
+    opts.item.kind === "interaction" && opts.item.graphEdges.some((edge) => edge.kind === "reads-type");
+  const item: ReviewWorkItem =
+    fellBackFromWitness && callsInteraction
+      ? { ...opts.item, rules: filterRulesForCallsWitnessFallback(opts.item.rules) }
+      : fellBackFromWitness && readsTypeInteraction
+        ? { ...opts.item, rules: filterRulesForReadsTypeWitnessFallback(opts.item.rules) }
+        : opts.item;
+  const hostClassifiedRuleIds = item.rules
     .filter((rule) => rule.categories.length === 1 && rule.severity !== undefined)
     .map((rule) => rule.id);
-  const witnessEligible = Boolean(opts.item.controlFlowWitnesses?.length && hostClassifiedRuleIds.length);
+  const witnessEligible = Boolean(item.controlFlowWitnesses?.length && hostClassifiedRuleIds.length);
   const arm: CandidateGenerationArm =
     requestedArm === "host-referenced-witness" && !witnessEligible
       ? "rule-bound-classification"
       : requestedArm;
+  const callsWitnessFallback =
+    fellBackFromWitness && callsInteraction && arm === "rule-bound-classification";
+  const readsTypeWitnessFallback =
+    fellBackFromWitness && readsTypeInteraction && arm === "rule-bound-classification";
   if (opts.inferenceMode === "thinking-conclusion-then-structured")
     return generateConclusionThenStructuredCandidate({
-      item: opts.item,
+      item,
       profile: opts.profile,
       provider: opts.provider,
       allowedFiles: opts.allowedFiles,
@@ -975,7 +1023,7 @@ export async function generateWorkItemCandidate(opts: {
       signal: opts.signal,
     });
   const focus =
-    opts.item.kind === "interaction"
+    item.kind === "interaction"
       ? "Compare both sides of each relationship for broken assumptions and incompatible contracts."
       : "Inspect the changed implementation for concrete local defects.";
   const selectors = opts.allowedEvidenceSelectors ?? [];
@@ -991,14 +1039,14 @@ export async function generateWorkItemCandidate(opts: {
     opts.maxCandidates,
     selectors.map((selector) => selector.key),
     arm,
-    ruleBound ? opts.item.rules.map((rule) => rule.id) : witnessBound ? hostClassifiedRuleIds : undefined,
-    witnessBound ? opts.item.controlFlowWitnesses?.map((witness) => witness.witnessKey) : undefined,
+    ruleBound ? item.rules.map((rule) => rule.id) : witnessBound ? hostClassifiedRuleIds : undefined,
+    witnessBound ? item.controlFlowWitnesses?.map((witness) => witness.witnessKey) : undefined,
   );
   const prompt = legacy
-    ? `${candidateInstructions(opts.maxCandidates, false, arm === "host-defaults" && boundedSelectors, providerOwnsSerialization)}\n${directedQuestion(opts.item)}\n${focus}\n${arm === "host-defaults" ? selectorPromptText(selectors) : "Evidence is owned by the host; do not request selectors."}\n\n${workItemText(opts.item)}`
+    ? `${candidateInstructions(opts.maxCandidates, false, arm === "host-defaults" && boundedSelectors, providerOwnsSerialization)}\n${directedQuestion(item)}\n${focus}\n${arm === "host-defaults" ? selectorPromptText(selectors) : "Evidence is owned by the host; do not request selectors."}\n\n${workItemText(item)}`
     : witnessBound
-      ? `${witnessCandidateInstructions(providerOwnsSerialization)}\n${directedQuestion(opts.item)}\n${focus}\nDo not request more context; reason only from the supplied bounded task.\n\n${workItemText(opts.item, true)}`
-      : `${simplifiedCandidateInstructions(opts.maxCandidates, providerOwnsSerialization)}${ruleBound ? `\n${ruleBoundClassificationInstructions(providerOwnsSerialization)}` : ""}\n${directedQuestion(opts.item)}\n${focus}\nDo not request more context; reason only from the supplied bounded task.\n\n${workItemText(opts.item, ruleBound)}`;
+      ? `${witnessCandidateInstructions(providerOwnsSerialization)}\n${directedQuestion(item)}\n${focus}\nDo not request more context; reason only from the supplied bounded task.\n\n${workItemText(item, true)}`
+      : `${simplifiedCandidateInstructions(opts.maxCandidates, providerOwnsSerialization)}${ruleBound ? `\n${ruleBoundClassificationInstructions(providerOwnsSerialization)}` : ""}${callsWitnessFallback ? `\n${callsWitnessFallbackInstructions()}` : ""}${readsTypeWitnessFallback ? `\n${readsTypeWitnessFallbackInstructions()}` : ""}\n${directedQuestion(item)}\n${focus}\nDo not request more context; reason only from the supplied bounded task.\n\n${workItemText(item, ruleBound)}`;
   const legacySchema = z.object({
     c: z.array(
       compactCandidateSchema.extend({
@@ -1012,7 +1060,7 @@ export async function generateWorkItemCandidate(opts: {
     provider: opts.provider,
     profile: opts.profile,
     prompt,
-    sourceId: opts.item.id,
+    sourceId: item.id,
     outputKind: "candidates",
     allowedFiles: opts.allowedFiles,
     maxCandidates: opts.maxCandidates,
@@ -1020,12 +1068,12 @@ export async function generateWorkItemCandidate(opts: {
     // compatibility fixture returns the legacy shape under the simplified arm.
     evidenceSelectorKeys: selectors.map((selector) => selector.key),
     ...(ruleBound
-      ? { allowedRuleIds: opts.item.rules.map((rule) => rule.id) }
+      ? { allowedRuleIds: item.rules.map((rule) => rule.id) }
       : witnessBound
         ? { allowedRuleIds: hostClassifiedRuleIds }
         : {}),
     ...(witnessBound
-      ? { allowedWitnessKeys: opts.item.controlFlowWitnesses!.map((witness) => witness.witnessKey) }
+      ? { allowedWitnessKeys: item.controlFlowWitnesses!.map((witness) => witness.witnessKey) }
       : {}),
     candidateArm: arm,
     inferenceMode: opts.inferenceMode,
@@ -1033,7 +1081,7 @@ export async function generateWorkItemCandidate(opts: {
     ...(opts.thinkingTokens !== undefined ? { inferenceOverrides: { thinkingTokens: opts.thinkingTokens } } : {}),
     stream: opts.stream,
     ...(opts.streamTraceDir
-      ? { streamTracePath: `${opts.streamTraceDir}/${opts.item.id.replace(/[^A-Za-z0-9._-]/g, "_")}.ndjson` }
+      ? { streamTracePath: `${opts.streamTraceDir}/${item.id.replace(/[^A-Za-z0-9._-]/g, "_")}.ndjson` }
       : {}),
     repairInvalid: opts.inferenceMode !== "thinking-structured",
     signal: opts.signal,
@@ -1043,31 +1091,46 @@ export async function generateWorkItemCandidate(opts: {
         : witnessBound
           ? witnessCandidateResponseSchema.parse(value)
           : ruleBound
-          ? validateRuleBoundCandidateResponse(value, opts.maxCandidates, opts.item)
+          ? validateRuleBoundCandidateResponse(value, opts.maxCandidates, item)
           : workItemCandidateResponseSchema(opts.maxCandidates).parse(value),
   });
   const selectorMap = new Map(selectors.map((selector) => [selector.key, selector]));
   const contractDrops: NonNullable<CandidateBatch["contractDrops"]> = [];
   const candidates = "state" in parsed
-    ? parsed.candidates.map((value) => {
-        const candidate = witnessBound
-          ? expandWitnessCandidate(value as z.infer<typeof witnessCandidateSchema>, opts.item, selectors)
-          : expandSimplifiedCandidate(value as z.infer<typeof simplifiedCandidateSchema>, opts.item, selectors, arm);
-        return { ...candidate, id: candidateId(candidate) };
+    ? parsed.candidates.flatMap((value, candidateIndex) => {
+        try {
+          const candidate = witnessBound
+            ? expandWitnessCandidate(value as z.infer<typeof witnessCandidateSchema>, item, selectors)
+            : expandSimplifiedCandidate(value as z.infer<typeof simplifiedCandidateSchema>, item, selectors, arm);
+          return [{ ...candidate, id: candidateId(candidate) }];
+        } catch (error) {
+          // Invalid witness/rule binding is a contract drop, not a work-item abort.
+          // Location is host-owned for witnesses; remaining expand failures omit the candidate.
+          const message = error instanceof Error ? error.message : String(error);
+          const reason: NonNullable<CandidateBatch["contractDrops"]>[number]["reason"] = message.includes(
+            "unknown control-flow witness",
+          )
+            ? "unknown-witness"
+            : message.includes("host-owned")
+              ? "invalid-basis-rule"
+              : "witness-expand-failure";
+          contractDrops.push({ candidateIndex, reason });
+          return [];
+        }
       })
     : parsed.c.flatMap((value, candidateIndex) => {
         try {
-          const candidate = expandCandidate(value, opts.item.id, undefined, selectors.length ? selectorMap : undefined);
+          const candidate = expandCandidate(value, item.id, undefined, selectors.length ? selectorMap : undefined);
           if (boundedSelectors && (arm === "host-defaults" || !(("state" in parsed))))
             candidate.evidenceRequests = [...candidate.evidenceRequests, ...deterministicEvidenceDefaults(selectors)];
           if (arm === "deterministic-evidence") candidate.evidenceRequests = deterministicEvidenceDefaults(selectors);
           if (arm === "host-derived-metadata") {
-            candidate.primarySymbol = opts.item.primarySymbols[0]?.qualifiedName;
-            candidate.ruleId = opts.item.rules[0]?.id;
+            candidate.primarySymbol = item.primarySymbols[0]?.qualifiedName;
+            candidate.ruleId = item.rules[0]?.id;
             candidate.title = `${candidate.category} defect: ${candidate.description.split(".")[0]}`.slice(0, 80);
           }
           candidate.evidenceRequests = [...new Map(candidate.evidenceRequests.map((request) => [JSON.stringify(request), request])).values()].slice(0, 2);
-          candidate.primarySymbol ??= opts.item.primarySymbols[0]?.qualifiedName;
+          candidate.primarySymbol ??= item.primarySymbols[0]?.qualifiedName;
           return [{ ...candidate, id: candidateId(candidate) }];
         } catch {
           // A bounded model response that names an unknown or incompatible locator
@@ -1083,9 +1146,17 @@ export async function generateWorkItemCandidate(opts: {
           return [];
         }
       });
+  const candidateState =
+    "state" in parsed
+      ? parsed.state === "finding" && !candidates.length
+        ? "no_finding"
+        : parsed.state
+      : candidates.length
+        ? "finding"
+        : "no_finding";
   return {
-    sourceId: opts.item.id,
-    candidateState: "state" in parsed ? parsed.state : candidates.length ? "finding" : "no_finding",
+    sourceId: item.id,
+    candidateState,
     candidates,
     ...response.usage,
     prompt,
@@ -1153,9 +1224,19 @@ export async function verifyCandidateWithModel(opts: {
   requiredEvidenceIdsByRequest?: Record<string, string[]>;
   profile: ModelProfile;
   provider: ReviewProvider;
+  provenance?: VerificationProvenance;
+  inferenceMode?: CandidateInferenceMode;
+  thinkingTokens?: number;
   signal?: AbortSignal;
 }): Promise<{ result: VerificationResult; inputTokens: number; outputTokens: number }> {
-  const prompt = `${VERIFICATION_INSTRUCTIONS}\n\nCandidate:\n${JSON.stringify(opts.candidate)}\n\nOriginating changed code:\n${opts.originatingCode}\n\nResolved evidence:\n${opts.evidenceText || "(none)"}`;
+  const prompt = opts.provenance
+    ? buildProvenanceVerificationPrompt({
+        candidate: opts.candidate,
+        originatingCode: opts.originatingCode,
+        evidenceText: opts.evidenceText,
+        provenance: opts.provenance,
+      })
+    : `${VERIFICATION_INSTRUCTIONS}\n\nCandidate:\n${JSON.stringify(opts.candidate)}\n\nOriginating changed code:\n${opts.originatingCode}\n\nResolved evidence:\n${opts.evidenceText || "(none)"}`;
   const first = await invokeStructured({
     provider: opts.provider,
     profile: opts.profile,
@@ -1163,6 +1244,9 @@ export async function verifyCandidateWithModel(opts: {
     outputKind: "verification",
     prompt,
     signal: opts.signal,
+    inferenceMode: opts.inferenceMode,
+    ...(opts.thinkingTokens !== undefined ? { inferenceOverrides: { thinkingTokens: opts.thinkingTokens } } : {}),
+    repairInvalid: opts.inferenceMode !== "thinking-structured",
     validate: (value) => verificationSchema.parse(value),
   });
   const normalizeId = (id: string) => id.trim().replace(/^\[|\]$/g, "");
@@ -1210,6 +1294,7 @@ export async function verifyCandidateWithModel(opts: {
         supportingEvidenceIds: first.parsed.supportingEvidenceIds.map(normalizeId),
         prompt,
         raw: first.response.raw,
+        ...(first.response.thinking ? { thinking: first.response.thinking } : {}),
         completion: first.response.completion,
         diagnostics: first.diagnostics,
         providerInvocations: 1 + first.diagnostics.length,
@@ -1282,6 +1367,7 @@ export async function verifyCandidateWithModel(opts: {
         supportingEvidenceIds: [],
         prompt: repairPrompt,
         raw: repaired.response.raw,
+        ...(first.response.thinking ? { thinking: first.response.thinking } : {}),
         completion: repaired.response.completion,
         diagnostics,
         citationRepairAttempted: true,
@@ -1299,6 +1385,7 @@ export async function verifyCandidateWithModel(opts: {
       supportingEvidenceIds: mergedIds,
       prompt: repairPrompt,
       raw: repaired.response.raw,
+      ...(first.response.thinking ? { thinking: first.response.thinking } : {}),
       completion: repaired.response.completion,
       diagnostics,
       citationRepairAttempted: true,

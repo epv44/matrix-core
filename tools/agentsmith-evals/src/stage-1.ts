@@ -171,13 +171,17 @@ export function scoreStage1Run(input: {
     const selection = scoreStage1Selection(finding, input.workItems);
     const candidateFound = candidateMatches.matched.has(finding.id);
     const verifiedFound = verifiedMatches.matched.has(finding.id);
+    // Run-level packing/budget incompleteness must not outrank gold that was
+    // already selected, candidate-matched, and therefore adjudicated downstream.
+    const coverageBudgetFailure =
+      input.coverageBudgetFailure && !(selection.selected && candidateFound);
     return {
       id: finding.id,
       selection,
       candidateFound,
       verifiedFound,
       attribution: classifyStage1Finding({
-        coverageBudgetFailure: input.coverageBudgetFailure,
+        coverageBudgetFailure,
         selected: selection.selected,
         candidateFound,
         verifiedFound,

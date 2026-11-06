@@ -52,6 +52,15 @@ import type {
   ReviewWorkItem,
   VerificationResult,
 } from "./engine-types.js";
+import {
+  LEGACY_VERIFICATION_CONTRACT,
+  PROVENANCE_VERIFICATION_INSTRUCTIONS,
+  WITNESS_RULE_PROVENANCE_CONTRACT,
+  demoteUnpublishableVerified,
+  failClosedProvenancePreflight,
+  resolveVerificationProvenance,
+  type VerificationContractId,
+} from "./verification-provenance.js";
 import { computeWorkspaceVersion } from "../core/version.js";
 import { AGENTSMITH_STRATEGY_HASH } from "./strategy.js";
 import { loadSpecialists } from "./registry.js";
@@ -349,6 +358,34 @@ function failedCandidateBatch(opts: {
 
 function severityRank(value: ReviewFinding["severity"]) {
   return { critical: 4, high: 3, medium: 2, low: 1 }[value];
+}
+
+function workItemPrimaryKeys(item: ReviewWorkItem): string[] {
+  return item.primarySymbols.map((symbol) => `${symbol.file}:${symbol.qualifiedName}`);
+}
+
+/**
+ * Local insufficient_context should not force whole-review partial when a
+ * paired interaction for the same changed symbol already completed.
+ */
+export function shouldAggregateInsufficientContext(opts: {
+  sourceId: string;
+  selectedWorkItems: readonly ReviewWorkItem[];
+  candidateBatches: readonly CandidateBatch[];
+}): boolean {
+  const item = opts.selectedWorkItems.find((entry) => entry.id === opts.sourceId);
+  if (!item || item.kind !== "local") return true;
+  const primaryKeys = new Set(workItemPrimaryKeys(item));
+  if (!primaryKeys.size) return true;
+  const byId = new Map(opts.selectedWorkItems.map((entry) => [entry.id, entry]));
+  return !opts.candidateBatches.some((batch) => {
+    if (batch.sourceId === opts.sourceId) return false;
+    if (batch.candidateState === "insufficient_context" || batch.error) return false;
+    if (batch.candidateState === undefined && !batch.candidates.length) return false;
+    const sibling = byId.get(batch.sourceId);
+    if (!sibling || sibling.kind !== "interaction") return false;
+    return workItemPrimaryKeys(sibling).some((key) => primaryKeys.has(key));
+  });
 }
 
 function deduplicateFindings(findings: ReviewFinding[]): ReviewFinding[] {
@@ -712,6 +749,10 @@ export async function executeReviewEngine(opts: {
     candidateThinkingTokens?: number;
     /** Diagnostic-only host context for statically evaluable changed guards. */
     controlFlowDelta?: boolean;
+    /** Opt-in verifier contract; default remains legacy-verdict/v1. */
+    verificationContract?: VerificationContractId;
+    verifierInferenceMode?: CandidateInferenceMode;
+    verifierThinkingTokens?: number;
     stream?: boolean;
     streamTraceDir?: string;
   };
@@ -850,13 +891,18 @@ export async function executeReviewEngine(opts: {
           estimatedTokens: 0,
         }
       : selectWorkItems(rankedWorkItems, opts.config.partitioned.maxCandidateWorkItems ?? 4, candidateInputBudget);
+  const verificationContract: VerificationContractId =
+    opts.variant?.verificationContract ?? LEGACY_VERIFICATION_CONTRACT;
+  const usesWitnessRuleProvenance = verificationContract === WITNESS_RULE_PROVENANCE_CONTRACT;
   const usesControlFlowContext =
-    opts.variant?.controlFlowDelta || opts.variant?.candidateArm === "host-referenced-witness";
+    opts.variant?.controlFlowDelta ||
+    opts.variant?.candidateArm === "host-referenced-witness" ||
+    usesWitnessRuleProvenance;
   const selectedWorkItems = usesControlFlowContext
     ? selection.selected.map((item) => {
         const controlFlowDeltas = deriveControlFlowDeltas({ diff: opts.scope.diff, workItem: item, maxTokens: 96 });
         const controlFlowWitnesses =
-          opts.variant?.candidateArm === "host-referenced-witness"
+          opts.variant?.candidateArm === "host-referenced-witness" || usesWitnessRuleProvenance
             ? deriveControlFlowWitnesses({
                 diff: opts.scope.diff,
                 workItem: item,
@@ -1041,6 +1087,9 @@ export async function executeReviewEngine(opts: {
   const severityPriority = { critical: 4, high: 3, medium: 2, low: 1 } as const;
   const rankedCandidates = [...candidates].sort(
     (left, right) =>
+      // Prefer host-bound witness candidates so vague co-located rule-bound claims
+      // do not outrank the provenance-backed finding at the same guard line.
+      Number(Boolean(right.witness?.witnessKey)) - Number(Boolean(left.witness?.witnessKey)) ||
       severityPriority[right.severity] - severityPriority[left.severity] ||
       right.candidateConfidence - left.candidateConfidence ||
       Math.max(...right.sourceWorkItemIds.map((id) => workItemPriority.get(id) ?? 0), 0) -
@@ -1118,10 +1167,19 @@ export async function executeReviewEngine(opts: {
         )
         .map((code) => code.content)
         .join("\n\n");
+      const availableWitnesses = selectedWorkItems.flatMap((item) => item.controlFlowWitnesses ?? []);
+      const provenance = usesWitnessRuleProvenance
+        ? resolveVerificationProvenance({ candidate, rules, witnesses: availableWitnesses })
+        : undefined;
       const fixedTokens =
-        estimateTokens(VERIFICATION_INSTRUCTIONS, verifierProfile, false) +
+        estimateTokens(
+          provenance ? PROVENANCE_VERIFICATION_INSTRUCTIONS : VERIFICATION_INSTRUCTIONS,
+          verifierProfile,
+          false,
+        ) +
         estimateTokens(VERIFICATION_LABELS, verifierProfile, false) +
-        estimateTokens(JSON.stringify(candidate), verifierProfile, false);
+        estimateTokens(JSON.stringify(candidate), verifierProfile, false) +
+        (provenance ? estimateTokens(JSON.stringify(provenance), verifierProfile, false) : 0);
       const maxOriginChars = Math.max(
         200,
         Math.floor((verifierCallBudget - fixedTokens) * 0.4 * verifierProfile.tokenizer.codeCharsPerToken),
@@ -1277,34 +1335,46 @@ export async function executeReviewEngine(opts: {
     verificationEstimatedTokens += preflight.estimatedTokens;
   }
   const preflightById = new Map(preflights.map((preflight) => [preflight.candidate.id, preflight]));
+  const availableWitnesses = selectedWorkItems.flatMap((item) => item.controlFlowWitnesses ?? []);
+  const verifierInferenceMode = opts.variant?.verifierInferenceMode;
+  const verifierThinkingTokens = opts.variant?.verifierThinkingTokens;
   stageStarted = Date.now();
   const modelResults = await mapLimit(candidatesForVerification, effectiveParallelism, async (candidate) => {
     const preflight = preflightById.get(candidate.id);
     if (!preflight || preflight.kind !== "ready") return undefined;
+    const provenance = usesWitnessRuleProvenance
+      ? resolveVerificationProvenance({ candidate, rules, witnesses: availableWitnesses })
+      : undefined;
+    if (provenance) {
+      const closed = failClosedProvenancePreflight({
+        candidate,
+        provenance,
+        controlFlowWitnessesAvailable: availableWitnesses.length > 0,
+      });
+      if (closed) {
+        if (closed.verdict === "verified")
+          throw new Error("host provenance preflight must never emit verified");
+        return closed;
+      }
+    }
     if (!executionBudget.canStart()) return undefined;
     try {
+      const cacheKey = {
+        snapshot: opts.scope.id,
+        candidate,
+        evidence: evidence[candidate.id],
+        profile: verifierProfile,
+        verificationContract,
+        provenance: provenance ?? null,
+        verifierInferenceMode: verifierInferenceMode ?? null,
+        verifierThinkingTokens: verifierThinkingTokens ?? null,
+      };
       const judgedStage = await cachedStage({
         root: opts.root,
         enabled: opts.config.cache,
         stage: "verification",
-        key: {
-          snapshot: opts.scope.id,
-          candidate,
-          evidence: evidence[candidate.id],
-          profile: verifierProfile,
-          verificationContract: "legacy-verdict/v1",
-        },
-        descriptorFingerprint: dispatchDescriptorFingerprint(
-          {
-            snapshotId: opts.scope.id,
-            candidate,
-            evidence: evidence[candidate.id],
-            profile: verifierProfile,
-            verificationContract: "legacy-verdict/v1",
-          },
-          verifierProfile,
-          "verification",
-        ),
+        key: cacheKey,
+        descriptorFingerprint: dispatchDescriptorFingerprint(cacheKey, verifierProfile, "verification"),
         run: () =>
           executionBudget.call((signal) =>
             verifyCandidateWithModel({
@@ -1322,6 +1392,9 @@ export async function executeReviewEngine(opts: {
               ),
               profile: verifierProfile,
               provider: opts.provider,
+              provenance,
+              inferenceMode: verifierInferenceMode,
+              thinkingTokens: verifierThinkingTokens,
               signal,
             }),
           ),
@@ -1329,13 +1402,7 @@ export async function executeReviewEngine(opts: {
       const judged = judgedStage.value;
       judged.result.cacheStatus = judgedStage.cacheStatus;
       judged.result.descriptorFingerprint = dispatchDescriptorFingerprint(
-        {
-          snapshotId: opts.scope.id,
-          candidate,
-          evidence: evidence[candidate.id],
-          profile: verifierProfile,
-          verificationContract: "legacy-verdict/v1",
-        },
+        cacheKey,
         verifierProfile,
         "verification",
       );
@@ -1361,6 +1428,28 @@ export async function executeReviewEngine(opts: {
   for (const outcome of preflightOutcomes) verificationById.set(outcome.candidateId, outcome);
   for (const outcome of modelResults.filter((result): result is VerificationResult => result !== undefined))
     verificationById.set(outcome.candidateId, outcome);
+  // Post-model publish gate: provenance contract may demote unverifiable verified.
+  if (usesWitnessRuleProvenance) {
+    for (const candidate of rankedCandidates) {
+      const outcome = verificationById.get(candidate.id);
+      if (!outcome || outcome.verdict !== "verified") continue;
+      const provenance = resolveVerificationProvenance({
+        candidate,
+        rules,
+        witnesses: availableWitnesses,
+      });
+      const demoted = demoteUnpublishableVerified({
+        candidate,
+        outcome,
+        provenance,
+        controlFlowWitnessesAvailable: availableWitnesses.length > 0,
+      });
+      if (demoted.verdict === "verified" && demoted !== outcome) {
+        throw new Error("host provenance publish gate must never emit a new verified verdict");
+      }
+      verificationById.set(candidate.id, demoted);
+    }
+  }
   const verification: VerificationResult[] = [];
   const findings: ReviewFinding[] = [];
   for (const candidate of rankedCandidates) {
@@ -1370,9 +1459,24 @@ export async function executeReviewEngine(opts: {
     if (outcome.verdict === "verified") {
       const records = evidence[candidate.id] ?? [];
       const anchor = records[0] ?? anchorRecord(candidate, opts.scope);
-      const selectedEvidence = outcome.supportingEvidenceIds.length
+      let selectedEvidence = outcome.supportingEvidenceIds.length
         ? records.filter((item) => outcome.supportingEvidenceIds.includes(item.id))
         : records;
+      // For guard/authorization claims, keep already-resolved role/session type
+      // evidence alongside citations so published findings retain the contract surface.
+      if (
+        candidate.category === "security" ||
+        /authoriz|authenticat|permission|session|role/.test(
+          `${candidate.ruleId ?? ""} ${candidate.title} ${candidate.description}`.toLowerCase(),
+        )
+      ) {
+        const extras = records.filter(
+          (record) =>
+            !selectedEvidence.some((item) => item.id === record.id) &&
+            /\b(role|member|admin|session|permission|authoriz)/i.test(record.snippet),
+        );
+        if (extras.length) selectedEvidence = [...selectedEvidence, ...extras].slice(0, 4);
+      }
       findings.push({
         id: candidate.id,
         file: candidate.file,
@@ -1579,12 +1683,21 @@ export async function executeReviewEngine(opts: {
       id: item.id,
       detail: "Selected candidate-generation work item did not complete.",
     });
-  for (const batch of candidateBatches.filter((batch) => batch.candidateState === "insufficient_context"))
+  for (const batch of candidateBatches.filter((batch) => batch.candidateState === "insufficient_context")) {
+    if (
+      !shouldAggregateInsufficientContext({
+        sourceId: batch.sourceId,
+        selectedWorkItems,
+        candidateBatches,
+      })
+    )
+      continue;
     incompleteReasons.push({
       kind: "insufficient-context",
       id: batch.sourceId,
       detail: "Candidate generator reported insufficient context for the selected review task.",
     });
+  }
   for (const candidate of omittedCandidates.filter(
     (item) => tokenOmittedCandidates.includes(item) || item.severity === "critical" || item.severity === "high",
   ))

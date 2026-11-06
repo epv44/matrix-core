@@ -426,14 +426,41 @@ function boundedSnippet(
   const lines = item.content.split("\n");
   const maxChars = Math.max(200, Math.floor(budget * profile.tokenizer.codeCharsPerToken));
   const range = focus ?? item.changedLineRanges?.[0];
-  const localStart = range ? Math.max(0, range.start - item.startLine - 12) : 0;
-  let localEnd = range ? Math.min(lines.length, range.end - item.startLine + 13) : lines.length;
+  const focusStart = range ? Math.max(0, range.start - item.startLine) : 0;
+  const focusEnd = range ? Math.min(lines.length, range.end - item.startLine + 1) : lines.length;
+  // Start from the focus hunk and expand context outward. Never shrink below the
+  // focus while unused budget remains — equal inward trimming can lock onto a
+  // too-small window that permanently drops later changed lines.
+  let localStart = focusStart;
+  let localEnd = Math.max(focusStart + 1, focusEnd);
   let content = lines.slice(localStart, localEnd).join("\n");
-  while (content.length > maxChars && localEnd > localStart + 1) {
-    localEnd--;
-    content = lines.slice(localStart, localEnd).join("\n");
+  if (content.length <= maxChars) {
+    const contextPad = 12;
+    const desiredStart = range ? Math.max(0, focusStart - contextPad) : 0;
+    const desiredEnd = range ? Math.min(lines.length, focusEnd + contextPad) : lines.length;
+    while (localStart > desiredStart || localEnd < desiredEnd) {
+      const expandStart = localStart > desiredStart;
+      const expandEnd = localEnd < desiredEnd;
+      const nextStart = expandStart && (!expandEnd || localStart - desiredStart >= desiredEnd - localEnd)
+        ? localStart - 1
+        : localStart;
+      const nextEnd = nextStart === localStart && expandEnd ? localEnd + 1 : localEnd;
+      if (nextStart === localStart && nextEnd === localEnd) break;
+      const next = lines.slice(nextStart, nextEnd).join("\n");
+      if (next.length > maxChars) break;
+      localStart = nextStart;
+      localEnd = nextEnd;
+      content = next;
+    }
+  } else {
+    // Focus core overflows: keep the start of the focus range (defect anchors are
+    // usually near the first changed lines of a hunk).
+    while (content.length > maxChars && localEnd > localStart + 1) {
+      localEnd--;
+      content = lines.slice(localStart, localEnd).join("\n");
+    }
+    if (content.length > maxChars) content = content.slice(0, maxChars);
   }
-  if (content.length > maxChars) content = content.slice(0, maxChars);
   const startLine = item.startLine + localStart;
   return {
     ...item,
@@ -445,6 +472,17 @@ function boundedSnippet(
   };
 }
 
+function focusRangeTokenEstimate(
+  item: ProjectedSnippet,
+  range: { start: number; end: number },
+  profile: ModelProfile,
+): number {
+  const lines = item.content.split("\n");
+  const localStart = Math.max(0, range.start - item.startLine);
+  const localEnd = Math.min(lines.length, range.end - item.startLine + 1);
+  return Math.max(1, estimateTokens(lines.slice(localStart, Math.max(localStart + 1, localEnd)).join("\n"), profile));
+}
+
 function boundedMultiRegionSnippets(
   item: ProjectedSnippet,
   budget: number,
@@ -453,8 +491,24 @@ function boundedMultiRegionSnippets(
 ): ProjectedSnippet[] {
   if (item.estimatedTokens <= budget || !ranges.length) return [boundedSnippet(item, budget, profile, ranges[0])];
   const ordered = [...ranges].sort((left, right) => left.start - right.start || left.end - right.end);
-  const perRegionBudget = Math.max(32, Math.floor(budget / ordered.length));
-  const snippets = ordered.map((range) => boundedSnippet(item, perRegionBudget, profile, range));
+  const spanWeights = ordered.map((range) => Math.max(1, range.end - range.start + 1));
+  const spanTotal = spanWeights.reduce((sum, value) => sum + value, 0);
+  let remaining = budget;
+  const snippets = ordered.map((range, index) => {
+    const regionsLeft = ordered.length - index;
+    const proportional = Math.max(32, Math.floor((budget * spanWeights[index]) / spanTotal));
+    const focusNeed = focusRangeTokenEstimate(item, range, profile);
+    // Prefer covering each focus core; never leave later regions with a useless floor
+    // while earlier tiny ranges consume equal shares.
+    const reservedForRest = 32 * (regionsLeft - 1);
+    const alloc =
+      index === ordered.length - 1
+        ? remaining
+        : Math.min(remaining - reservedForRest, Math.max(proportional, Math.min(focusNeed, remaining - reservedForRest)));
+    const use = Math.max(32, Math.min(remaining, alloc));
+    remaining = Math.max(0, remaining - use);
+    return boundedSnippet(item, use, profile, range);
+  });
   return [
     ...new Map(
       snippets.map((snippet) => [
@@ -463,6 +517,33 @@ function boundedMultiRegionSnippets(
       ]),
     ).values(),
   ];
+}
+
+/** Distribute a code budget so high-priority foci are filled before leftovers. */
+function allocateSnippetBudgets(
+  entries: Array<{ key: string; priority: number; focusNeed: number; fallback: number }>,
+  available: number,
+): Map<string, number> {
+  const budgets = new Map<string, number>();
+  if (!entries.length) return budgets;
+  let remaining = Math.max(0, available);
+  const ordered = [...entries].sort(
+    (left, right) =>
+      right.priority - left.priority || right.focusNeed - left.focusNeed || left.key.localeCompare(right.key),
+  );
+  for (const entry of ordered) {
+    const others = ordered.length - budgets.size - 1;
+    const reserve = Math.max(0, others * 32);
+    const need = Math.max(entry.focusNeed, entry.fallback);
+    const give = Math.max(32, Math.min(remaining - reserve, need));
+    budgets.set(entry.key, give);
+    remaining = Math.max(0, remaining - give);
+  }
+  if (remaining > 0 && ordered.length) {
+    const head = ordered[0];
+    budgets.set(head.key, (budgets.get(head.key) ?? 0) + remaining);
+  }
+  return budgets;
 }
 
 export function buildCandidateProjection(
@@ -618,6 +699,32 @@ export function rankWorkItems(items: ReviewWorkItem[], options: { includeDegree?
   return scored.sort(workItemRank).map((item, index) => ({ ...item, rank: index + 1 }));
 }
 
+/** Content tokens that vary per work item; shared prompt overhead is packed once. */
+function workItemContentTokens(item: ReviewWorkItem): number {
+  const fromParts =
+    item.code.reduce((sum, code) => sum + code.estimatedTokens, 0) +
+    item.rules.reduce((sum, rule) => sum + rule.estimatedTokens, 0);
+  if (item.code.length || item.rules.length) return fromParts;
+  return item.estimatedTokens;
+}
+
+function workItemSharedOverheadTokens(item: ReviewWorkItem): number {
+  if (!(item.code.length || item.rules.length)) return 0;
+  return Math.max(0, item.estimatedTokens - workItemContentTokens(item));
+}
+
+/** Aggregate packing cost: charge shared overhead once, then per-item content. */
+function packingChargeTokens(item: ReviewWorkItem, sharedOverheadCharged: boolean): {
+  cost: number;
+  chargesOverhead: boolean;
+} {
+  const content = workItemContentTokens(item);
+  const overhead = workItemSharedOverheadTokens(item);
+  if (!sharedOverheadCharged && overhead > 0) return { cost: overhead + content, chargesOverhead: true };
+  if (overhead > 0) return { cost: Math.max(1, content), chargesOverhead: false };
+  return { cost: item.estimatedTokens, chargesOverhead: false };
+}
+
 export function selectWorkItems(items: ReviewWorkItem[], limit: number, tokenBudget = Number.POSITIVE_INFINITY) {
   // Selection is a consumer of Ranking's ordered sequence. Callers that need
   // ranking must do it explicitly before crossing this boundary.
@@ -628,45 +735,58 @@ export function selectWorkItems(items: ReviewWorkItem[], limit: number, tokenBud
   const incomingRank = new Map(ranked.map((item, index) => [item.id, item.rank ?? index + 1]));
   const compareIncomingRank = (left: ReviewWorkItem, right: ReviewWorkItem) =>
     (incomingRank.get(left.id) ?? Number.POSITIVE_INFINITY) - (incomingRank.get(right.id) ?? Number.POSITIVE_INFINITY);
+  const pairRankScore = (left: ReviewWorkItem, right: ReviewWorkItem) =>
+    (incomingRank.get(left.id) ?? Number.POSITIVE_INFINITY) + (incomingRank.get(right.id) ?? Number.POSITIVE_INFINITY);
   const selected: ReviewWorkItem[] = [];
   const omitted: ReviewWorkItem[] = [];
   const tokenOmitted: ReviewWorkItem[] = [];
   let usedTokens = 0;
+  let sharedOverheadCharged = false;
+  const tryCharge = (item: ReviewWorkItem) => packingChargeTokens(item, sharedOverheadCharged);
+  const commitCharge = (item: ReviewWorkItem) => {
+    const charge = tryCharge(item);
+    usedTokens += charge.cost;
+    if (charge.chargesOverhead) sharedOverheadCharged = true;
+  };
   if (limit >= 2) {
     const locals = ranked.filter((item) => item.kind === "local");
     const interactions = ranked.filter((item) => item.kind === "interaction");
     let pair: [ReviewWorkItem, ReviewWorkItem] | undefined;
+    let bestPairScore = Number.POSITIVE_INFINITY;
     for (const local of locals) {
       for (const interaction of interactions) {
-        if (local.estimatedTokens + interaction.estimatedTokens <= tokenBudget) {
+        const localCharge = packingChargeTokens(local, false);
+        const interactionCharge = packingChargeTokens(interaction, localCharge.chargesOverhead);
+        if (localCharge.cost + interactionCharge.cost > tokenBudget) continue;
+        const score = pairRankScore(local, interaction);
+        if (!pair || score < bestPairScore) {
           pair = [local, interaction];
-          break;
+          bestPairScore = score;
         }
       }
-      if (pair) break;
     }
     if (pair) {
       selected.push(...pair.sort(compareIncomingRank));
       for (const item of selected)
         item.selectionReason = `required-${item.kind}; priority=${item.priority ?? 0}; semantic=${workItemSemanticKey(item)}`;
-      usedTokens = pair.reduce((sum, item) => sum + item.estimatedTokens, 0);
+      for (const item of selected) commitCharge(item);
     }
   }
   const selectedIds = new Set(selected.map((item) => item.id));
   while (selected.length < Math.max(0, limit)) {
     const remaining = ranked.filter((item) => !selectedIds.has(item.id));
-    const fitting = remaining.filter((item) => usedTokens + item.estimatedTokens <= tokenBudget);
+    const fitting = remaining.filter((item) => usedTokens + tryCharge(item).cost <= tokenBudget);
     if (!fitting.length) break;
     const item = fitting[0];
     item.selectionReason = `ranked-fill; rank=${item.rank ?? incomingRank.get(item.id) ?? "unknown"}; semantic=${workItemSemanticKey(item)}`;
     selected.push(item);
     selectedIds.add(item.id);
-    usedTokens += item.estimatedTokens;
+    commitCharge(item);
   }
   const budgetLimited = selected.length < Math.max(0, limit);
   for (const item of ranked.filter((entry) => !selectedIds.has(entry.id))) {
     omitted.push(item);
-    if (budgetLimited && usedTokens + item.estimatedTokens > tokenBudget) {
+    if (budgetLimited && usedTokens + tryCharge(item).cost > tokenBudget) {
       tokenOmitted.push(item);
       item.selectionReason = `omitted-token-budget; rank=${item.rank ?? incomingRank.get(item.id) ?? "unknown"}`;
     } else {
@@ -716,7 +836,9 @@ export function buildWorkItems(opts: {
   const hasScoutTargets = Boolean(opts.hotspots?.length && (hotspotSymbols.size || hotspotEdgeKinds.size));
   const locals: ReviewWorkItem[] = [];
   const addLocal = (item: ReviewWorkItem, sources: ProjectedSnippet[]): void => {
-    const availableCodeTokens = Math.max(64, opts.inputBudgetTokens - overhead - ruleTokenReserve);
+    // Locals keep a stricter chrome reserve so giant single-file symbols cannot
+    // inflate packing costs and crowd out interaction pairs under the aggregate budget.
+    const availableCodeTokens = Math.max(128, opts.inputBudgetTokens - overhead - ruleTokenReserve);
     const perSourceBudget = Math.max(32, Math.floor(availableCodeTokens / Math.max(1, sources.length)));
     item.code = sources.flatMap((source) =>
       boundedMultiRegionSnippets(source, perSourceBudget, opts.profile, source.changedLineRanges ?? []),
@@ -858,8 +980,8 @@ export function buildWorkItems(opts: {
     const primarySymbols = symbols.filter((symbol) => changed.has(symbolKey(symbol)));
     const relatedSymbols = symbols.filter((symbol) => !changed.has(symbolKey(symbol)));
     const orderedSymbols = [...primarySymbols, ...relatedSymbols];
-    const codes = orderedSymbols.flatMap((symbol) => bySymbol.get(symbolKey(symbol)) ?? []);
-    if (orderedSymbols.length < 2 || !codes.length) continue;
+    const seedCodes = orderedSymbols.flatMap((symbol) => bySymbol.get(symbolKey(symbol)) ?? []);
+    if (orderedSymbols.length < 2 || !seedCodes.length) continue;
     const edgeRisk = Math.max(...edges.map((edge) => interactionPriority(edge, changed, hotspotSymbols)));
     const factors = symbols.reduce(
       (current, symbol) => {
@@ -891,7 +1013,7 @@ export function buildWorkItems(opts: {
         edgeRisk,
         changedEndpoints: primarySymbols.length,
         productionSurface: Number(symbols.some((symbol) => filePriority(symbol.file) >= 90)),
-        changedLines: codes
+        changedLines: seedCodes
           .flatMap((code) => code.changedLineRanges ?? [])
           .reduce((sum, value) => sum + value.end - value.start + 1, 0),
         graphDegree: factors.neighborDegree,
@@ -899,23 +1021,114 @@ export function buildWorkItems(opts: {
         degreeContribution: graphDegreeContribution(factors.neighborDegree),
       },
     };
-    const availableCodeTokens = Math.max(128, opts.inputBudgetTokens - overhead - ruleTokenReserve);
-    const symbolWeights = new Map(
-      orderedSymbols.map((symbol) => [
-        symbolKey(symbol),
-        primarySymbols.some((primary) => symbolKey(primary) === symbolKey(symbol)) ? 1 : 3,
-      ]),
+    // Cap shared chrome so dense JSX/type evidence is not starved when the
+    // deterministic report is large. Packing still accounts for full overhead.
+    const chromeReserve = Math.min(overhead, Math.max(700, Math.floor(opts.inputBudgetTokens * 0.4)));
+    const availableCodeTokens = Math.max(256, opts.inputBudgetTokens - chromeReserve - ruleTokenReserve);
+    // Nested changed symbols inside a primary (e.g. a one-line const in a large card)
+    // are cheap, high-precision defect anchors. Prefer them over the bulky parent body
+    // so related contract types still receive enough budget for their evidence.
+    const nestedChanged = changedSymbols.filter((symbol) =>
+      primarySymbols.some(
+        (primary) =>
+          symbolKey(symbol) !== symbolKey(primary) &&
+          symbol.file === primary.file &&
+          symbol.startLine >= primary.startLine &&
+          symbol.endLine <= primary.endLine,
+      ),
     );
-    const totalWeight = codes.reduce(
-      (sum, code) => sum + (symbolWeights.get(code.symbol ? `${code.file}:${code.symbol}` : "") ?? 1),
-      0,
-    );
-    item.code = codes.flatMap((code) => {
-      const weight = symbolWeights.get(code.symbol ? `${code.file}:${code.symbol}` : "") ?? 1;
-      const budget = Math.max(64, Math.floor((availableCodeTokens * weight) / totalWeight));
-      return boundedMultiRegionSnippets(code, budget, opts.profile, code.changedLineRanges ?? []);
+    const nestedKeys = new Set(nestedChanged.map(symbolKey));
+    const nestedCodes = nestedChanged.flatMap((symbol) => bySymbol.get(symbolKey(symbol)) ?? []);
+    const subtractRanges = (
+      ranges: Array<{ start: number; end: number }>,
+      coveredBy: Array<{ startLine: number; endLine: number }>,
+    ) => {
+      let open = ranges.map((range) => ({ ...range }));
+      for (const cover of coveredBy) {
+        const next: Array<{ start: number; end: number }> = [];
+        for (const range of open) {
+          if (cover.endLine < range.start || cover.startLine > range.end) {
+            next.push(range);
+            continue;
+          }
+          if (cover.startLine > range.start) next.push({ start: range.start, end: cover.startLine - 1 });
+          if (cover.endLine < range.end) next.push({ start: cover.endLine + 1, end: range.end });
+        }
+        open = next.filter((range) => range.end >= range.start);
+      }
+      return open;
+    };
+    // Prefer nested changed anchors, but keep any parent changed lines they do not
+    // cover (e.g. a guard on the next line beside a nested const).
+    const endpointCodes = orderedSymbols.flatMap((symbol) => {
+      const codesForSymbol = bySymbol.get(symbolKey(symbol)) ?? [];
+      if (!primarySymbols.some((primary) => symbolKey(primary) === symbolKey(symbol))) return codesForSymbol;
+      const nested = nestedChanged.filter(
+        (entry) =>
+          entry.file === symbol.file &&
+          entry.startLine >= symbol.startLine &&
+          entry.endLine <= symbol.endLine,
+      );
+      if (!nested.length) return codesForSymbol;
+      return codesForSymbol.flatMap((code) => {
+        const uncovered = subtractRanges(code.changedLineRanges ?? [], nested);
+        // Keep only uncovered parent lines near a nested anchor (e.g. a guard on
+        // the next line). Far-away leftover hunks re-introduce bulky parent bodies.
+        const pad = 2;
+        const nearNested = uncovered.flatMap((range) => {
+          const slices: Array<{ start: number; end: number }> = [];
+          for (const entry of nested) {
+            const start = Math.max(range.start, entry.startLine - pad);
+            const end = Math.min(range.end, entry.endLine + pad);
+            if (end >= start) slices.push({ start, end });
+          }
+          return slices;
+        });
+        if (!nearNested.length) return [];
+        return [{ ...code, changedLineRanges: nearNested }];
+      });
     });
-    item.changedRegions = codes.flatMap((code) =>
+    const interactionCodes = [
+      ...new Map(
+        [...nestedCodes, ...endpointCodes].map((code) => [
+          `${code.file}:${code.symbol ?? ""}:${code.startLine}:${code.endLine}:${JSON.stringify(code.changedLineRanges ?? [])}`,
+          code,
+        ]),
+      ).values(),
+    ];
+    const relatedPrefixNeed = Math.max(
+      96,
+      Math.ceil((60 * 40) / Math.max(1, opts.profile.tokenizer.codeCharsPerToken)),
+    );
+    const budgetEntries = interactionCodes.map((code) => {
+      const key = `${code.file}:${code.symbol ?? ""}:${code.startLine}:${code.endLine}`;
+      const codeSymbolKey = code.symbol ? `${code.file}:${code.symbol}` : "";
+      const nested = Boolean(codeSymbolKey && nestedKeys.has(codeSymbolKey));
+      const primary = primarySymbols.some((symbol) => symbolKey(symbol) === codeSymbolKey);
+      const ranges = code.changedLineRanges ?? [];
+      const focusNeed = ranges.length
+        ? ranges.reduce((sum, range) => sum + focusRangeTokenEstimate(code, range, opts.profile), 0)
+        : primary || nested
+          ? code.estimatedTokens
+          : Math.min(code.estimatedTokens, Math.max(relatedPrefixNeed, Math.ceil(code.estimatedTokens * 0.35)));
+      return {
+        key,
+        code,
+        // Prefer nested anchors, then primary bodies, then larger related contracts
+        // (edge targets) over tiny type aliases that only consume chrome.
+        priority: nested ? 50 : primary ? 30 : 10 + Math.min(20, Math.floor(code.estimatedTokens / 50)),
+        focusNeed: Math.max(32, focusNeed),
+        fallback: nested ? 48 : primary ? 128 : relatedPrefixNeed,
+      };
+    });
+    const budgets = allocateSnippetBudgets(
+      budgetEntries.map(({ key, priority, focusNeed, fallback }) => ({ key, priority, focusNeed, fallback })),
+      availableCodeTokens,
+    );
+    item.code = budgetEntries.flatMap(({ key, code }) =>
+      boundedMultiRegionSnippets(code, budgets.get(key) ?? 64, opts.profile, code.changedLineRanges ?? []),
+    );
+    item.changedRegions = interactionCodes.flatMap((code) =>
       (code.changedLineRanges ?? []).map((range) => ({ file: code.file, ...range })),
     );
     item.promptVisibleRanges = item.code.map((snippet) => ({

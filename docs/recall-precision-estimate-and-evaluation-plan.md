@@ -896,8 +896,9 @@ The Ollama follow-up tested whether the same hard reasoning transition could be 
 larger `qwen3.5:9b-q4_K_M` GGUF model that fits this laptop. This is an isolated diagnostic path,
 not a change to the Homebrew Ollama service or a promoted default.
 
-The runtime was built from `mann1x/up-think-budget` at commit
-`97c08679f338e6a8780dfce83131ebcb9915ca4a`. The branch exposes `think_budget` and
+The runtime was built from `mann1x/ollama` archive pin `archive/up-think-budget-97c08679`
+(commit `97c08679f338e6a8780dfce83131ebcb9915ca4a`; formerly `mann1x/up-think-budget`).
+The branch exposes `think_budget` and
 `think_budget_tokens`, but its bundled llama.cpp revision does not consume Ollama's
 `generation_prompt` request field. Without that field the sampler never enters its budgeted
 thinking state when the chat template has already emitted `<think>`. The isolated build therefore
@@ -914,9 +915,10 @@ It applies inside the bundled llama.cpp checkout after Ollama's CMake configure 
 runtime was built and served in isolation with:
 
 ```bash
-git clone --branch mann1x/up-think-budget https://github.com/mann1x/ollama.git /private/tmp/ollama-think-budget
+git clone --branch archive/up-think-budget-97c08679 https://github.com/mann1x/ollama.git /private/tmp/ollama-think-budget
 git -C /private/tmp/ollama-think-budget checkout 97c08679f338e6a8780dfce83131ebcb9915ca4a
 cmake -S /private/tmp/ollama-think-budget -B /private/tmp/ollama-think-budget/build -DOLLAMA_MLX_BACKENDS:STRING=
+cmake --build /private/tmp/ollama-think-budget/build --target ollama-llama-cpp-source --parallel 8
 git -C /private/tmp/ollama-think-budget/build/_deps/llama_cpp-src apply \
   /Users/ericsMac/Documents/MatrixCore/docs/patches/ollama-think-budget-generation-prompt.patch
 cmake --build /private/tmp/ollama-think-budget/build --parallel 8
@@ -1069,3 +1071,70 @@ fixture-specific authorization wording.
 
 Artifacts: [legacy isolated verifier HTML](../.quality/evals/ollama-9b-isolated-verifier-control-r1-stage-filtered.html)
 and [final atomic diagnostic HTML](../.quality/evals/ollama-9b-isolated-atomic-verifier-final-r1.html).
+
+### Provenance-bound verifier iteration (authorized)
+
+Manual authorization restarted a fresh three-attempt budget for a new opt-in contract
+`witness-rule-provenance/v1`. The experiment keeps the frozen auth replay oracle unchanged. It
+supplies immutable canonical rule text and validated control-flow witness provenance as verifier
+input, enables bounded verifier `thinking-structured` traces, and allows host fail-closed preflight
+only for `rejected` / `insufficient_evidence`. Host preflight never emits `verified`.
+
+Treatment:
+`ollama-9b-witness-rule-provenance-verifier-thinking-output-3k-thinking-2k-long-timeout`.
+
+#### Attempt 1 — isolated auth verification
+
+Command:
+
+```bash
+npm run eval -- --target agentsmith --suite component --model small --tier isolated \
+  --stage verification --case auth-guard-bypass \
+  --treatment ollama-9b-witness-rule-provenance-verifier-thinking-output-3k-thinking-2k-long-timeout \
+  --format html --output .quality/evals/ollama-9b-witness-rule-provenance-verifier-r1.html
+```
+
+| Metric | Result |
+| --- | ---: |
+| Eval status | pass |
+| Oracle resolution accuracy | 3/3 |
+| Supported member bypass | `verified` (model + cited evidence; thinking recorded) |
+| Contradicted members-blocked | `rejected` (host polarity preflight vs witness) |
+| Unsupported retention | `insufficient_evidence` (host: no rule/witness axis) |
+| Verified finding recall | 1/1 |
+| Verified finding precision | 1/1 |
+| Provider/content exhaustion | 0 |
+
+Artifacts: [HTML](../.quality/evals/ollama-9b-witness-rule-provenance-verifier-r1.html)
+and [JSON](../.quality/evals/ollama-9b-witness-rule-provenance-verifier-r1.json).
+
+The isolated gate passed on attempt 1. The supported true positive was not host-auto-verified.
+
+#### Live host-witness smoke after isolated pass
+
+Command:
+
+```bash
+npm run eval -- --target agentsmith --suite component --model small --tier live \
+  --case auth-guard-bypass \
+  --treatment ollama-9b-witness-rule-provenance-verifier-thinking-output-3k-thinking-2k-long-timeout \
+  --format html --output .quality/evals/ollama-9b-host-witness-provenance-verifier-live-r1.html
+```
+
+| Metric | Result |
+| --- | ---: |
+| Eval status | fail |
+| Execution status | partial |
+| Selection recall | 1/1 |
+| Candidate finding recall | 0/1 |
+| Verified finding recall | 0/1 |
+| Verification calls | 0 |
+| Incomplete reasons | review deadline `1800000ms`; two unfinished candidate work items |
+
+Artifacts: [HTML](../.quality/evals/ollama-9b-host-witness-provenance-verifier-live-r1.html)
+and [JSON](../.quality/evals/ollama-9b-host-witness-provenance-verifier-live-r1.json).
+
+This is not a verifier-adjudication regression: the run never reached verification. It reproduces the
+earlier host-witness bottleneck (redundant / slow candidate work items exhausting the review
+deadline). Redundant work-item execution and deadline handling remain the next follow-on before
+matched multi-rep promotion; subsumption stays deferred.

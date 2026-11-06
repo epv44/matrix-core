@@ -122,4 +122,67 @@ describe("isolated verifier replay", () => {
     expect(verification?.metrics.find((metric) => metric.name === "falseVerifications")).toMatchObject({ value: 0 });
   });
 
+  it("uses host provenance fail-closed preflight and only models the supported claim", async () => {
+    const prompts: string[] = [];
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen3.5:9b-q4_K_M", "qwen3.5:122b-a10b"] }),
+      invoke: async (input) => {
+        if (input.outputKind !== "verification")
+          throw new Error(`Unexpected provider call during isolated verification: ${input.outputKind}`);
+        prompts.push(input.prompt);
+        expect(input.inferenceMode).toBe("thinking-structured");
+        expect(input.inferenceOverrides?.thinkingTokens).toBe(2048);
+        expect(input.prompt).toContain("Host provenance (immutable):");
+        expect(input.prompt).toContain("security.authorization-boundary");
+        const ids = evidenceIds(input.prompt);
+        return {
+          raw: JSON.stringify({
+            verdict: "verified",
+            confidence: 1,
+            reasoningSummary: "Witnessed member pass violates the supplied authorization-boundary rule.",
+            supportingEvidenceIds: ids,
+          }),
+          usage: { inputTokens: 10, outputTokens: 5 },
+          thinking: "check witness outcome against rule",
+        };
+      },
+    };
+
+    const report = await runEvalCases({
+      root,
+      slugs: [slug],
+      modes: ["partitioned-interactions"],
+      replay: "isolated",
+      stages: ["verification"],
+      provider,
+      verificationContract: "witness-rule-provenance/v1",
+      verifierInferenceMode: "thinking-structured",
+      verifierThinkingTokens: 2048,
+    });
+    const result = report.cases[0].results[0];
+    const verification = result.diagnostics.verification;
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("Member session bypasses the admin guard");
+    expect(prompts.some((prompt) => prompt.includes("Member sessions are blocked by the admin guard"))).toBe(false);
+    expect(verification).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ candidateId: "replay-supported-member-bypass", verdict: "verified", thinking: "check witness outcome against rule" }),
+        expect.objectContaining({
+          candidateId: "replay-contradicted-member-blocked",
+          verdict: "rejected",
+          reasoningSummary: expect.stringContaining("host provenance preflight"),
+        }),
+        expect.objectContaining({
+          candidateId: "replay-unsupported-retention-policy",
+          verdict: "insufficient_evidence",
+          reasoningSummary: expect.stringContaining("host provenance preflight"),
+        }),
+      ]),
+    );
+    expect(verification.every((item: { verdict: string }) => item.verdict !== "verified" || item.candidateId === "replay-supported-member-bypass")).toBe(
+      true,
+    );
+  });
+
 });

@@ -3,12 +3,14 @@ import { agentSmithConfigFromPolicy } from "../../src/core/resolved-policy.js";
 import {
   applyEvalTreatment,
   resolveEvalTreatment,
+  OLLAMA_9B_WITNESS_RULE_PROVENANCE_VERIFIER_THINKING_TREATMENT,
   OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT,
   OLLAMA_THINKING_9B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT,
   VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT,
   VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_MAX_FIT_THINKING_1K_TREATMENT,
   VLLM_METAL_THINKING_4B_RULE_BOUND_STATE_SCAN_OUTPUT_MAX_FIT_THINKING_1K_TREATMENT,
 } from "../../tools/agentsmith-evals/src/vllm-treatment.js";
+import { WITNESS_RULE_PROVENANCE_CONTRACT } from "../../src/agentsmith/verification-provenance.js";
 
 describe("provider diagnostic treatments", () => {
   it("keeps the established 4B endpoint unchanged", () => {
@@ -111,6 +113,30 @@ describe("provider diagnostic treatments", () => {
     expect(treatmentSettings).toEqual({
       ...controlSettings,
       id: OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT,
+    });
+  });
+
+  it("defines the provenance-bound verifier thinking treatment with explicit verifier budgets", () => {
+    const settings = resolveEvalTreatment(OLLAMA_9B_WITNESS_RULE_PROVENANCE_VERIFIER_THINKING_TREATMENT);
+    expect(settings).toMatchObject({
+      provider: "ollama",
+      verificationContract: WITNESS_RULE_PROVENANCE_CONTRACT,
+      verifierInferenceMode: "thinking-structured",
+      verifierThinkingTokens: 2048,
+      verifierOutputTokens: 3072,
+      candidateArm: "host-referenced-witness",
+      controlFlowDelta: true,
+    });
+    const config = applyEvalTreatment(
+      agentSmithConfigFromPolicy(true),
+      OLLAMA_9B_WITNESS_RULE_PROVENANCE_VERIFIER_THINKING_TREATMENT,
+    );
+    expect(config.model_profiles.find((profile) => profile.id === config.models.verifier)).toMatchObject({
+      provider: "ollama",
+      model: "qwen3.5:9b-q4_K_M",
+      contextTokens: 6144,
+      requestedOutputTokens: 3072,
+      inference: expect.objectContaining({ thinking: true, timeoutMs: 900_000 }),
     });
   });
 

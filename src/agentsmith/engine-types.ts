@@ -240,7 +240,12 @@ export interface CandidateBatch {
   diagnostics?: ProviderFailureDiagnostic[];
   contractDrops?: Array<{
     candidateIndex: number;
-    reason: "unknown-selector" | "invalid-selector";
+    reason:
+      | "unknown-selector"
+      | "invalid-selector"
+      | "unknown-witness"
+      | "invalid-basis-rule"
+      | "witness-expand-failure";
     selector?: string;
   }>;
   error?: string;
@@ -258,6 +263,8 @@ export interface VerificationResult {
   rawSupportingEvidenceIds?: string[];
   prompt?: string;
   raw?: string;
+  /** Verifier thinking/reasoning tokens when inferenceMode records them separately. */
+  thinking?: string;
   completion?: ProviderCompletionMetadata;
   cacheStatus?: "hit" | "miss";
   descriptorFingerprint?: string;
