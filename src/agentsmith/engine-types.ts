@@ -56,6 +56,7 @@ export type OmissionReason =
   | "unsafe-large-file"
   | "token-budget"
   | "lower-ranked"
+  | "contained-duplicate"
   | "timeout"
   | "provider-failure";
 
