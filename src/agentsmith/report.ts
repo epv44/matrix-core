@@ -39,6 +39,7 @@ const omissionReasonLabels: Record<string, string> = {
   generated: "Generated files excluded",
   "unsafe-large-file": "Files exceeded the safe review size",
   "lower-ranked": "Outside the selected risk-ranked scope",
+  "contained-duplicate": "Selected work already visible on an earlier candidate call",
   "token-budget": "Outside the review token budget",
   timeout: "Review deadline reached",
 };

@@ -388,6 +388,73 @@ export function shouldAggregateInsufficientContext(opts: {
   });
 }
 
+interface PromptRange {
+  file: string;
+  start: number;
+  end: number;
+}
+
+function promptRanges(item: ReviewWorkItem): PromptRange[] {
+  if (item.promptVisibleRanges?.length) return item.promptVisibleRanges;
+  return item.code.map((snippet) => ({ file: snippet.file, start: snippet.startLine, end: snippet.endLine }));
+}
+
+function rangeContains(outer: PromptRange, inner: PromptRange): boolean {
+  return outer.file === inner.file && outer.start <= inner.start && outer.end >= inner.end;
+}
+
+function lineInside(file: string, line: number, ranges: readonly PromptRange[]): boolean {
+  return ranges.some((range) => range.file === file && line >= range.start && line <= range.end);
+}
+
+function workItemEdgeKey(edge: ReviewWorkItem["graphEdges"][number]): string {
+  return `${edge.kind}:${edge.source}:${edge.target ?? edge.targetText}`;
+}
+
+function changedLines(item: ReviewWorkItem): Array<{ file: string; line: number }> {
+  const lines: Array<{ file: string; line: number }> = [];
+  for (const region of item.changedRegions ?? []) {
+    for (let line = region.start; line <= region.end; line += 1) lines.push({ file: region.file, line });
+  }
+  return lines;
+}
+
+/**
+ * Ranked-fill work items whose visible code and edges are already on a kept
+ * item do not get their own model call. Required local and interaction items
+ * are always dispatched. The selected set itself is unchanged.
+ */
+export function partitionCandidateDispatch(selected: readonly ReviewWorkItem[]): {
+  dispatch: ReviewWorkItem[];
+  skipped: ReviewWorkItem[];
+} {
+  const dispatch: ReviewWorkItem[] = [];
+  const skipped: ReviewWorkItem[] = [];
+  for (const item of selected) {
+    if (!(item.selectionReason ?? "").startsWith("ranked-fill") || dispatch.length === 0) {
+      dispatch.push(item);
+      continue;
+    }
+    const keptRanges = dispatch.flatMap(promptRanges);
+    const itemRanges = promptRanges(item);
+    const keptEdges = new Set(dispatch.flatMap((kept) => kept.graphEdges.map(workItemEdgeKey)));
+    const edgesCovered = item.graphEdges.every((edge) => keptEdges.has(workItemEdgeKey(edge)));
+    const rangesCovered = itemRanges.every((range) => keptRanges.some((kept) => rangeContains(kept, range)));
+    const structurallyEmpty =
+      item.primarySymbols.length === 0 && (item.changedRegions?.length ?? 0) === 0 && item.graphEdges.length === 0;
+    const overlappingChanged = selected
+      .flatMap(changedLines)
+      .filter((entry) => lineInside(entry.file, entry.line, itemRanges));
+    const changedLinesCovered = overlappingChanged.every((entry) => lineInside(entry.file, entry.line, keptRanges));
+    if ((rangesCovered && edgesCovered) || (structurallyEmpty && changedLinesCovered)) {
+      skipped.push(item);
+      continue;
+    }
+    dispatch.push(item);
+  }
+  return { dispatch, skipped };
+}
+
 function deduplicateFindings(findings: ReviewFinding[]): ReviewFinding[] {
   const merged = new Map<string, ReviewFinding>();
   for (const finding of findings) {
@@ -951,6 +1018,7 @@ export async function executeReviewEngine(opts: {
   });
   stageStarted = Date.now();
   const candidateBatches: CandidateBatch[] = [];
+  let containedDispatchSkips: ReviewWorkItem[] = [];
   if (opts.variant?.seedCandidates) {
     const sources = selectedWorkItems.length ? selectedWorkItems.map((item) => item.id) : ["holistic"];
     candidateBatches.push(
@@ -1018,7 +1086,9 @@ export async function executeReviewEngine(opts: {
     candidateBatches.push(...batches);
   } else {
     if (route.mode === "holistic") throw new Error("Holistic review requires the specialist execution path");
-    const batches = await mapLimit(selectedWorkItems, effectiveParallelism, async (item) => {
+    const dispatchPlan = partitionCandidateDispatch(selectedWorkItems);
+    containedDispatchSkips = dispatchPlan.skipped;
+    const batches = await mapLimit(dispatchPlan.dispatch, effectiveParallelism, async (item) => {
       if (!executionBudget.canStart())
         return failedCandidateBatch({ sourceId: item.id, error: "review deadline exceeded" });
       const evidenceLocatorTable = buildTaskEvidenceLocatorTable({ snapshotId: opts.scope.id, workItem: item });
@@ -1552,6 +1622,7 @@ export async function executeReviewEngine(opts: {
       reason: tokenOmittedWorkItems.includes(item) ? "token-budget" : "lower-ranked",
     })),
     ...timedOutWorkItems.map((id) => ({ kind: "work-item", id, reason: "timeout" })),
+    ...containedDispatchSkips.map((item) => ({ kind: "work-item", id: item.id, reason: "contained-duplicate" })),
     ...omittedCandidates.map((candidate) => ({
       kind: "candidate",
       id: candidate.id,
@@ -1571,7 +1642,7 @@ export async function executeReviewEngine(opts: {
   const evidenceRequestsUnresolved = allEvidenceOutcomes.filter((outcome) => outcome.status === "unresolved").length;
   const evidenceRequestsSkipped = allEvidenceOutcomes.filter((outcome) => outcome.status === "skipped").length;
   const coverage: ReviewCoverage = {
-    selection: omittedWorkItems.length || omittedCandidates.length ? "bounded" : "full",
+    selection: omittedWorkItems.length || omittedCandidates.length || containedDispatchSkips.length ? "bounded" : "full",
     ...emptyReviewCoverage(opts.scope),
     changedFilesReviewed: reviewedFiles.size,
     changedSymbols: graph.changedSymbols.length,
@@ -1677,7 +1748,8 @@ export async function executeReviewEngine(opts: {
     });
   for (const error of errors.filter((value) => value !== "Workspace changed during review"))
     incompleteReasons.push({ kind: "provider-failure", detail: error });
-  for (const item of selectedWorkItems.filter((item) => !completedSources.has(item.id)))
+  const containedDispatchIds = new Set(containedDispatchSkips.map((item) => item.id));
+  for (const item of selectedWorkItems.filter((item) => !completedSources.has(item.id) && !containedDispatchIds.has(item.id)))
     incompleteReasons.push({
       kind: "unfinished-work-item",
       id: item.id,
@@ -1724,7 +1796,10 @@ export async function executeReviewEngine(opts: {
       });
   }
   for (const omission of coverage.omissions.filter(
-    (item) => !["binary", "generated", "lower-ranked", "token-budget", "unsupported-artifact"].includes(item.reason),
+    (item) =>
+      !["binary", "generated", "lower-ranked", "token-budget", "unsupported-artifact", "contained-duplicate"].includes(
+        item.reason,
+      ),
   ))
     incompleteReasons.push({
       kind: "material-omission",
