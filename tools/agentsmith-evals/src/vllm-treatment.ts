@@ -29,6 +29,9 @@ export const OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_TH
 /** Opt-in verifier experiment: witness/rule provenance + bounded verifier thinking. */
 export const OLLAMA_9B_WITNESS_RULE_PROVENANCE_VERIFIER_THINKING_TREATMENT =
   "ollama-9b-witness-rule-provenance-verifier-thinking-output-3k-thinking-2k-long-timeout" as const;
+/** Same provenance treatment, with the candidate path switched to the two-call commit line. */
+export const OLLAMA_9B_WITNESS_RULE_PROVENANCE_COMMIT_LINE_TREATMENT =
+  "ollama-9b-witness-rule-provenance-commit-line-thinking-2k" as const;
 export type EvalTreatmentId =
   | typeof VLLM_METAL_THINKING_4B_TREATMENT
   | typeof VLLM_METAL_THINKING_4B_CONTROL_FLOW_DELTA_TREATMENT
@@ -42,7 +45,8 @@ export type EvalTreatmentId =
   | typeof VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT
   | typeof OLLAMA_THINKING_9B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT
   | typeof OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT
-  | typeof OLLAMA_9B_WITNESS_RULE_PROVENANCE_VERIFIER_THINKING_TREATMENT;
+  | typeof OLLAMA_9B_WITNESS_RULE_PROVENANCE_VERIFIER_THINKING_TREATMENT
+  | typeof OLLAMA_9B_WITNESS_RULE_PROVENANCE_COMMIT_LINE_TREATMENT;
 /** @deprecated Use EvalTreatmentId; retained for existing diagnostic imports. */
 export type VllmEvalTreatment = EvalTreatmentId;
 
@@ -324,6 +328,30 @@ const EVAL_TREATMENTS: Record<EvalTreatmentId, EvalTreatmentSettings> = {
     timeoutMs: 900_000,
     candidateArm: "host-referenced-witness",
     inferenceMode: "thinking-structured",
+    candidatePromptVariant: "branch-analysis-delta-first-v3",
+    thinkingStream: true,
+    controlFlowDelta: true,
+  },
+  [OLLAMA_9B_WITNESS_RULE_PROVENANCE_COMMIT_LINE_TREATMENT]: {
+    id: OLLAMA_9B_WITNESS_RULE_PROVENANCE_COMMIT_LINE_TREATMENT,
+    provider: "ollama",
+    baseUrl: "http://127.0.0.1:11435",
+    candidateModel: "qwen3.5:9b-q4_K_M",
+    verifierModel: "qwen3.5:9b-q4_K_M",
+    candidateContextTokens: 6144,
+    candidateOutputTokens: 3072,
+    candidateTemperature: 0.6,
+    candidateTopP: 0.95,
+    candidateTopK: 20,
+    candidateThinkingTokens: 2048,
+    verifierContextTokens: 6144,
+    verifierOutputTokens: 3072,
+    verifierThinkingTokens: 2048,
+    verifierInferenceMode: "thinking-structured",
+    verificationContract: WITNESS_RULE_PROVENANCE_CONTRACT,
+    timeoutMs: 900_000,
+    candidateArm: "host-referenced-witness",
+    inferenceMode: "thinking-commit-line",
     candidatePromptVariant: "branch-analysis-delta-first-v3",
     thinkingStream: true,
     controlFlowDelta: true,

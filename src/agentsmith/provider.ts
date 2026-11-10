@@ -45,6 +45,8 @@ export interface ReviewProviderInput {
   candidateArm?: CandidateGenerationArm;
   inferenceMode?: CandidateInferenceMode;
   systemPrompt?: string;
+  /** Send the prompt to Ollama without a second chat template. Used for the commit-line prefill. */
+  rawPrompt?: boolean;
   inferenceOverrides?: { contextTokens?: number; outputTokens?: number; thinkingTokens?: number };
   stream?: boolean;
   streamTracePath?: string;
@@ -56,10 +58,7 @@ export interface ReviewProvider {
   invoke(input: ReviewProviderInput): Promise<ProviderResponse>;
 }
 
-function compactCandidateProperties(
-  allowedFiles?: string[],
-  evidenceSelectorKeys?: string[],
-) {
+function compactCandidateProperties(allowedFiles?: string[], evidenceSelectorKeys?: string[]) {
   // Ollama rejects JSON Schema enum values when the array is empty. A task
   // with no bounded selectors still uses the bounded request shape, but no
   // selector can resolve; candidate-generation will drop any such request.
@@ -114,7 +113,8 @@ function compactCandidateProperties(
                   type: "string",
                   minLength: 1,
                   maxLength: 240,
-                  description: "Required symbol for semantic lookups or literal value for search/config/test/schema lookups.",
+                  description:
+                    "Required symbol for semantic lookups or literal value for search/config/test/schema lookups.",
                 },
                 m: { type: "string", enum: ["symbol", "literal"] },
                 p: { type: "string", maxLength: 240, description: "Optional repository-relative path hint." },
@@ -205,7 +205,10 @@ export function reviewOutputSchema(
   const candidateOutput = {
     type: "object",
     additionalProperties: false,
-    required: kind === "specialist" || (candidateArm !== "simplified-contract" && !ruleBound && !witnessBound) ? [kind === "specialist" ? "summary" : "c"] : ["state", "candidates"],
+    required:
+      kind === "specialist" || (candidateArm !== "simplified-contract" && !ruleBound && !witnessBound)
+        ? [kind === "specialist" ? "summary" : "c"]
+        : ["state", "candidates"],
     properties: {
       ...(kind === "specialist" || (candidateArm !== "simplified-contract" && !ruleBound && !witnessBound)
         ? {
@@ -217,7 +220,10 @@ export function reviewOutputSchema(
                 type: "object",
                 additionalProperties: false,
                 required: ["f", "l", "s", "k", "t", "d", "q", "e"],
-                properties: compactCandidateProperties(allowedFiles, candidateArm === "host-defaults" ? evidenceSelectorKeys : undefined),
+                properties: compactCandidateProperties(
+                  allowedFiles,
+                  candidateArm === "host-defaults" ? evidenceSelectorKeys : undefined,
+                ),
               },
             },
           }
@@ -231,9 +237,21 @@ export function reviewOutputSchema(
                 additionalProperties: false,
                 required: witnessBound
                   ? ["file", "line", "witnessKey", "basisRuleId", "impact", "confidence"]
-                  : ["file", "line", "severity", "category", "trigger", "invariant", "impact", "confidence", ...(ruleBound ? ["basisRuleId"] : [])],
+                  : [
+                      "file",
+                      "line",
+                      "severity",
+                      "category",
+                      "trigger",
+                      "invariant",
+                      "impact",
+                      "confidence",
+                      ...(ruleBound ? ["basisRuleId"] : []),
+                    ],
                 properties: {
-                  file: allowedFiles?.length ? { type: "string", enum: [...new Set(allowedFiles)] } : { type: "string", minLength: 1 },
+                  file: allowedFiles?.length
+                    ? { type: "string", enum: [...new Set(allowedFiles)] }
+                    : { type: "string", minLength: 1 },
                   line: { type: "integer", minimum: 1 },
                   endLine: { type: "integer", minimum: 1 },
                   ...(witnessBound
@@ -289,9 +307,12 @@ export function openAiStrictSchema(schema: unknown): unknown {
     }
     normalized[key] = value;
   }
-  if (!source.properties || typeof source.properties !== "object" || Array.isArray(source.properties)) return normalized;
+  if (!source.properties || typeof source.properties !== "object" || Array.isArray(source.properties))
+    return normalized;
   const properties = source.properties as Record<string, unknown>;
-  const originallyRequired = new Set(Array.isArray(source.required) ? source.required.filter((key): key is string => typeof key === "string") : []);
+  const originallyRequired = new Set(
+    Array.isArray(source.required) ? source.required.filter((key): key is string => typeof key === "string") : [],
+  );
   normalized.properties = Object.fromEntries(
     Object.entries(properties).map(([key, value]) => {
       const property = openAiStrictSchema(value);
@@ -322,13 +343,16 @@ export class OllamaProvider implements ReviewProvider {
   }
 
   async invoke(input: ReviewProviderInput): Promise<ProviderResponse> {
+    const rawPrompt = input.rawPrompt === true;
     const thinkingStructured = input.inferenceMode === "thinking-structured";
-    const boundedThinking = thinkingStructured && input.inferenceOverrides?.thinkingTokens !== undefined;
+    const thinkingNoFormat = input.inferenceMode === "thinking-no-format";
+    const boundedThinking =
+      !rawPrompt && (thinkingStructured || thinkingNoFormat) && input.inferenceOverrides?.thinkingTokens !== undefined;
     // Ollama's bounded-reasoning branch currently wires explicit parser
     // delimiters through /api/generate. Keep the established chat path for
     // unbounded thinking diagnostics, but use generate when a hard reasoning
-    // budget is part of the request contract.
-    const useChat = thinkingStructured && !boundedThinking;
+    // budget is part of the request contract. A raw prefill also uses generate.
+    const useChat = thinkingStructured && !boundedThinking && !rawPrompt;
     const controller = new AbortController();
     const timeout = setTimeout(
       () => controller.abort(new Error("Ollama request timed out")),
@@ -339,7 +363,11 @@ export class OllamaProvider implements ReviewProvider {
     try {
       const streaming = input.stream === true;
       if (streaming && input.streamTracePath)
-        await writeStreamTrace(input.streamTracePath, { type: "request", at: new Date().toISOString(), model: input.profile.model });
+        await writeStreamTrace(input.streamTracePath, {
+          type: "request",
+          at: new Date().toISOString(),
+          model: input.profile.model,
+        });
       const response = await fetch(`${this.config.base_url}${useChat ? "/api/chat" : "/api/generate"}`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -354,9 +382,10 @@ export class OllamaProvider implements ReviewProvider {
               }
             : { prompt: input.prompt }),
           stream: streaming,
-          ...(!useChat && input.systemPrompt !== undefined ? { system: input.systemPrompt } : {}),
-          think: thinkingStructured || input.inferenceMode === "thinking-no-format" ? true : input.profile.inference.thinking,
-          ...(input.inferenceMode === "thinking-no-format"
+          ...(!useChat && !rawPrompt && input.systemPrompt !== undefined ? { system: input.systemPrompt } : {}),
+          ...(rawPrompt ? { raw: true } : {}),
+          think: rawPrompt ? false : thinkingStructured || thinkingNoFormat ? true : input.profile.inference.thinking,
+          ...(rawPrompt || thinkingNoFormat
             ? {}
             : {
                 format: reviewOutputSchema(
@@ -432,7 +461,9 @@ export class OllamaProvider implements ReviewProvider {
       const message = useChat && body.message && typeof body.message === "object" ? body.message : undefined;
       return {
         raw: String(message?.content ?? body.response ?? ""),
-        ...(typeof (message?.thinking ?? body.thinking) === "string" ? { thinking: message?.thinking ?? body.thinking } : {}),
+        ...(typeof (message?.thinking ?? body.thinking) === "string"
+          ? { thinking: message?.thinking ?? body.thinking }
+          : {}),
         usage: {
           inputTokens: Number(body.prompt_eval_count ?? 0),
           outputTokens: Number(body.eval_count ?? 0),
@@ -502,9 +533,13 @@ function vllmOutputTokenBudget(input: ReviewProviderInput, promptTokens: number)
   const context = input.inferenceOverrides?.contextTokens ?? input.profile.contextTokens;
   const available = context - promptTokens - input.profile.safetyReserveTokens;
   if (available < 1)
-    throw new Error(`vLLM prompt exceeds context budget: prompt=${promptTokens}, context=${context}, safetyReserve=${input.profile.safetyReserveTokens}`);
+    throw new Error(
+      `vLLM prompt exceeds context budget: prompt=${promptTokens}, context=${context}, safetyReserve=${input.profile.safetyReserveTokens}`,
+    );
   if (requested > available)
-    throw new Error(`vLLM output budget exceeds context: requested=${requested}, available=${available}, prompt=${promptTokens}, context=${context}, safetyReserve=${input.profile.safetyReserveTokens}`);
+    throw new Error(
+      `vLLM output budget exceeds context: requested=${requested}, available=${available}, prompt=${promptTokens}, context=${context}, safetyReserve=${input.profile.safetyReserveTokens}`,
+    );
   return requested;
 }
 
@@ -515,7 +550,15 @@ function vllmResponseFormat(input: ReviewProviderInput) {
     json_schema: {
       name: `agentsmith_${input.outputKind.replace(/[^A-Za-z0-9_]/g, "_")}`,
       strict: true,
-      schema: reviewOutputSchema(input.outputKind, input.allowedFiles, input.maxCandidates, input.evidenceSelectorKeys, input.candidateArm, input.allowedRuleIds, input.allowedWitnessKeys),
+      schema: reviewOutputSchema(
+        input.outputKind,
+        input.allowedFiles,
+        input.maxCandidates,
+        input.evidenceSelectorKeys,
+        input.candidateArm,
+        input.allowedRuleIds,
+        input.allowedWitnessKeys,
+      ),
     },
   };
 }
@@ -536,7 +579,12 @@ function vllmCompletion(body: any, input: ReviewProviderInput, reasoning: string
         ? { reasoningTokens: Number(usage.completion_tokens_details.reasoning_tokens) }
         : {}),
       ...(Number.isFinite(usage.completion_tokens_details?.reasoning_tokens)
-        ? { finalContentTokens: Math.max(0, Number(usage.completion_tokens ?? 0) - Number(usage.completion_tokens_details.reasoning_tokens)) }
+        ? {
+            finalContentTokens: Math.max(
+              0,
+              Number(usage.completion_tokens ?? 0) - Number(usage.completion_tokens_details.reasoning_tokens),
+            ),
+          }
         : {}),
     },
     completion: {
@@ -559,15 +607,24 @@ export class VllmProvider implements ReviewProvider {
       const response = await fetch(`${vllmBaseUrl(this.config)}/models`, { signal });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body: any = await response.json();
-      return { ok: true, models: (body.data ?? []).map((model: any) => model.id).filter((value: unknown): value is string => typeof value === "string") };
+      return {
+        ok: true,
+        models: (body.data ?? [])
+          .map((model: any) => model.id)
+          .filter((value: unknown): value is string => typeof value === "string"),
+      };
     } catch (error: any) {
       return { ok: false, models: [], error: error.message };
     }
   }
 
   async invoke(input: ReviewProviderInput): Promise<ProviderResponse> {
+    if (input.rawPrompt) throw new Error("raw prompt continuation is only supported by the Ollama provider");
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new Error("vLLM request timed out")), input.profile.inference.timeoutMs);
+    const timeout = setTimeout(
+      () => controller.abort(new Error("vLLM request timed out")),
+      input.profile.inference.timeoutMs,
+    );
     const abort = () => controller.abort(input.signal?.reason);
     input.signal?.addEventListener("abort", abort, { once: true });
     const streaming = input.stream === true;
@@ -578,26 +635,32 @@ export class VllmProvider implements ReviewProvider {
     try {
       const promptTokens = await vllmPromptTokens(this.config, input, messages, controller.signal);
       const body: Record<string, unknown> = {
-      model: input.profile.model,
-      messages,
-      stream: streaming,
-      ...(streaming ? { stream_options: { include_usage: true } } : {}),
-      temperature: input.profile.inference.temperature,
-      ...(input.profile.inference.topP !== undefined ? { top_p: input.profile.inference.topP } : {}),
-      ...(input.profile.inference.topK !== undefined ? { top_k: input.profile.inference.topK } : {}),
-      max_tokens: vllmOutputTokenBudget(input, promptTokens),
-      ...(vllmResponseFormat(input) ? { response_format: vllmResponseFormat(input) } : {}),
-      ...(input.inferenceMode?.startsWith("thinking-")
-        ? {
-            chat_template_kwargs: { enable_thinking: true },
-            ...(input.inferenceOverrides?.thinkingTokens !== undefined
-              ? { thinking_token_budget: input.inferenceOverrides.thinkingTokens }
-              : {}),
-          }
-        : { chat_template_kwargs: { enable_thinking: false } }),
+        model: input.profile.model,
+        messages,
+        stream: streaming,
+        ...(streaming ? { stream_options: { include_usage: true } } : {}),
+        temperature: input.profile.inference.temperature,
+        ...(input.profile.inference.topP !== undefined ? { top_p: input.profile.inference.topP } : {}),
+        ...(input.profile.inference.topK !== undefined ? { top_k: input.profile.inference.topK } : {}),
+        max_tokens: vllmOutputTokenBudget(input, promptTokens),
+        ...(vllmResponseFormat(input) ? { response_format: vllmResponseFormat(input) } : {}),
+        ...(input.inferenceMode?.startsWith("thinking-")
+          ? {
+              chat_template_kwargs: { enable_thinking: true },
+              ...(input.inferenceOverrides?.thinkingTokens !== undefined
+                ? { thinking_token_budget: input.inferenceOverrides.thinkingTokens }
+                : {}),
+            }
+          : { chat_template_kwargs: { enable_thinking: false } }),
       };
       if (streaming && input.streamTracePath)
-        await writeStreamTrace(input.streamTracePath, { type: "request", at: new Date().toISOString(), model: input.profile.model, provider: "vllm", body });
+        await writeStreamTrace(input.streamTracePath, {
+          type: "request",
+          at: new Date().toISOString(),
+          model: input.profile.model,
+          provider: "vllm",
+          body,
+        });
       const response = await fetch(`${vllmBaseUrl(this.config)}/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -634,7 +697,14 @@ export class VllmProvider implements ReviewProvider {
         content += contentDelta;
         if (chunk.usage) finalBody.usage = chunk.usage;
         if (input.streamTracePath)
-          await writeStreamTrace(input.streamTracePath, { type: "chunk", sequence: sequence++, at: new Date().toISOString(), chunk, reasoningDelta, contentDelta });
+          await writeStreamTrace(input.streamTracePath, {
+            type: "chunk",
+            sequence: sequence++,
+            at: new Date().toISOString(),
+            chunk,
+            reasoningDelta,
+            contentDelta,
+          });
       };
       while (true) {
         const next = await reader.read();
@@ -657,7 +727,12 @@ export class VllmProvider implements ReviewProvider {
       );
     } catch (error) {
       if (input.stream && input.streamTracePath)
-        await writeStreamTrace(input.streamTracePath, { type: "error", at: new Date().toISOString(), provider: "vllm", error: error instanceof Error ? error.message : String(error) }).catch(() => undefined);
+        await writeStreamTrace(input.streamTracePath, {
+          type: "error",
+          at: new Date().toISOString(),
+          provider: "vllm",
+          error: error instanceof Error ? error.message : String(error),
+        }).catch(() => undefined);
       throw error;
     } finally {
       clearTimeout(timeout);
@@ -705,8 +780,12 @@ export class OpenAIResponsesProvider implements ReviewProvider {
   }
 
   async invoke(input: ReviewProviderInput): Promise<ProviderResponse> {
+    if (input.rawPrompt) throw new Error("raw prompt continuation is only supported by the Ollama provider");
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(new Error("OpenAI Responses request timed out")), input.profile.inference.timeoutMs);
+    const timeout = setTimeout(
+      () => controller.abort(new Error("OpenAI Responses request timed out")),
+      input.profile.inference.timeoutMs,
+    );
     const abort = () => controller.abort(input.signal?.reason);
     input.signal?.addEventListener("abort", abort, { once: true });
     const request = {
@@ -722,32 +801,46 @@ export class OpenAIResponsesProvider implements ReviewProvider {
           name: `agentsmith_${input.outputKind.replace(/[^A-Za-z0-9_]/g, "_")}`,
           strict: true,
           schema: openAiStrictSchema(
-            reviewOutputSchema(input.outputKind, input.allowedFiles, input.maxCandidates, input.evidenceSelectorKeys, input.candidateArm, input.allowedRuleIds, input.allowedWitnessKeys),
+            reviewOutputSchema(
+              input.outputKind,
+              input.allowedFiles,
+              input.maxCandidates,
+              input.evidenceSelectorKeys,
+              input.candidateArm,
+              input.allowedRuleIds,
+              input.allowedWitnessKeys,
+            ),
           ),
         },
       },
     };
     try {
       if (input.streamTracePath)
-        await writeStreamTrace(input.streamTracePath, { type: "request", at: new Date().toISOString(), provider: "openai-responses", body: request });
+        await writeStreamTrace(input.streamTracePath, {
+          type: "request",
+          at: new Date().toISOString(),
+          provider: "openai-responses",
+          body: request,
+        });
       const response = await fetch(`${this.baseUrl()}/responses`, {
         method: "POST",
         headers: this.headers(),
         body: JSON.stringify(request),
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error(`OpenAI Responses HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
+      if (!response.ok)
+        throw new Error(`OpenAI Responses HTTP ${response.status}: ${(await response.text()).slice(0, 500)}`);
       const body: any = await response.json();
       const output = Array.isArray(body.output) ? body.output : [];
       const content = output
         .filter((item: any) => item?.type === "message")
-        .flatMap((item: any) => Array.isArray(item.content) ? item.content : [])
+        .flatMap((item: any) => (Array.isArray(item.content) ? item.content : []))
         .filter((item: any) => item?.type === "output_text")
         .map((item: any) => String(item.text ?? ""))
         .join("");
       const reasoningSummary = output
         .filter((item: any) => item?.type === "reasoning")
-        .flatMap((item: any) => Array.isArray(item.summary) ? item.summary : [])
+        .flatMap((item: any) => (Array.isArray(item.summary) ? item.summary : []))
         .filter((item: any) => item?.type === "summary_text")
         .map((item: any) => String(item.text ?? ""))
         .join("\n");
@@ -772,7 +865,9 @@ export class OpenAIResponsesProvider implements ReviewProvider {
           inputTokens: Number(usage.input_tokens ?? 0),
           outputTokens,
           ...(Number.isFinite(reasoningTokens) ? { reasoningTokens } : {}),
-          ...(Number.isFinite(reasoningTokens) ? { finalContentTokens: Math.max(0, outputTokens - reasoningTokens) } : {}),
+          ...(Number.isFinite(reasoningTokens)
+            ? { finalContentTokens: Math.max(0, outputTokens - reasoningTokens) }
+            : {}),
         },
         completion: {
           model: String(body.model ?? input.profile.model),
@@ -786,7 +881,12 @@ export class OpenAIResponsesProvider implements ReviewProvider {
       };
     } catch (error) {
       if (input.streamTracePath)
-        await writeStreamTrace(input.streamTracePath, { type: "error", at: new Date().toISOString(), provider: "openai-responses", error: error instanceof Error ? error.message : String(error) }).catch(() => undefined);
+        await writeStreamTrace(input.streamTracePath, {
+          type: "error",
+          at: new Date().toISOString(),
+          provider: "openai-responses",
+          error: error instanceof Error ? error.message : String(error),
+        }).catch(() => undefined);
       throw error;
     } finally {
       clearTimeout(timeout);

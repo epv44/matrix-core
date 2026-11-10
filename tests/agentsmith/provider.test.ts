@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { OllamaProvider, OpenAIResponsesProvider, VllmProvider, createReviewProvider } from "../../src/agentsmith/provider.js";
+import {
+  OllamaProvider,
+  OpenAIResponsesProvider,
+  VllmProvider,
+  createReviewProvider,
+} from "../../src/agentsmith/provider.js";
 import { agentSmithConfigFromPolicy } from "../../src/core/resolved-policy.js";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -43,7 +48,9 @@ describe("OllamaProvider v2", () => {
     const item = candidates.items;
     expect(requestBody.format.required).toEqual(["state", "candidates"]);
     expect(candidates.maxItems).toBe(2);
-    expect(item.required).toEqual(expect.arrayContaining(["file", "line", "category", "trigger", "invariant", "impact", "confidence"]));
+    expect(item.required).toEqual(
+      expect.arrayContaining(["file", "line", "category", "trigger", "invariant", "impact", "confidence"]),
+    );
     expect(item.properties.file).toEqual({ type: "string", enum: ["src/a.ts", "docs/deleted.md"] });
     expect(item.properties.impact.maxLength).toBe(240);
     expect(item.properties.trigger.maxLength).toBe(160);
@@ -70,13 +77,19 @@ describe("OllamaProvider v2", () => {
   it("constrains rule-bound candidates to the task's visible rule IDs", async () => {
     const config = agentSmithConfigFromPolicy(true);
     let requestBody: any;
-    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
-      requestBody = JSON.parse(String(init.body));
-      return new Response(JSON.stringify({ response: '{"state":"no_finding","candidates":[]}' }));
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        requestBody = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ response: '{"state":"no_finding","candidates":[]}' }));
+      }),
+    );
     await new OllamaProvider(config).invoke({
-      profile: config.model_profiles[0], prompt: "review", outputKind: "candidates",
-      candidateArm: "rule-bound-classification", allowedRuleIds: ["security.authorization-boundary"],
+      profile: config.model_profiles[0],
+      prompt: "review",
+      outputKind: "candidates",
+      candidateArm: "rule-bound-classification",
+      allowedRuleIds: ["security.authorization-boundary"],
     });
     const candidate = requestBody.format.properties.candidates.items;
     expect(candidate.required).toContain("basisRuleId");
@@ -86,10 +99,13 @@ describe("OllamaProvider v2", () => {
   it("limits witness candidates to host-owned references and model-owned impact", async () => {
     const config = agentSmithConfigFromPolicy(true);
     let requestBody: any;
-    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
-      requestBody = JSON.parse(String(init.body));
-      return new Response(JSON.stringify({ response: '{"state":"no_finding","candidates":[]}' }));
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        requestBody = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ response: '{"state":"no_finding","candidates":[]}' }));
+      }),
+    );
     await new OllamaProvider(config).invoke({
       profile: config.model_profiles[0],
       prompt: "review",
@@ -99,9 +115,7 @@ describe("OllamaProvider v2", () => {
       allowedWitnessKeys: ["deleteUser.guard-4.state-1"],
     });
     const candidate = requestBody.format.properties.candidates.items;
-    expect(candidate.required).toEqual([
-      "file", "line", "witnessKey", "basisRuleId", "impact", "confidence",
-    ]);
+    expect(candidate.required).toEqual(["file", "line", "witnessKey", "basisRuleId", "impact", "confidence"]);
     expect(candidate.properties.witnessKey).toEqual({
       type: "string",
       enum: ["deleteUser.guard-4.state-1"],
@@ -177,6 +191,60 @@ describe("OllamaProvider v2", () => {
     expect(requestBody.format).toBeUndefined();
   });
 
+  it("sends a hard think budget without a schema for an unformatted reasoner", async () => {
+    const config = agentSmithConfigFromPolicy(true);
+    let requestUrl = "";
+    let requestBody: any;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        requestUrl = url;
+        requestBody = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ response: "", thinking: "trace", done: true }));
+      }),
+    );
+    await new OllamaProvider(config).invoke({
+      profile: config.model_profiles[0],
+      prompt: "review",
+      outputKind: "candidates",
+      inferenceMode: "thinking-no-format",
+      systemPrompt: "delta first",
+      inferenceOverrides: { contextTokens: 6144, outputTokens: 2048, thinkingTokens: 2048 },
+    });
+    expect(requestUrl).toBe(`${config.base_url}/api/generate`);
+    expect(requestBody.think).toBe(true);
+    expect(requestBody.format).toBeUndefined();
+    expect(requestBody.system).toBe("delta first");
+    expect(requestBody.options).toMatchObject({ num_ctx: 6144, num_predict: 2048, think_budget: 2048 });
+  });
+
+  it("sends a raw commit continuation without thinking or a schema", async () => {
+    const config = agentSmithConfigFromPolicy(true);
+    let requestBody: any;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        requestBody = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ response: " finding WITNESS: a RULE: b", done: true, eval_count: 8 }));
+      }),
+    );
+    await new OllamaProvider(config).invoke({
+      profile: config.model_profiles[0],
+      prompt: "<|im_start|>assistant\n<think>\ntrace\n</think>\nDECISION:",
+      outputKind: "candidates",
+      rawPrompt: true,
+      systemPrompt: "must not wrap",
+      inferenceMode: "structured",
+      inferenceOverrides: { outputTokens: 64 },
+    });
+    expect(requestBody.raw).toBe(true);
+    expect(requestBody.think).toBe(false);
+    expect(requestBody.format).toBeUndefined();
+    expect(requestBody.system).toBeUndefined();
+    expect(requestBody.prompt).toContain("</think>\nDECISION:");
+    expect(requestBody.options.num_predict).toBe(64);
+  });
+
   it("uses native Ollama chat thinking with the strict schema for thinking-structured", async () => {
     const config = agentSmithConfigFromPolicy(true);
     let requestUrl = "";
@@ -234,17 +302,19 @@ describe("OllamaProvider v2", () => {
       vi.fn(async (url: string, init: RequestInit) => {
         requestUrl = url;
         requestBody = JSON.parse(String(init.body));
-        return new Response(JSON.stringify({
-          model: "qwen3.5:9b-q4_K_M",
-          response: '{"state":"no_finding","candidates":[]}',
-          thinking: "bounded trace",
-          done: true,
-          done_reason: "stop",
-          think_budget: 2048,
-          think_budget_tokens: 2048,
-          prompt_eval_count: 12,
-          eval_count: 2100,
-        }));
+        return new Response(
+          JSON.stringify({
+            model: "qwen3.5:9b-q4_K_M",
+            response: '{"state":"no_finding","candidates":[]}',
+            thinking: "bounded trace",
+            done: true,
+            done_reason: "stop",
+            think_budget: 2048,
+            think_budget_tokens: 2048,
+            prompt_eval_count: 12,
+            eval_count: 2100,
+          }),
+        );
       }),
     );
     const response = await new OllamaProvider(config).invoke({
@@ -327,14 +397,23 @@ describe("OllamaProvider v2", () => {
         const chunks = [
           JSON.stringify({ thinking: "check ", done: false }) + "\n",
           JSON.stringify({ thinking: "guard", response: '{"state":"no_finding",', done: false }) + "\n",
-          JSON.stringify({ response: '"candidates":[]}', done: true, done_reason: "stop", think_budget: 64, think_budget_tokens: 64, eval_count: 80 }) + "\n",
+          JSON.stringify({
+            response: '"candidates":[]}',
+            done: true,
+            done_reason: "stop",
+            think_budget: 64,
+            think_budget_tokens: 64,
+            eval_count: 80,
+          }) + "\n",
         ];
-        return new Response(new ReadableStream<Uint8Array>({
-          start(controller) {
-            for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
-            controller.close();
-          },
-        }));
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+              controller.close();
+            },
+          }),
+        );
       }),
     );
     const response = await new OllamaProvider(config).invoke({
@@ -519,11 +598,22 @@ describe("VllmProvider", () => {
         requestUrl = url;
         requestBody = JSON.parse(String(init.body));
         if (url.endsWith("/tokenize")) return new Response(JSON.stringify({ count: 12 }));
-        return new Response(JSON.stringify({
-          model: profile.model,
-          choices: [{ message: { reasoning: "check guard", content: '{"state":"no_finding","candidates":[]}' }, finish_reason: "stop" }],
-          usage: { prompt_tokens: 12, completion_tokens: 20, completion_tokens_details: { reasoning_tokens: 8, accepted_prediction_tokens: 20 } },
-        }));
+        return new Response(
+          JSON.stringify({
+            model: profile.model,
+            choices: [
+              {
+                message: { reasoning: "check guard", content: '{"state":"no_finding","candidates":[]}' },
+                finish_reason: "stop",
+              },
+            ],
+            usage: {
+              prompt_tokens: 12,
+              completion_tokens: 20,
+              completion_tokens_details: { reasoning_tokens: 8, accepted_prediction_tokens: 20 },
+            },
+          }),
+        );
       }),
     );
     const response = await new VllmProvider(config).invoke({
@@ -531,7 +621,7 @@ describe("VllmProvider", () => {
       prompt: "review",
       outputKind: "candidates",
       inferenceMode: "thinking-structured",
-        inferenceOverrides: { outputTokens: 7000, thinkingTokens: 512 },
+      inferenceOverrides: { outputTokens: 7000, thinkingTokens: 512 },
     });
     expect(requestUrl).toBe("http://127.0.0.1:8000/v1/chat/completions");
     expect(requestBody.thinking_token_budget).toBe(512);
@@ -583,7 +673,7 @@ describe("VllmProvider", () => {
       expect(response.raw).toBe('{"state":"no_finding","candidates":[]}');
       expect(response.completion?.doneReason).toBe("stop");
       expect(response.usage).toEqual({ inputTokens: 3, outputTokens: 8 });
-      expect((await readFile(tracePath, "utf8"))).toContain('"provider":"vllm"');
+      expect(await readFile(tracePath, "utf8")).toContain('"provider":"vllm"');
     } finally {
       await rm(traceDir, { recursive: true, force: true });
     }
@@ -606,20 +696,24 @@ describe("VllmProvider", () => {
       vi.fn(async (url: string, init: RequestInit) => {
         if (url.endsWith("/tokenize")) return new Response(JSON.stringify({ count: 100 }));
         requestBody = JSON.parse(String(init.body));
-        return new Response(JSON.stringify({
-          model: profile.model,
-          choices: [{ message: { content: '{"state":"no_finding","candidates":[]}' }, finish_reason: "stop" }],
-          usage: { prompt_tokens: 100, completion_tokens: 20 },
-        }));
+        return new Response(
+          JSON.stringify({
+            model: profile.model,
+            choices: [{ message: { content: '{"state":"no_finding","candidates":[]}' }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 100, completion_tokens: 20 },
+          }),
+        );
       }),
     );
-    await expect(new VllmProvider(config).invoke({
-      profile,
-      prompt: "x".repeat(400),
-      outputKind: "candidates",
-      inferenceMode: "structured",
-      inferenceOverrides: { outputTokens: 8192 },
-    })).rejects.toThrow("requested=8192, available=824");
+    await expect(
+      new VllmProvider(config).invoke({
+        profile,
+        prompt: "x".repeat(400),
+        outputKind: "candidates",
+        inferenceMode: "structured",
+        inferenceOverrides: { outputTokens: 8192 },
+      }),
+    ).rejects.toThrow("requested=8192, available=824");
     expect(requestBody).toBeUndefined();
   });
 });
@@ -630,20 +724,25 @@ describe("OpenAIResponsesProvider diagnostic control", () => {
     const profile = { ...config.model_profiles[0], provider: "openai-responses" as const, model: "gpt-5.6-luna" };
     let requestBody: any;
     let authorization = "";
-    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
-      authorization = String((init.headers as Record<string, string>).authorization);
-      requestBody = JSON.parse(String(init.body));
-      return new Response(JSON.stringify({
-        id: "resp_test",
-        model: "gpt-5.6-luna",
-        status: "completed",
-        output: [
-          { type: "reasoning", summary: [{ type: "summary_text", text: "Checked the branch outcomes." }] },
-          { type: "message", content: [{ type: "output_text", text: '{"state":"no_finding","candidates":[]}' }] },
-        ],
-        usage: { input_tokens: 12, output_tokens: 20, output_tokens_details: { reasoning_tokens: 8 } },
-      }));
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        authorization = String((init.headers as Record<string, string>).authorization);
+        requestBody = JSON.parse(String(init.body));
+        return new Response(
+          JSON.stringify({
+            id: "resp_test",
+            model: "gpt-5.6-luna",
+            status: "completed",
+            output: [
+              { type: "reasoning", summary: [{ type: "summary_text", text: "Checked the branch outcomes." }] },
+              { type: "message", content: [{ type: "output_text", text: '{"state":"no_finding","candidates":[]}' }] },
+            ],
+            usage: { input_tokens: 12, output_tokens: 20, output_tokens_details: { reasoning_tokens: 8 } },
+          }),
+        );
+      }),
+    );
     const response = await new OpenAIResponsesProvider({ apiKey: "secret", reasoningEffort: "high" }).invoke({
       profile,
       prompt: "review",
@@ -672,6 +771,20 @@ describe("OpenAIResponsesProvider diagnostic control", () => {
     expect(response.thinking).toBeUndefined();
     expect(response.reasoningSummary).toBe("Checked the branch outcomes.");
     expect(response.usage).toEqual({ inputTokens: 12, outputTokens: 20, reasoningTokens: 8, finalContentTokens: 12 });
+  });
+
+  it("rejects a raw prompt continuation", async () => {
+    const config = agentSmithConfigFromPolicy(true);
+    const input = {
+      profile: config.model_profiles[0],
+      prompt: "prefill",
+      outputKind: "candidates" as const,
+      rawPrompt: true,
+    };
+    await expect(new VllmProvider(config).invoke(input)).rejects.toThrow(/Ollama provider/);
+    await expect(
+      new OpenAIResponsesProvider({ apiKey: "secret", reasoningEffort: "low" }).invoke(input),
+    ).rejects.toThrow(/Ollama provider/);
   });
 
   it("cannot be selected by the normal provider factory", () => {

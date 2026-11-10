@@ -71,39 +71,45 @@ describe("candidate structured output", () => {
       ...item,
       kind: "interaction",
       relatedSymbols: [related],
-      graphEdges: [{
-        source: "src/a.ts:value",
-        target: "src/auth.ts:Session",
-        targetText: "Session",
-        kind: "reads-type",
-        confidence: "exact",
-        provider: "typescript-compiler",
-        sourceSymbol: symbol,
-        targetSymbol: related,
-      }],
-      rules: [{
-        id: "security.authorization-boundary",
-        text: "Only administrators may cross this authorization boundary.",
-        estimatedTokens: 12,
-        categories: ["security"],
-        severity: "critical",
-      }],
-      controlFlowWitnesses: [{
-        version: "control-flow-witness/v1",
-        witnessId: "a".repeat(64),
-        witnessKey: "value.guard-1.state-1",
-        snapshotId: "snapshot-a",
-        ownerSymbol: { file: "src/a.ts", qualifiedName: "value", startLine: 1, endLine: 1 },
-        file: "src/a.ts",
-        startLine: 1,
-        endLine: 1,
-        previousGuard: "!session || role !== \"admin\"",
-        currentGuard: "!session && role !== \"admin\"",
-        operatorTokens: ["!", "&&", "!=="],
-        state: 'session present, role = "member"',
-        previousOutcome: "blocked",
-        currentOutcome: "passes",
-      }],
+      graphEdges: [
+        {
+          source: "src/a.ts:value",
+          target: "src/auth.ts:Session",
+          targetText: "Session",
+          kind: "reads-type",
+          confidence: "exact",
+          provider: "typescript-compiler",
+          sourceSymbol: symbol,
+          targetSymbol: related,
+        },
+      ],
+      rules: [
+        {
+          id: "security.authorization-boundary",
+          text: "Only administrators may cross this authorization boundary.",
+          estimatedTokens: 12,
+          categories: ["security"],
+          severity: "critical",
+        },
+      ],
+      controlFlowWitnesses: [
+        {
+          version: "control-flow-witness/v1",
+          witnessId: "a".repeat(64),
+          witnessKey: "value.guard-1.state-1",
+          snapshotId: "snapshot-a",
+          ownerSymbol: { file: "src/a.ts", qualifiedName: "value", startLine: 1, endLine: 1 },
+          file: "src/a.ts",
+          startLine: 1,
+          endLine: 1,
+          previousGuard: '!session || role !== "admin"',
+          currentGuard: '!session && role !== "admin"',
+          operatorTokens: ["!", "&&", "!=="],
+          state: 'session present, role = "member"',
+          previousOutcome: "blocked",
+          currentOutcome: "passes",
+        },
+      ],
     };
     const calls: Array<Parameters<ReviewProvider["invoke"]>[0]> = [];
     const provider: ReviewProvider = {
@@ -111,15 +117,20 @@ describe("candidate structured output", () => {
       invoke: async (input) => {
         calls.push(input);
         return {
-          raw: JSON.stringify({ state: "finding", candidates: [{
-            file: "src/a.ts",
-            line: 1,
-            endLine: 1,
-            witnessKey: "value.guard-1.state-1",
-            basisRuleId: "security.authorization-boundary",
-            impact: "a member can execute the protected operation",
-            confidence: 0.9,
-          }] }),
+          raw: JSON.stringify({
+            state: "finding",
+            candidates: [
+              {
+                file: "src/a.ts",
+                line: 1,
+                endLine: 1,
+                witnessKey: "value.guard-1.state-1",
+                basisRuleId: "security.authorization-boundary",
+                impact: "a member can execute the protected operation",
+                confidence: 0.9,
+              },
+            ],
+          }),
           usage: { inputTokens: 10, outputTokens: 10 },
         };
       },
@@ -160,44 +171,50 @@ describe("candidate structured output", () => {
   it("titles blocked control-flow witnesses as blocks, not allows", async () => {
     const witnessItem: ReviewWorkItem = {
       ...item,
-      rules: [{
-        id: "security.authorization-boundary",
-        text: "Authorization must remain enforced.",
-        estimatedTokens: 1,
-        categories: ["security"],
-        severity: "critical",
-      }],
-      controlFlowWitnesses: [{
-        version: "control-flow-witness/v1",
-        witnessId: "a".repeat(64),
-        witnessKey: "value.guard-1.state-1",
-        snapshotId: "snapshot-a",
-        ownerSymbol: { file: "src/a.ts", qualifiedName: "value", startLine: 1, endLine: 1 },
-        file: "src/a.ts",
-        startLine: 1,
-        endLine: 1,
-        previousGuard: "a || b",
-        currentGuard: "a && b",
-        operatorTokens: ["&&"],
-        state: "a = true",
-        previousOutcome: "passes",
-        currentOutcome: "blocked",
-      }],
+      rules: [
+        {
+          id: "security.authorization-boundary",
+          text: "Authorization must remain enforced.",
+          estimatedTokens: 1,
+          categories: ["security"],
+          severity: "critical",
+        },
+      ],
+      controlFlowWitnesses: [
+        {
+          version: "control-flow-witness/v1",
+          witnessId: "a".repeat(64),
+          witnessKey: "value.guard-1.state-1",
+          snapshotId: "snapshot-a",
+          ownerSymbol: { file: "src/a.ts", qualifiedName: "value", startLine: 1, endLine: 1 },
+          file: "src/a.ts",
+          startLine: 1,
+          endLine: 1,
+          previousGuard: "a || b",
+          currentGuard: "a && b",
+          operatorTokens: ["&&"],
+          state: "a = true",
+          previousOutcome: "passes",
+          currentOutcome: "blocked",
+        },
+      ],
     };
     const provider: ReviewProvider = {
       health: async () => ({ ok: true, models: ["qwen"] }),
       invoke: async () => ({
         raw: JSON.stringify({
           state: "finding",
-          candidates: [{
-            file: "src/a.ts",
-            line: 1,
-            endLine: 1,
-            witnessKey: "value.guard-1.state-1",
-            basisRuleId: "security.authorization-boundary",
-            impact: "callers are denied",
-            confidence: 0.9,
-          }],
+          candidates: [
+            {
+              file: "src/a.ts",
+              line: 1,
+              endLine: 1,
+              witnessKey: "value.guard-1.state-1",
+              basisRuleId: "security.authorization-boundary",
+              impact: "callers are denied",
+              confidence: 0.9,
+            },
+          ],
         }),
         usage: { inputTokens: 10, outputTokens: 10 },
       }),
@@ -218,67 +235,126 @@ describe("candidate structured output", () => {
   it("fails closed when a witness candidate changes its host-owned reference", async () => {
     const witnessItem: ReviewWorkItem = {
       ...item,
-      rules: [{ id: "security.visible", text: "Visible rule", estimatedTokens: 1, categories: ["security"], severity: "critical" }],
-      controlFlowWitnesses: [{
-        version: "control-flow-witness/v1", witnessId: "b".repeat(64), witnessKey: "value.guard-1.state-1",
-        snapshotId: "snapshot-a", ownerSymbol: { file: "src/a.ts", qualifiedName: "value", startLine: 1, endLine: 1 },
-        file: "src/a.ts", startLine: 1, endLine: 1, previousGuard: "a || b", currentGuard: "a && b",
-        operatorTokens: ["&&"], state: "a = false", previousOutcome: "blocked", currentOutcome: "passes",
-      }],
-    };
-    const provider: ReviewProvider = {
-      health: async () => ({ ok: true, models: ["qwen"] }),
-      invoke: async () => ({
-        raw: JSON.stringify({ state: "finding", candidates: [{
-          file: "src/a.ts", line: 1, witnessKey: "invented.guard-9.state-9",
-          basisRuleId: "security.visible", impact: "bad", confidence: 1,
-        }] }),
-        usage: { inputTokens: 1, outputTokens: 1 },
-      }),
-    };
-    const result = await generateWorkItemCandidate({
-      item: witnessItem, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 1,
-      arm: "host-referenced-witness", inferenceMode: "thinking-structured",
-    });
-    expect(result.candidates).toEqual([]);
-    expect(result.candidateState).toBe("no_finding");
-    expect(result.contractDrops).toEqual([
-      expect.objectContaining({ candidateIndex: 0, reason: "unknown-witness" }),
-    ]);
-  });
-
-  it("coerces mismatched witness candidate locations to the host-owned witness range", async () => {
-    const witnessItem: ReviewWorkItem = {
-      ...item,
-      rules: [{ id: "security.visible", text: "Visible rule", estimatedTokens: 1, categories: ["security"], severity: "critical" }],
-      controlFlowWitnesses: [{
-        version: "control-flow-witness/v1", witnessId: "b".repeat(64), witnessKey: "value.guard-1.state-1",
-        snapshotId: "snapshot-a", ownerSymbol: { file: "src/a.ts", qualifiedName: "value", startLine: 5, endLine: 7 },
-        file: "src/a.ts", startLine: 5, endLine: 7, previousGuard: "a || b", currentGuard: "a && b",
-        operatorTokens: ["&&"], state: "a = true", previousOutcome: "passes", currentOutcome: "blocked",
-      }],
+      rules: [
+        {
+          id: "security.visible",
+          text: "Visible rule",
+          estimatedTokens: 1,
+          categories: ["security"],
+          severity: "critical",
+        },
+      ],
+      controlFlowWitnesses: [
+        {
+          version: "control-flow-witness/v1",
+          witnessId: "b".repeat(64),
+          witnessKey: "value.guard-1.state-1",
+          snapshotId: "snapshot-a",
+          ownerSymbol: { file: "src/a.ts", qualifiedName: "value", startLine: 1, endLine: 1 },
+          file: "src/a.ts",
+          startLine: 1,
+          endLine: 1,
+          previousGuard: "a || b",
+          currentGuard: "a && b",
+          operatorTokens: ["&&"],
+          state: "a = false",
+          previousOutcome: "blocked",
+          currentOutcome: "passes",
+        },
+      ],
     };
     const provider: ReviewProvider = {
       health: async () => ({ ok: true, models: ["qwen"] }),
       invoke: async () => ({
         raw: JSON.stringify({
           state: "finding",
-          candidates: [{
-            file: "src/other.ts",
-            line: 99,
-            endLine: 100,
-            witnessKey: "value.guard-1.state-1",
-            basisRuleId: "security.visible",
-            impact: "unauthorized path",
-            confidence: 0.8,
-          }],
+          candidates: [
+            {
+              file: "src/a.ts",
+              line: 1,
+              witnessKey: "invented.guard-9.state-9",
+              basisRuleId: "security.visible",
+              impact: "bad",
+              confidence: 1,
+            },
+          ],
         }),
         usage: { inputTokens: 1, outputTokens: 1 },
       }),
     };
     const result = await generateWorkItemCandidate({
-      item: witnessItem, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 1,
-      arm: "host-referenced-witness", inferenceMode: "thinking-structured",
+      item: witnessItem,
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 1,
+      arm: "host-referenced-witness",
+      inferenceMode: "thinking-structured",
+    });
+    expect(result.candidates).toEqual([]);
+    expect(result.candidateState).toBe("no_finding");
+    expect(result.contractDrops).toEqual([expect.objectContaining({ candidateIndex: 0, reason: "unknown-witness" })]);
+  });
+
+  it("coerces mismatched witness candidate locations to the host-owned witness range", async () => {
+    const witnessItem: ReviewWorkItem = {
+      ...item,
+      rules: [
+        {
+          id: "security.visible",
+          text: "Visible rule",
+          estimatedTokens: 1,
+          categories: ["security"],
+          severity: "critical",
+        },
+      ],
+      controlFlowWitnesses: [
+        {
+          version: "control-flow-witness/v1",
+          witnessId: "b".repeat(64),
+          witnessKey: "value.guard-1.state-1",
+          snapshotId: "snapshot-a",
+          ownerSymbol: { file: "src/a.ts", qualifiedName: "value", startLine: 5, endLine: 7 },
+          file: "src/a.ts",
+          startLine: 5,
+          endLine: 7,
+          previousGuard: "a || b",
+          currentGuard: "a && b",
+          operatorTokens: ["&&"],
+          state: "a = true",
+          previousOutcome: "passes",
+          currentOutcome: "blocked",
+        },
+      ],
+    };
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async () => ({
+        raw: JSON.stringify({
+          state: "finding",
+          candidates: [
+            {
+              file: "src/other.ts",
+              line: 99,
+              endLine: 100,
+              witnessKey: "value.guard-1.state-1",
+              basisRuleId: "security.visible",
+              impact: "unauthorized path",
+              confidence: 0.8,
+            },
+          ],
+        }),
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+    };
+    const result = await generateWorkItemCandidate({
+      item: witnessItem,
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 1,
+      arm: "host-referenced-witness",
+      inferenceMode: "thinking-structured",
     });
     expect(result.candidates).toHaveLength(1);
     expect(result.candidates[0]).toMatchObject({
@@ -293,22 +369,41 @@ describe("candidate structured output", () => {
   it("falls back to the rule-bound contract without changing its prompt or wire inputs", async () => {
     const ruleBoundItem: ReviewWorkItem = {
       ...item,
-      rules: [{ id: "security.visible", text: "Visible rule", estimatedTokens: 1, categories: ["security"], severity: "critical" }],
+      rules: [
+        {
+          id: "security.visible",
+          text: "Visible rule",
+          estimatedTokens: 1,
+          categories: ["security"],
+          severity: "critical",
+        },
+      ],
     };
     const calls: Array<Parameters<ReviewProvider["invoke"]>[0]> = [];
     const provider: ReviewProvider = {
       health: async () => ({ ok: true, models: ["qwen"] }),
       invoke: async (input) => {
         calls.push(input);
-        return { raw: JSON.stringify({ state: "no_finding", candidates: [] }), usage: { inputTokens: 1, outputTokens: 1 } };
+        return {
+          raw: JSON.stringify({ state: "no_finding", candidates: [] }),
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
       },
     };
     const fallback = await generateWorkItemCandidate({
-      item: ruleBoundItem, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 1,
+      item: ruleBoundItem,
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 1,
       arm: "host-referenced-witness",
     });
     await generateWorkItemCandidate({
-      item: ruleBoundItem, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 1,
+      item: ruleBoundItem,
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 1,
       arm: "rule-bound-classification",
     });
     expect(calls[0]).toMatchObject({ candidateArm: "rule-bound-classification", allowedRuleIds: ["security.visible"] });
@@ -324,13 +419,15 @@ describe("candidate structured output", () => {
   it("derives declared classification only from the candidate's visible basis rule", async () => {
     const ruleBoundItem: ReviewWorkItem = {
       ...item,
-      rules: [{
-        id: "security.authorization-boundary",
-        text: "Require an executable authorization bypass.",
-        estimatedTokens: 12,
-        categories: ["security"],
-        severity: "critical",
-      }],
+      rules: [
+        {
+          id: "security.authorization-boundary",
+          text: "Require an executable authorization bypass.",
+          estimatedTokens: 12,
+          categories: ["security"],
+          severity: "critical",
+        },
+      ],
     };
     const calls: Array<Parameters<ReviewProvider["invoke"]>[0]> = [];
     const provider: ReviewProvider = {
@@ -338,11 +435,22 @@ describe("candidate structured output", () => {
       invoke: async (input) => {
         calls.push(input);
         return {
-          raw: JSON.stringify({ state: "finding", candidates: [{
-            file: "src/a.ts", line: 1, severity: "high", category: "contract",
-            basisRuleId: "security.authorization-boundary",
-            trigger: "member session reaches deletion", invariant: "only admins may delete", impact: "unauthorized deletion", confidence: 1,
-          }] }),
+          raw: JSON.stringify({
+            state: "finding",
+            candidates: [
+              {
+                file: "src/a.ts",
+                line: 1,
+                severity: "high",
+                category: "contract",
+                basisRuleId: "security.authorization-boundary",
+                trigger: "member session reaches deletion",
+                invariant: "only admins may delete",
+                impact: "unauthorized deletion",
+                confidence: 1,
+              },
+            ],
+          }),
           usage: { inputTokens: 10, outputTokens: 10 },
         };
       },
@@ -360,7 +468,11 @@ describe("candidate structured output", () => {
       category: "security",
       severity: "critical",
       ruleId: "security.authorization-boundary",
-      classification: { basisRuleId: "security.authorization-boundary", categorySource: "rule", severitySource: "rule" },
+      classification: {
+        basisRuleId: "security.authorization-boundary",
+        categorySource: "rule",
+        severitySource: "rule",
+      },
     });
   });
 
@@ -368,18 +480,47 @@ describe("candidate structured output", () => {
     const provider: ReviewProvider = {
       health: async () => ({ ok: true, models: ["qwen"] }),
       invoke: async () => ({
-        raw: JSON.stringify({ state: "finding", candidates: [{
-          file: "src/a.ts", line: 1, severity: "critical", category: "security",
-          basisRuleId: "security.not-visible",
-          trigger: "x", invariant: "y", impact: "z", confidence: 1,
-        }] }),
+        raw: JSON.stringify({
+          state: "finding",
+          candidates: [
+            {
+              file: "src/a.ts",
+              line: 1,
+              severity: "critical",
+              category: "security",
+              basisRuleId: "security.not-visible",
+              trigger: "x",
+              invariant: "y",
+              impact: "z",
+              confidence: 1,
+            },
+          ],
+        }),
         usage: { inputTokens: 10, outputTokens: 10 },
       }),
     };
-    await expect(generateWorkItemCandidate({
-      item: { ...item, rules: [{ id: "security.visible", text: "visible", estimatedTokens: 1, categories: ["security"], severity: "critical" }] },
-      profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 1, arm: "rule-bound-classification", inferenceMode: "thinking-structured",
-    })).rejects.toThrow(/basisRuleId must name one visible/);
+    await expect(
+      generateWorkItemCandidate({
+        item: {
+          ...item,
+          rules: [
+            {
+              id: "security.visible",
+              text: "visible",
+              estimatedTokens: 1,
+              categories: ["security"],
+              severity: "critical",
+            },
+          ],
+        },
+        profile,
+        provider,
+        allowedFiles: ["src/a.ts"],
+        maxCandidates: 1,
+        arm: "rule-bound-classification",
+        inferenceMode: "thinking-structured",
+      }),
+    ).rejects.toThrow(/basisRuleId must name one visible/);
   });
 
   it("maps the simplified semantic contract to host-owned fields", async () => {
@@ -388,16 +529,18 @@ describe("candidate structured output", () => {
       invoke: async () => ({
         raw: JSON.stringify({
           state: "finding",
-          candidates: [{
-            file: "src/a.ts",
-            line: 1,
-            severity: "high",
-            category: "correctness",
-            trigger: "input is invalid",
-            invariant: "return must be valid",
-            impact: "caller receives a bad value",
-            confidence: 0.9,
-          }],
+          candidates: [
+            {
+              file: "src/a.ts",
+              line: 1,
+              severity: "high",
+              category: "correctness",
+              trigger: "input is invalid",
+              invariant: "return must be valid",
+              impact: "caller receives a bad value",
+              confidence: 0.9,
+            },
+          ],
         }),
         usage: { inputTokens: 10, outputTokens: 10 },
       }),
@@ -428,16 +571,21 @@ describe("candidate structured output", () => {
       invoke: async (input) => {
         calls.push(input);
         return {
-          raw: JSON.stringify({ state: "finding", candidates: [{
-            file: "src/a.ts",
-            line: 1,
-            severity: "high",
-            category: "correctness",
-            trigger: "input is invalid",
-            invariant: "return must be valid",
-            impact: "caller receives a bad value",
-            confidence: 0.9,
-          }] }),
+          raw: JSON.stringify({
+            state: "finding",
+            candidates: [
+              {
+                file: "src/a.ts",
+                line: 1,
+                severity: "high",
+                category: "correctness",
+                trigger: "input is invalid",
+                invariant: "return must be valid",
+                impact: "caller receives a bad value",
+                confidence: 0.9,
+              },
+            ],
+          }),
           thinking: "reasoning trace",
           usage: { inputTokens: 10, outputTokens: 20 },
         };
@@ -464,7 +612,20 @@ describe("candidate structured output", () => {
     const provider: ReviewProvider = {
       health: async () => ({ ok: true, models: ["qwen"] }),
       invoke: async () => ({
-        raw: JSON.stringify({ c: [{ f: "src/a.ts", l: 1, s: "high", k: "correctness", t: "Bad return", d: "The return is wrong.", q: 0.9, e: [{ selector: definitionSelector.key, r: "confirm implementation" }] }] }),
+        raw: JSON.stringify({
+          c: [
+            {
+              f: "src/a.ts",
+              l: 1,
+              s: "high",
+              k: "correctness",
+              t: "Bad return",
+              d: "The return is wrong.",
+              q: 0.9,
+              e: [{ selector: definitionSelector.key, r: "confirm implementation" }],
+            },
+          ],
+        }),
         usage: { inputTokens: 10, outputTokens: 10 },
       }),
     };
@@ -490,7 +651,18 @@ describe("candidate structured output", () => {
         prompts.push(input.prompt);
         return {
           raw: JSON.stringify({
-            c: [{ f: "src/a.ts", l: 1, s: "high", k: "correctness", t: "wrong return", d: "Trigger: input is invalid. Invariant: return must be valid. Impact: caller receives a bad value.", q: 0.9, e: [] }],
+            c: [
+              {
+                f: "src/a.ts",
+                l: 1,
+                s: "high",
+                k: "correctness",
+                t: "wrong return",
+                d: "Trigger: input is invalid. Invariant: return must be valid. Impact: caller receives a bad value.",
+                q: 0.9,
+                e: [],
+              },
+            ],
           }),
           usage: { inputTokens: 10, outputTokens: 10 },
         };
@@ -498,7 +670,9 @@ describe("candidate structured output", () => {
     };
     await generateWorkItemCandidate({ item, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 2 });
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("Bounded question: Does the changed implementation contain one concrete executable correctness defect?");
+    expect(prompts[0]).toContain(
+      "Bounded question: Does the changed implementation contain one concrete executable correctness defect?",
+    );
     expect(prompts[0]).toContain("trigger, invariant, impact, and confidence");
     expect(prompts[0]).toContain("The host derives the title");
   });
@@ -518,7 +692,14 @@ describe("candidate structured output", () => {
       },
     };
     await generateWorkItemCandidate({ item, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 1 });
-    await generateWorkItemCandidate({ item, profile, provider, allowedFiles: ["src/a.ts"], maxCandidates: 1, promptVariant: "branch-analysis-v1" });
+    await generateWorkItemCandidate({
+      item,
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 1,
+      promptVariant: "branch-analysis-v1",
+    });
     expect(systems).toEqual([undefined, BRANCH_ANALYSIS_SYSTEM_PROMPT]);
     expect(prompts[0]).toBe(prompts[1]);
     expect(BRANCH_ANALYSIS_SYSTEM_PROMPT).toContain("preserve that failing state in the final candidate");
@@ -531,11 +712,26 @@ describe("candidate structured output", () => {
       health: async () => ({ ok: true, models: ["qwen"] }),
       invoke: async (input) => {
         prompts.push(input.prompt);
-        return { raw: JSON.stringify({ state: "no_finding", candidates: [] }), usage: { inputTokens: 1, outputTokens: 1 } };
+        return {
+          raw: JSON.stringify({ state: "no_finding", candidates: [] }),
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
       },
     };
     await generateWorkItemCandidate({
-      item: { ...item, controlFlowDeltas: [{ file: "src/a.ts", startLine: 1, endLine: 1, state: "value = null", previousOutcome: "blocked", currentOutcome: "passes" }] },
+      item: {
+        ...item,
+        controlFlowDeltas: [
+          {
+            file: "src/a.ts",
+            startLine: 1,
+            endLine: 1,
+            state: "value = null",
+            previousOutcome: "blocked",
+            currentOutcome: "passes",
+          },
+        ],
+      },
       profile,
       provider,
       allowedFiles: ["src/a.ts"],
@@ -583,7 +779,10 @@ describe("candidate structured output", () => {
       health: async () => ({ ok: true, models: ["qwen"] }),
       invoke: async (input) => {
         inputs.push(input);
-        return { raw: JSON.stringify({ state: "no_finding", candidates: [] }), usage: { inputTokens: 1, outputTokens: 1 } };
+        return {
+          raw: JSON.stringify({ state: "no_finding", candidates: [] }),
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
       },
     };
     const invoke = (promptVariant: "branch-analysis-state-scan-v2" | "branch-analysis-delta-first-v3") =>
@@ -603,7 +802,9 @@ describe("candidate structured output", () => {
     const control = inputs[0]?.systemPrompt ?? "";
     const treatment = inputs[1]?.systemPrompt ?? "";
     expect(control).toContain("Use a compact state scan, not a narrative explanation.");
-    expect(control).toContain("For every changed condition with a finite state space, enumerate each relevant state exactly once.");
+    expect(control).toContain(
+      "For every changed condition with a finite state space, enumerate each relevant state exactly once.",
+    );
     expect(control).not.toContain("delta-first compact state scan");
     expect(treatment).toContain("Use a delta-first compact state scan, not a narrative explanation.");
     expect(treatment).toContain("evaluate that state before any other runtime state");
@@ -613,10 +814,11 @@ describe("candidate structured output", () => {
     expect(inputs[0]?.outputKind).toBe(inputs[1]?.outputKind);
   });
 
-
   it("parses and preserves a bounded runtime conclusion through the formatter call", async () => {
     expect(
-      parseCandidateConclusion(`analysis\nBEGIN_CONCLUSION\nDECISION: finding\nDECISIVE_RUNTIME_STATE: session = { role: "member" }\nEVALUATION:\nrole = "member"\nshort_circuit = true\nthrows = false\nVIOLATED_RULE: Only admin sessions may delete users.\nDEFECT: Authenticated non-admin sessions bypass the authorization guard.\nEND_CONCLUSION`),
+      parseCandidateConclusion(
+        `analysis\nBEGIN_CONCLUSION\nDECISION: finding\nDECISIVE_RUNTIME_STATE: session = { role: "member" }\nEVALUATION:\nrole = "member"\nshort_circuit = true\nthrows = false\nVIOLATED_RULE: Only admin sessions may delete users.\nDEFECT: Authenticated non-admin sessions bypass the authorization guard.\nEND_CONCLUSION`,
+      ),
     ).toMatchObject({
       decision: "finding",
       decisiveRuntimeState: 'session = { role: "member" }',
@@ -632,12 +834,31 @@ describe("candidate structured output", () => {
               raw: `BEGIN_CONCLUSION\nDECISION: finding\nDECISIVE_RUNTIME_STATE: session = { role: "member" }\nEVALUATION:\nrole = "member"\nshort_circuit = true\nthrows = false\nVIOLATED_RULE: Only admin sessions may delete users.\nDEFECT: Authenticated non-admin sessions bypass the authorization guard.\nEND_CONCLUSION`,
               thinking: "ordinary reasoning",
               usage: { inputTokens: 100, outputTokens: 200 },
-              completion: { model: "qwen", done: true, doneReason: "stop", totalDurationNs: 1, loadDurationNs: 1, promptEvalDurationNs: 1, evalDurationNs: 1 },
+              completion: {
+                model: "qwen",
+                done: true,
+                doneReason: "stop",
+                totalDurationNs: 1,
+                loadDurationNs: 1,
+                promptEvalDurationNs: 1,
+                evalDurationNs: 1,
+              },
             }
           : {
               raw: JSON.stringify({
                 state: "finding",
-                candidates: [{ file: "src/a.ts", line: 1, severity: "critical", category: "security", trigger: "member session bypasses admin guard", invariant: "Only admin sessions may delete users", impact: "member can delete", confidence: 0.9 }],
+                candidates: [
+                  {
+                    file: "src/a.ts",
+                    line: 1,
+                    severity: "critical",
+                    category: "security",
+                    trigger: "member session bypasses admin guard",
+                    invariant: "Only admin sessions may delete users",
+                    impact: "member can delete",
+                    confidence: 0.9,
+                  },
+                ],
               }),
               usage: { inputTokens: 50, outputTokens: 50 },
             };
@@ -694,7 +915,18 @@ describe("candidate structured output", () => {
         calls.push(`${input.candidateArm}:${input.outputKind}`);
         return {
           raw: JSON.stringify({
-            c: [{ f: "src/a.ts", l: 1, s: "high", k: "correctness", t: "Bad return", d: "Return breaks callers.", q: 0.9, e: [] }],
+            c: [
+              {
+                f: "src/a.ts",
+                l: 1,
+                s: "high",
+                k: "correctness",
+                t: "Bad return",
+                d: "Return breaks callers.",
+                q: 0.9,
+                e: [],
+              },
+            ],
           }),
           usage: { inputTokens: 1, outputTokens: 1 },
         };
@@ -809,13 +1041,13 @@ describe("candidate structured output", () => {
       allowedEvidenceSelectors: selectors,
     });
     expect(calls).toBe(2);
-    expect(prompts[1]).toContain('exactly this shape: {"selector":"<one exact allowed selector key>","r":"short reason"}');
+    expect(prompts[1]).toContain(
+      'exactly this shape: {"selector":"<one exact allowed selector key>","r":"short reason"}',
+    );
     expect(prompts[1]).toContain(definitionSelector.key);
     expect(prompts[1]).toContain('use "e":[]');
     expect(result.candidates).toHaveLength(1);
-    expect(result.diagnostics).toEqual([
-      expect.objectContaining({ failureKind: "json-syntax", attempt: 1 }),
-    ]);
+    expect(result.diagnostics).toEqual([expect.objectContaining({ failureKind: "json-syntax", attempt: 1 })]);
   });
 
   it("repairs malformed verifier citations once", async () => {
@@ -955,5 +1187,216 @@ describe("candidate structured output", () => {
       citationRepairAttempted: true,
     });
     expect(judged.result.diagnostics?.filter((item) => item.failureKind === "citation-validation")).toHaveLength(2);
+  });
+});
+
+describe("thinking-commit-line", () => {
+  function witnessItem(overrides: Partial<ReviewWorkItem> = {}): ReviewWorkItem {
+    return {
+      ...item,
+      rules: [
+        {
+          id: "security.authorization-boundary",
+          text: "Require an executable authorization bypass.",
+          estimatedTokens: 12,
+          categories: ["security"],
+          severity: "critical",
+        },
+      ],
+      controlFlowWitnesses: [
+        {
+          version: "control-flow-witness/v1",
+          witnessId: "b".repeat(64),
+          witnessKey: "deleteUser.guard-5.state-1",
+          snapshotId: "snapshot-a",
+          ownerSymbol: { file: "src/a.ts", qualifiedName: "deleteUser", startLine: 4, endLine: 9 },
+          file: "src/a.ts",
+          startLine: 4,
+          endLine: 9,
+          previousGuard: "role === 'admin'",
+          currentGuard: "session !== null",
+          operatorTokens: ["!=="],
+          state: "session present, role = member",
+          previousOutcome: "blocked",
+          currentOutcome: "passes",
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  it("expands an exact commit line and ignores the thinking text", async () => {
+    const calls: Array<Parameters<ReviewProvider["invoke"]>[0]> = [];
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async (input) => {
+        calls.push(input);
+        if (calls.length === 1) {
+          return {
+            raw: "I should not be parsed",
+            thinking: "deleteUser.guard-5.state-1 violates security.authorization-boundary",
+            usage: { inputTokens: 20, outputTokens: 2048 },
+            completion: {
+              model: "qwen",
+              done: true,
+              doneReason: "length",
+              thinkBudget: 2048,
+              thinkBudgetTokens: 2048,
+              totalDurationNs: 5_000,
+              loadDurationNs: null,
+              promptEvalDurationNs: null,
+              evalDurationNs: null,
+            },
+          };
+        }
+        return {
+          raw: " finding WITNESS: deleteUser.guard-5.state-1 RULE: security.authorization-boundary",
+          usage: { inputTokens: 30, outputTokens: 19 },
+          completion: {
+            model: "qwen",
+            done: true,
+            doneReason: "stop",
+            totalDurationNs: 1_000,
+            loadDurationNs: null,
+            promptEvalDurationNs: null,
+            evalDurationNs: null,
+          },
+        };
+      },
+    };
+    const result = await generateWorkItemCandidate({
+      item: witnessItem(),
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 2,
+      arm: "host-referenced-witness",
+      inferenceMode: "thinking-commit-line",
+      promptVariant: "branch-analysis-delta-first-v3",
+      thinkingTokens: 2048,
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({
+      inferenceMode: "thinking-no-format",
+      inferenceOverrides: { contextTokens: 8192, outputTokens: 2048, thinkingTokens: 2048 },
+    });
+    expect(calls[0]?.rawPrompt).toBeUndefined();
+    expect(calls[1]?.rawPrompt).toBe(true);
+    expect(calls[1]?.inferenceOverrides).toEqual({ contextTokens: 8192, outputTokens: 64 });
+    expect(calls[1]?.prompt.endsWith("</think>\nDECISION:")).toBe(true);
+    expect(calls[1]?.prompt).toContain("deleteUser.guard-5.state-1 violates security.authorization-boundary");
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      file: "src/a.ts",
+      line: 4,
+      endLine: 9,
+      ruleId: "security.authorization-boundary",
+      candidateConfidence: 1,
+    });
+    expect(result.candidates[0]?.description).toContain(
+      "Impact: session present, role = member; current outcome passes",
+    );
+    expect(result.commitLine).toEqual({ decision: "finding", confidence: "fixed" });
+    expect(result.inputTokens).toBe(50);
+    expect(result.outputTokens).toBe(2067);
+    expect(result.completion?.totalDurationNs).toBe(6_000);
+    expect(result.error).toBeUndefined();
+  });
+
+  it("does not turn a witness named only in thinking into a finding", async () => {
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async () => ({
+        raw: " no_finding WITNESS: none RULE: none",
+        thinking: "deleteUser.guard-5.state-1 is an authorization bypass",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+    };
+    const result = await generateWorkItemCandidate({
+      item: witnessItem(),
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 2,
+      arm: "host-referenced-witness",
+      inferenceMode: "thinking-commit-line",
+    });
+    expect(result.candidates).toEqual([]);
+    expect(result.candidateState).toBe("no_finding");
+    expect(result.error).toBeUndefined();
+    expect(result.commitLine).toEqual({ decision: "no_finding", confidence: "not-applicable" });
+  });
+
+  it("keeps a missing or unmatched commit line incomplete", async () => {
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async () => ({
+        raw: " maybe the guard is wrong",
+        thinking: "deleteUser.guard-5.state-1",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+    };
+    const result = await generateWorkItemCandidate({
+      item: witnessItem(),
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 2,
+      arm: "host-referenced-witness",
+      inferenceMode: "thinking-commit-line",
+    });
+    expect(result.candidates).toEqual([]);
+    expect(result.error).toBe("commit line malformed");
+    expect(result.commitLine).toEqual({ decision: "incomplete", confidence: "not-applicable", reason: "malformed" });
+  });
+
+  it("keeps the one-call path when the witness arm falls back", async () => {
+    const calls: Array<Parameters<ReviewProvider["invoke"]>[0]> = [];
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async (input) => {
+        calls.push(input);
+        return {
+          raw: JSON.stringify({ state: "no_finding", candidates: [] }),
+          usage: { inputTokens: 1, outputTokens: 1 },
+        };
+      },
+    };
+    const result = await generateWorkItemCandidate({
+      item: witnessItem({ controlFlowWitnesses: undefined }),
+      profile,
+      provider,
+      allowedFiles: ["src/a.ts"],
+      maxCandidates: 1,
+      arm: "host-referenced-witness",
+      inferenceMode: "thinking-commit-line",
+      thinkingTokens: 2048,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.inferenceMode).toBe("thinking-structured");
+    expect(calls[0]?.candidateArm).toBe("rule-bound-classification");
+    expect(calls[0]?.inferenceOverrides).toEqual({ thinkingTokens: 2048 });
+    expect(result.candidateState).toBe("no_finding");
+    expect(result.contract?.inferenceMode).toBe("thinking-structured");
+  });
+
+  it("refuses the commit line on a non-Ollama provider", async () => {
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async () => {
+        throw new Error("provider should not be called");
+      },
+    };
+    await expect(
+      generateWorkItemCandidate({
+        item: witnessItem(),
+        profile: { ...profile, provider: "vllm" },
+        provider,
+        allowedFiles: ["src/a.ts"],
+        maxCandidates: 1,
+        arm: "host-referenced-witness",
+        inferenceMode: "thinking-commit-line",
+      }),
+    ).rejects.toThrow(/Ollama provider/);
   });
 });
