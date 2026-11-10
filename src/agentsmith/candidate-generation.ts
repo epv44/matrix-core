@@ -4,7 +4,13 @@ import type { CandidateFinding, ModelProfile } from "../core/types.js";
 import type { AgentDef } from "./types.js";
 import type { TaskEvidenceSelector } from "./evidence-locators.js";
 import { selectorPromptText, selectorToEvidenceRequest } from "./evidence-locators.js";
-import { reviewOutputSchema, type ProviderCompletionMetadata, type ProviderResponse, type ReviewOutputKind, type ReviewProvider } from "./provider.js";
+import {
+  reviewOutputSchema,
+  type ProviderCompletionMetadata,
+  type ProviderResponse,
+  type ReviewOutputKind,
+  type ReviewProvider,
+} from "./provider.js";
 import type {
   CandidateBatch,
   CandidateConclusion,
@@ -18,14 +24,9 @@ import type {
   ScoutFinding,
   VerificationResult,
 } from "./engine-types.js";
-import {
-  buildProvenanceVerificationPrompt,
-  type VerificationProvenance,
-} from "./verification-provenance.js";
-import {
-  filterRulesForCallsWitnessFallback,
-  filterRulesForReadsTypeWitnessFallback,
-} from "./rules.js";
+import { buildProvenanceVerificationPrompt, type VerificationProvenance } from "./verification-provenance.js";
+import { answerFromGuidedContinuation, renderCommitContinuation, scoreCommitAnswer } from "./commit-score.js";
+import { filterRulesForCallsWitnessFallback, filterRulesForReadsTypeWitnessFallback } from "./rules.js";
 
 const BRANCH_ANALYSIS_BEHAVIOR_PROMPT = `You are performing bounded executable code-review analysis.
 
@@ -82,9 +83,11 @@ When choosing a candidate, prioritize a concrete state that passes or short-circ
 
 function branchAnalysisSystemPrompt(behavior: string, providerOwnsSerialization: boolean) {
   return `${behavior}
-${providerOwnsSerialization
-  ? "The serving API supplies and enforces the response schema. Populate the schema's semantic fields from the behavioral comparison. Do not emit analysis, a truth table, or prose outside the provider-defined response."
-  : "Only after completing that behavioral comparison, emit the required candidate JSON response. Do not emit the analysis, a truth table, or any prose outside the required JSON object. Preserve the existing candidate schema and report only concrete executable defects supported by the supplied work item."}`;
+${
+  providerOwnsSerialization
+    ? "The serving API supplies and enforces the response schema. Populate the schema's semantic fields from the behavioral comparison. Do not emit analysis, a truth table, or prose outside the provider-defined response."
+    : "Only after completing that behavioral comparison, emit the required candidate JSON response. Do not emit the analysis, a truth table, or any prose outside the required JSON object. Preserve the existing candidate schema and report only concrete executable defects supported by the supplied work item."
+}`;
 }
 
 export const BRANCH_ANALYSIS_SYSTEM_PROMPT = branchAnalysisSystemPrompt(BRANCH_ANALYSIS_BEHAVIOR_PROMPT, false);
@@ -104,8 +107,14 @@ function candidateSystemPrompt(
   inferenceMode: CandidateInferenceMode | undefined,
 ): string | undefined {
   const behavior = variant ? branchAnalysisBehaviorByVariant[variant] : undefined;
-  if ((arm === "simplified-contract" || arm === "rule-bound-classification" || arm === "host-referenced-witness") && behavior)
-    return branchAnalysisSystemPrompt(behavior, ["ollama", "vllm", "openai-responses"].includes(provider) && inferenceMode === "thinking-structured");
+  if (
+    (arm === "simplified-contract" || arm === "rule-bound-classification" || arm === "host-referenced-witness") &&
+    behavior
+  )
+    return branchAnalysisSystemPrompt(
+      behavior,
+      ["ollama", "vllm", "openai-responses"].includes(provider) && inferenceMode === "thinking-structured",
+    );
   return undefined;
 }
 
@@ -148,7 +157,8 @@ function parseConclusionField(block: string, label: string): string {
 export function parseCandidateConclusion(source: string): CandidateConclusion {
   const starts = source.match(/BEGIN_CONCLUSION/g) ?? [];
   const ends = source.match(/END_CONCLUSION/g) ?? [];
-  if (starts.length !== 1 || ends.length !== 1) throw new CandidateConclusionError("reasoner conclusion must contain exactly one bounded block");
+  if (starts.length !== 1 || ends.length !== 1)
+    throw new CandidateConclusionError("reasoner conclusion must contain exactly one bounded block");
   const match = /BEGIN_CONCLUSION\s*\n([\s\S]*?)\nEND_CONCLUSION/.exec(source);
   if (!match) throw new CandidateConclusionError("reasoner conclusion block is malformed");
   const block = match[1];
@@ -160,12 +170,18 @@ export function parseCandidateConclusion(source: string): CandidateConclusion {
   const defect = parseConclusionField(block, "DEFECT");
   const evaluationStart = block.indexOf("EVALUATION:");
   const evaluationEnd = block.indexOf("VIOLATED_RULE:");
-  if (evaluationStart < 0 || evaluationEnd <= evaluationStart) throw new CandidateConclusionError("reasoner conclusion missing EVALUATION");
+  if (evaluationStart < 0 || evaluationEnd <= evaluationStart)
+    throw new CandidateConclusionError("reasoner conclusion missing EVALUATION");
   const evaluation: Record<string, string> = {};
-  for (const line of block.slice(evaluationStart + "EVALUATION:".length, evaluationEnd).trim().split("\n")) {
+  for (const line of block
+    .slice(evaluationStart + "EVALUATION:".length, evaluationEnd)
+    .trim()
+    .split("\n")) {
     const entry = /^(?<key>[a-z][a-z0-9_]*)\s*=\s*(?<value>.+)$/.exec(line.trim());
-    if (!entry?.groups?.key || !entry.groups.value) throw new CandidateConclusionError("reasoner evaluation must contain key/value lines");
-    if (evaluation[entry.groups.key] !== undefined) throw new CandidateConclusionError(`duplicate reasoner evaluation key: ${entry.groups.key}`);
+    if (!entry?.groups?.key || !entry.groups.value)
+      throw new CandidateConclusionError("reasoner evaluation must contain key/value lines");
+    if (evaluation[entry.groups.key] !== undefined)
+      throw new CandidateConclusionError(`duplicate reasoner evaluation key: ${entry.groups.key}`);
     evaluation[entry.groups.key] = entry.groups.value.trim();
   }
   if (!Object.keys(evaluation).length) throw new CandidateConclusionError("reasoner conclusion evaluation is empty");
@@ -268,9 +284,10 @@ const workItemCandidateResponseSchema = (maxCandidates: number) =>
   z.union([
     simplifiedCandidateResponseSchema,
     z.object({
-      c: z.array(
-        compactCandidateSchema.extend({ e: z.array(boundedRequestSchema).max(2).default([]) }),
-      ).max(maxCandidates).default([]),
+      c: z
+        .array(compactCandidateSchema.extend({ e: z.array(boundedRequestSchema).max(2).default([]) }))
+        .max(maxCandidates)
+        .default([]),
     }),
     compactCandidatesSchema(maxCandidates),
   ]);
@@ -533,8 +550,7 @@ function expandCandidate(
     candidateConfidence: value.q,
     evidenceRequests: value.e.map((rawRequest) => {
       const request = rawRequest as unknown as
-        | z.infer<typeof compactRequestSchema>
-        | z.infer<typeof boundedRequestSchema>;
+        z.infer<typeof compactRequestSchema> | z.infer<typeof boundedRequestSchema>;
       if ("selector" in request) {
         const selector = selectors?.get(request.selector);
         if (!selector) throw new Error(`unknown evidence selector: ${request.selector}`);
@@ -559,9 +575,8 @@ function expandSimplifiedCandidate(
   selectors: readonly TaskEvidenceSelector[],
   arm: CandidateGenerationArm,
 ): Omit<CandidateFinding, "id"> {
-  const basisRule = arm === "rule-bound-classification"
-    ? item.rules.find((rule) => rule.id === value.basisRuleId)
-    : undefined;
+  const basisRule =
+    arm === "rule-bound-classification" ? item.rules.find((rule) => rule.id === value.basisRuleId) : undefined;
   // Validation guarantees a basis rule for the rule-bound arm. Keep this
   // defensive guard so host normalization never invents a policy mapping.
   if (arm === "rule-bound-classification" && !basisRule)
@@ -597,19 +612,32 @@ function expandSimplifiedCandidate(
   };
 }
 
-function deterministicEvidenceDefaults(
-  selectors: readonly TaskEvidenceSelector[],
-  maxRequests = 2,
-) {
-  const priority = ["implementation", "type", "definition", "callers", "callees", "usage", "config", "schema", "test", "search"];
+function deterministicEvidenceDefaults(selectors: readonly TaskEvidenceSelector[], maxRequests = 2) {
+  const priority = [
+    "implementation",
+    "type",
+    "definition",
+    "callers",
+    "callees",
+    "usage",
+    "config",
+    "schema",
+    "test",
+    "search",
+  ];
   return [...selectors]
     .sort((left, right) => {
       const leftRank = priority.indexOf(left.key.slice(left.key.lastIndexOf(".") + 1));
       const rightRank = priority.indexOf(right.key.slice(right.key.lastIndexOf(".") + 1));
-      return (leftRank < 0 ? priority.length : leftRank) - (rightRank < 0 ? priority.length : rightRank) || left.key.localeCompare(right.key);
+      return (
+        (leftRank < 0 ? priority.length : leftRank) - (rightRank < 0 ? priority.length : rightRank) ||
+        left.key.localeCompare(right.key)
+      );
     })
     .slice(0, maxRequests)
-    .map((selector) => selectorToEvidenceRequest(selector, "deterministic host-selected evidence for candidate adjudication"));
+    .map((selector) =>
+      selectorToEvidenceRequest(selector, "deterministic host-selected evidence for candidate adjudication"),
+    );
 }
 
 function witnessEvidenceDefaults(
@@ -642,16 +670,16 @@ function expandWitnessCandidate(
   // Host owns witness location. Model file/line mismatches are ignored rather than
   // aborting the work item; the emitted candidate always uses the bound witness range.
   const basisRule = item.rules.find(
-    (rule) =>
-      rule.id === value.basisRuleId && rule.categories.length === 1 && rule.severity !== undefined,
+    (rule) => rule.id === value.basisRuleId && rule.categories.length === 1 && rule.severity !== undefined,
   );
   if (!basisRule) throw new CandidateConclusionError("candidate referenced a rule without host-owned classification");
   const category = basisRule.categories[0]!;
   const severity = basisRule.severity;
   if (!severity) throw new CandidateConclusionError("candidate referenced a rule without host-owned severity");
-  const currentBehavior = witness.currentOutcome === "passes"
-    ? `condition ${witness.currentGuard} evaluates false, so the blocking branch is skipped`
-    : `condition ${witness.currentGuard} evaluates true, so the blocking branch executes`;
+  const currentBehavior =
+    witness.currentOutcome === "passes"
+      ? `condition ${witness.currentGuard} evaluates false, so the blocking branch is skipped`
+      : `condition ${witness.currentGuard} evaluates true, so the blocking branch executes`;
   // Title polarity must match the witness outcome: blocked witnesses must not be titled "allows".
   const polarityVerb = witness.currentOutcome === "passes" ? "allows" : "blocks";
   const title = `${category} defect: ${witness.currentGuard} ${polarityVerb} ${witness.state}`.slice(0, 80);
@@ -771,14 +799,22 @@ function directedQuestion(item: ReviewWorkItem): string {
     edgeKinds.has("reads-type") &&
       "check nullability, discriminated variants, value preservation, and user-visible labels/mappings",
     edgeKinds.has("exports") && "check public/API compatibility",
-    (edgeKinds.has("producer-consumer") || edgeKinds.has("serialization")) && "check state, ownership, cleanup, and ordering invariants",
+    (edgeKinds.has("producer-consumer") || edgeKinds.has("serialization")) &&
+      "check state, ownership, cleanup, and ordering invariants",
     (edgeKinds.has("schema-user") || edgeKinds.has("config")) && "check field, shape, and configuration compatibility",
   ].filter((value): value is string => Boolean(value));
-  const focus = checks.length ? ` Specifically ${checks.join("; ")}.` : " Compare both sides for one concrete incompatible assumption.";
+  const focus = checks.length
+    ? ` Specifically ${checks.join("; ")}.`
+    : " Compare both sides for one concrete incompatible assumption.";
   return `Bounded question: Do the supplied relationship sides disagree for any concrete input, value, or state? If yes, report the strongest executable contract defect; otherwise return no candidates.${focus}`;
 }
 
-function candidateInstructions(maxCandidates: number, includeSummary = false, boundedEvidence = false, providerOwnsSerialization = false) {
+function candidateInstructions(
+  maxCandidates: number,
+  includeSummary = false,
+  boundedEvidence = false,
+  providerOwnsSerialization = false,
+) {
   const empty = includeSummary ? '{"summary":"concise review summary","c":[]}' : '{"c":[]}';
   const evidenceInstructions = boundedEvidence
     ? 'Request at most two evidence items using {"selector":"semantic selector key","r":"short reason"}. Use only keys from the supplied selector table; never invent hashes, symbols, paths, expressions, or selector keys. Every request is a required fact for adjudication.'
@@ -834,11 +870,26 @@ function witnessCandidateInstructions(providerOwnsSerialization = false) {
 function validateRuleBoundCandidateResponse(value: unknown, maxCandidates: number, item: ReviewWorkItem) {
   const parsed = simplifiedCandidateResponseSchema.parse(value);
   if (parsed.candidates.length > maxCandidates)
-    throw new z.ZodError([{ code: z.ZodIssueCode.too_big, maximum: maxCandidates, type: "array", inclusive: true, path: ["candidates"], message: `at most ${maxCandidates} candidates are allowed` }]);
+    throw new z.ZodError([
+      {
+        code: z.ZodIssueCode.too_big,
+        maximum: maxCandidates,
+        type: "array",
+        inclusive: true,
+        path: ["candidates"],
+        message: `at most ${maxCandidates} candidates are allowed`,
+      },
+    ]);
   const allowedRuleIds = new Set(item.rules.map((rule) => rule.id));
   for (const [index, candidate] of parsed.candidates.entries()) {
     if (!candidate.basisRuleId || !allowedRuleIds.has(candidate.basisRuleId))
-      throw new z.ZodError([{ code: z.ZodIssueCode.custom, path: ["candidates", index, "basisRuleId"], message: "basisRuleId must name one visible work-item rule" }]);
+      throw new z.ZodError([
+        {
+          code: z.ZodIssueCode.custom,
+          path: ["candidates", index, "basisRuleId"],
+          message: "basisRuleId must name one visible work-item rule",
+        },
+      ]);
   }
   return parsed;
 }
@@ -938,7 +989,10 @@ async function generateConclusionThenStructuredCandidate(opts: {
     signal: opts.signal,
     validate: (value) => simplifiedCandidateResponseSchema.parse(value),
   });
-  if (parsed.state !== conclusion.decision || (conclusion.decision === "finding" ? parsed.candidates.length === 0 : parsed.candidates.length > 0))
+  if (
+    parsed.state !== conclusion.decision ||
+    (conclusion.decision === "finding" ? parsed.candidates.length === 0 : parsed.candidates.length > 0)
+  )
     throw new CandidateConclusionError("formatter decision does not match reasoner conclusion");
   const candidates = parsed.candidates.map((value) => ({
     ...expandSimplifiedCandidate(value, opts.item, opts.allowedEvidenceSelectors, opts.arm),
@@ -966,6 +1020,184 @@ async function generateConclusionThenStructuredCandidate(opts: {
   };
 }
 
+const COMMIT_LINE_INSTRUCTIONS = `End the answer with exactly one line of this form:
+DECISION: finding|no_finding|insufficient_context WITNESS: <key|none> RULE: <id|none>
+Use a supplied witness key and rule id only when DECISION is finding. Otherwise use none for both.`;
+const COMMIT_LINE_PREDICT_TOKENS = 64;
+const DEFAULT_COMMIT_THINK_TOKENS = 2048;
+
+function combinedProviderCompletion(
+  reasoner: ProviderCompletionMetadata | undefined,
+  commit: ProviderCompletionMetadata | undefined,
+): ProviderCompletionMetadata | undefined {
+  if (!reasoner && !commit) return undefined;
+  const base = commit ?? reasoner!;
+  return {
+    ...base,
+    totalDurationNs: (reasoner?.totalDurationNs ?? 0) + (commit?.totalDurationNs ?? 0),
+  };
+}
+
+async function generateCommitLineCandidate(opts: {
+  item: ReviewWorkItem;
+  profile: ModelProfile;
+  provider: ReviewProvider;
+  allowedFiles: string[];
+  maxCandidates: number;
+  allowedEvidenceSelectors: readonly TaskEvidenceSelector[];
+  requestedArm: CandidateGenerationArm;
+  promptVariant?: CandidatePromptVariant;
+  stream?: boolean;
+  streamTraceDir?: string;
+  thinkingTokens?: number;
+  hostClassifiedRuleIds: readonly string[];
+  signal?: AbortSignal;
+}): Promise<CandidateBatch> {
+  if (opts.profile.provider !== "ollama")
+    throw new CandidateConclusionError("thinking-commit-line requires the Ollama provider");
+  if (!/qwen/i.test(opts.profile.model))
+    throw new CandidateConclusionError("thinking-commit-line requires the Qwen chat template");
+  const thinkTokens = opts.thinkingTokens ?? DEFAULT_COMMIT_THINK_TOKENS;
+  const systemPrompt = candidateSystemPrompt(
+    opts.promptVariant,
+    "host-referenced-witness",
+    opts.profile.provider,
+    "thinking-structured",
+  );
+  const prompt = `${COMMIT_LINE_INSTRUCTIONS}\n\n${workItemText(opts.item, true)}`;
+  const traceId = opts.item.id.replace(/[^A-Za-z0-9._-]/g, "_");
+  const reasoner = await opts.provider.invoke({
+    profile: opts.profile,
+    prompt,
+    outputKind: "candidates",
+    allowedFiles: opts.allowedFiles,
+    maxCandidates: opts.maxCandidates,
+    candidateArm: "host-referenced-witness",
+    allowedRuleIds: [...opts.hostClassifiedRuleIds],
+    allowedWitnessKeys: opts.item.controlFlowWitnesses!.map((witness) => witness.witnessKey),
+    inferenceMode: "thinking-no-format",
+    ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    inferenceOverrides: {
+      contextTokens: opts.profile.contextTokens,
+      outputTokens: thinkTokens,
+      thinkingTokens: thinkTokens,
+    },
+    stream: opts.stream,
+    ...(opts.streamTraceDir ? { streamTracePath: `${opts.streamTraceDir}/${traceId}-commit-reasoner.ndjson` } : {}),
+    signal: opts.signal,
+  });
+  const continuation = renderCommitContinuation(systemPrompt ?? "", prompt, reasoner.thinking ?? "");
+  const commit = await opts.provider.invoke({
+    profile: opts.profile,
+    prompt: continuation,
+    rawPrompt: true,
+    outputKind: "candidates",
+    candidateArm: "host-referenced-witness",
+    inferenceMode: "structured",
+    inferenceOverrides: {
+      contextTokens: opts.profile.contextTokens,
+      outputTokens: COMMIT_LINE_PREDICT_TOKENS,
+    },
+    stream: opts.stream,
+    ...(opts.streamTraceDir ? { streamTracePath: `${opts.streamTraceDir}/${traceId}-commit-line.ndjson` } : {}),
+    signal: opts.signal,
+  });
+  const answer = answerFromGuidedContinuation(commit.raw);
+  const scored = scoreCommitAnswer({
+    answer,
+    allowedWitnessKeys: opts.item.controlFlowWitnesses!.map((witness) => witness.witnessKey),
+    allowedRuleIds: opts.hostClassifiedRuleIds,
+    thinking: reasoner.thinking,
+  });
+  const usage = {
+    inputTokens: reasoner.usage.inputTokens + commit.usage.inputTokens,
+    outputTokens: reasoner.usage.outputTokens + commit.usage.outputTokens,
+  };
+  const contract = {
+    candidateArm: opts.requestedArm,
+    requestedCandidateArm: opts.requestedArm,
+    effectiveCandidateArm: "host-referenced-witness" as const,
+    inferenceMode: "thinking-commit-line" as const,
+    promptVariant: opts.promptVariant,
+    systemPromptSha256: sha256(systemPrompt ?? ""),
+    outputSchemaSha256: sha256("commit-line/v1"),
+  };
+  const trace = {
+    ...usage,
+    prompt,
+    contract,
+    raw: answer,
+    thinking: reasoner.thinking,
+    reasonerRaw: reasoner.raw,
+    reasonerThinking: reasoner.thinking,
+    reasonerCompletion: reasoner.completion,
+    formatterRaw: commit.raw,
+    formatterCompletion: commit.completion,
+    completion: combinedProviderCompletion(reasoner.completion, commit.completion),
+  };
+  const decision = scored.score;
+  if (decision.outcome === "incomplete") {
+    return {
+      sourceId: opts.item.id,
+      candidates: [],
+      error: `commit line ${decision.reason}`,
+      commitLine: { decision: "incomplete", confidence: "not-applicable", reason: decision.reason },
+      ...trace,
+    };
+  }
+  if (decision.outcome !== "finding") {
+    return {
+      sourceId: opts.item.id,
+      candidateState: decision.outcome,
+      candidates: [],
+      commitLine: { decision: decision.outcome, confidence: "not-applicable" },
+      ...trace,
+    };
+  }
+  const matched = opts.item.controlFlowWitnesses!.find((entry) => entry.witnessKey === decision.witnessKey);
+  if (!matched) {
+    return {
+      sourceId: opts.item.id,
+      candidates: [],
+      error: "commit line unmatched-witness",
+      commitLine: { decision: "incomplete", confidence: "not-applicable", reason: "unmatched-witness" },
+      ...trace,
+    };
+  }
+  try {
+    const impact = `${matched.state}; current outcome ${matched.currentOutcome}`.slice(0, 240);
+    const candidate = expandWitnessCandidate(
+      {
+        file: matched.file,
+        line: matched.startLine,
+        endLine: matched.endLine,
+        witnessKey: matched.witnessKey,
+        basisRuleId: decision.basisRuleId,
+        impact,
+        confidence: 1,
+      },
+      opts.item,
+      opts.allowedEvidenceSelectors,
+    );
+    return {
+      sourceId: opts.item.id,
+      candidateState: "finding",
+      candidates: [{ ...candidate, id: candidateId(candidate) }],
+      commitLine: { decision: "finding", confidence: "fixed" },
+      ...trace,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      sourceId: opts.item.id,
+      candidates: [],
+      error: `commit line ${message}`,
+      commitLine: { decision: "incomplete", confidence: "not-applicable" },
+      ...trace,
+    };
+  }
+}
+
 export async function generateWorkItemCandidate(opts: {
   item: ReviewWorkItem;
   profile: ModelProfile;
@@ -984,8 +1216,10 @@ export async function generateWorkItemCandidate(opts: {
   const requestedArm = opts.arm ?? "simplified-contract";
   const fellBackFromWitness =
     requestedArm === "host-referenced-witness" &&
-    !(opts.item.controlFlowWitnesses?.length &&
-      opts.item.rules.some((rule) => rule.categories.length === 1 && rule.severity !== undefined));
+    !(
+      opts.item.controlFlowWitnesses?.length &&
+      opts.item.rules.some((rule) => rule.categories.length === 1 && rule.severity !== undefined)
+    );
   const callsInteraction =
     opts.item.kind === "interaction" && opts.item.graphEdges.some((edge) => edge.kind === "calls");
   const readsTypeInteraction =
@@ -1001,13 +1235,9 @@ export async function generateWorkItemCandidate(opts: {
     .map((rule) => rule.id);
   const witnessEligible = Boolean(item.controlFlowWitnesses?.length && hostClassifiedRuleIds.length);
   const arm: CandidateGenerationArm =
-    requestedArm === "host-referenced-witness" && !witnessEligible
-      ? "rule-bound-classification"
-      : requestedArm;
-  const callsWitnessFallback =
-    fellBackFromWitness && callsInteraction && arm === "rule-bound-classification";
-  const readsTypeWitnessFallback =
-    fellBackFromWitness && readsTypeInteraction && arm === "rule-bound-classification";
+    requestedArm === "host-referenced-witness" && !witnessEligible ? "rule-bound-classification" : requestedArm;
+  const callsWitnessFallback = fellBackFromWitness && callsInteraction && arm === "rule-bound-classification";
+  const readsTypeWitnessFallback = fellBackFromWitness && readsTypeInteraction && arm === "rule-bound-classification";
   if (opts.inferenceMode === "thinking-conclusion-then-structured")
     return generateConclusionThenStructuredCandidate({
       item,
@@ -1022,6 +1252,23 @@ export async function generateWorkItemCandidate(opts: {
       thinkingTokens: opts.thinkingTokens,
       signal: opts.signal,
     });
+  if (opts.inferenceMode === "thinking-commit-line" && arm === "host-referenced-witness")
+    return generateCommitLineCandidate({
+      item,
+      profile: opts.profile,
+      provider: opts.provider,
+      allowedFiles: opts.allowedFiles,
+      maxCandidates: opts.maxCandidates,
+      allowedEvidenceSelectors: opts.allowedEvidenceSelectors ?? [],
+      requestedArm,
+      promptVariant: opts.promptVariant,
+      stream: opts.stream,
+      streamTraceDir: opts.streamTraceDir,
+      thinkingTokens: opts.thinkingTokens,
+      hostClassifiedRuleIds,
+      signal: opts.signal,
+    });
+  const inferenceMode = opts.inferenceMode === "thinking-commit-line" ? "thinking-structured" : opts.inferenceMode;
   const focus =
     item.kind === "interaction"
       ? "Compare both sides of each relationship for broken assumptions and incompatible contracts."
@@ -1031,8 +1278,9 @@ export async function generateWorkItemCandidate(opts: {
   const ruleBound = arm === "rule-bound-classification";
   const witnessBound = arm === "host-referenced-witness";
   const legacy = arm !== "simplified-contract" && !ruleBound && !witnessBound;
-  const providerOwnsSerialization = ["ollama", "vllm", "openai-responses"].includes(opts.profile.provider) && opts.inferenceMode === "thinking-structured";
-  const systemPrompt = candidateSystemPrompt(opts.promptVariant, arm, opts.profile.provider, opts.inferenceMode);
+  const providerOwnsSerialization =
+    ["ollama", "vllm", "openai-responses"].includes(opts.profile.provider) && inferenceMode === "thinking-structured";
+  const systemPrompt = candidateSystemPrompt(opts.promptVariant, arm, opts.profile.provider, inferenceMode);
   const outputSchema = reviewOutputSchema(
     "candidates",
     opts.allowedFiles,
@@ -1048,13 +1296,17 @@ export async function generateWorkItemCandidate(opts: {
       ? `${witnessCandidateInstructions(providerOwnsSerialization)}\n${directedQuestion(item)}\n${focus}\nDo not request more context; reason only from the supplied bounded task.\n\n${workItemText(item, true)}`
       : `${simplifiedCandidateInstructions(opts.maxCandidates, providerOwnsSerialization)}${ruleBound ? `\n${ruleBoundClassificationInstructions(providerOwnsSerialization)}` : ""}${callsWitnessFallback ? `\n${callsWitnessFallbackInstructions()}` : ""}${readsTypeWitnessFallback ? `\n${readsTypeWitnessFallbackInstructions()}` : ""}\n${directedQuestion(item)}\n${focus}\nDo not request more context; reason only from the supplied bounded task.\n\n${workItemText(item, ruleBound)}`;
   const legacySchema = z.object({
-    c: z.array(
-      compactCandidateSchema.extend({
-        e: z.array(arm === "host-defaults" && boundedSelectors ? boundedRequestSchema : compactRequestSchema)
-          .max(2)
-          .default([]),
-      }),
-    ).max(opts.maxCandidates).default([]),
+    c: z
+      .array(
+        compactCandidateSchema.extend({
+          e: z
+            .array(arm === "host-defaults" && boundedSelectors ? boundedRequestSchema : compactRequestSchema)
+            .max(2)
+            .default([]),
+        }),
+      )
+      .max(opts.maxCandidates)
+      .default([]),
   });
   const { parsed, response, diagnostics } = await invokeStructured({
     provider: opts.provider,
@@ -1072,18 +1324,16 @@ export async function generateWorkItemCandidate(opts: {
       : witnessBound
         ? { allowedRuleIds: hostClassifiedRuleIds }
         : {}),
-    ...(witnessBound
-      ? { allowedWitnessKeys: item.controlFlowWitnesses!.map((witness) => witness.witnessKey) }
-      : {}),
+    ...(witnessBound ? { allowedWitnessKeys: item.controlFlowWitnesses!.map((witness) => witness.witnessKey) } : {}),
     candidateArm: arm,
-    inferenceMode: opts.inferenceMode,
+    inferenceMode,
     systemPrompt,
     ...(opts.thinkingTokens !== undefined ? { inferenceOverrides: { thinkingTokens: opts.thinkingTokens } } : {}),
     stream: opts.stream,
     ...(opts.streamTraceDir
       ? { streamTracePath: `${opts.streamTraceDir}/${item.id.replace(/[^A-Za-z0-9._-]/g, "_")}.ndjson` }
       : {}),
-    repairInvalid: opts.inferenceMode !== "thinking-structured",
+    repairInvalid: inferenceMode !== "thinking-structured",
     signal: opts.signal,
     validate: (value) =>
       legacy
@@ -1091,61 +1341,64 @@ export async function generateWorkItemCandidate(opts: {
         : witnessBound
           ? witnessCandidateResponseSchema.parse(value)
           : ruleBound
-          ? validateRuleBoundCandidateResponse(value, opts.maxCandidates, item)
-          : workItemCandidateResponseSchema(opts.maxCandidates).parse(value),
+            ? validateRuleBoundCandidateResponse(value, opts.maxCandidates, item)
+            : workItemCandidateResponseSchema(opts.maxCandidates).parse(value),
   });
   const selectorMap = new Map(selectors.map((selector) => [selector.key, selector]));
   const contractDrops: NonNullable<CandidateBatch["contractDrops"]> = [];
-  const candidates = "state" in parsed
-    ? parsed.candidates.flatMap((value, candidateIndex) => {
-        try {
-          const candidate = witnessBound
-            ? expandWitnessCandidate(value as z.infer<typeof witnessCandidateSchema>, item, selectors)
-            : expandSimplifiedCandidate(value as z.infer<typeof simplifiedCandidateSchema>, item, selectors, arm);
-          return [{ ...candidate, id: candidateId(candidate) }];
-        } catch (error) {
-          // Invalid witness/rule binding is a contract drop, not a work-item abort.
-          // Location is host-owned for witnesses; remaining expand failures omit the candidate.
-          const message = error instanceof Error ? error.message : String(error);
-          const reason: NonNullable<CandidateBatch["contractDrops"]>[number]["reason"] = message.includes(
-            "unknown control-flow witness",
-          )
-            ? "unknown-witness"
-            : message.includes("host-owned")
-              ? "invalid-basis-rule"
-              : "witness-expand-failure";
-          contractDrops.push({ candidateIndex, reason });
-          return [];
-        }
-      })
-    : parsed.c.flatMap((value, candidateIndex) => {
-        try {
-          const candidate = expandCandidate(value, item.id, undefined, selectors.length ? selectorMap : undefined);
-          if (boundedSelectors && (arm === "host-defaults" || !(("state" in parsed))))
-            candidate.evidenceRequests = [...candidate.evidenceRequests, ...deterministicEvidenceDefaults(selectors)];
-          if (arm === "deterministic-evidence") candidate.evidenceRequests = deterministicEvidenceDefaults(selectors);
-          if (arm === "host-derived-metadata") {
-            candidate.primarySymbol = item.primarySymbols[0]?.qualifiedName;
-            candidate.ruleId = item.rules[0]?.id;
-            candidate.title = `${candidate.category} defect: ${candidate.description.split(".")[0]}`.slice(0, 80);
+  const candidates =
+    "state" in parsed
+      ? parsed.candidates.flatMap((value, candidateIndex) => {
+          try {
+            const candidate = witnessBound
+              ? expandWitnessCandidate(value as z.infer<typeof witnessCandidateSchema>, item, selectors)
+              : expandSimplifiedCandidate(value as z.infer<typeof simplifiedCandidateSchema>, item, selectors, arm);
+            return [{ ...candidate, id: candidateId(candidate) }];
+          } catch (error) {
+            // Invalid witness/rule binding is a contract drop, not a work-item abort.
+            // Location is host-owned for witnesses; remaining expand failures omit the candidate.
+            const message = error instanceof Error ? error.message : String(error);
+            const reason: NonNullable<CandidateBatch["contractDrops"]>[number]["reason"] = message.includes(
+              "unknown control-flow witness",
+            )
+              ? "unknown-witness"
+              : message.includes("host-owned")
+                ? "invalid-basis-rule"
+                : "witness-expand-failure";
+            contractDrops.push({ candidateIndex, reason });
+            return [];
           }
-          candidate.evidenceRequests = [...new Map(candidate.evidenceRequests.map((request) => [JSON.stringify(request), request])).values()].slice(0, 2);
-          candidate.primarySymbol ??= item.primarySymbols[0]?.qualifiedName;
-          return [{ ...candidate, id: candidateId(candidate) }];
-        } catch {
-          // A bounded model response that names an unknown or incompatible locator
-          // is an invalid candidate, not a reason to fail the whole review task.
-          // The strict contract rejects it by omission and the eval attributes the
-          // resulting miss to candidate quality.
-          const request = value.e.find((entry) => "selector" in entry || "s" in entry);
-          contractDrops.push({
-            candidateIndex,
-            reason: request ? "unknown-selector" : "invalid-selector",
-            ...(request && "selector" in request ? { selector: request.selector } : {}),
-          });
-          return [];
-        }
-      });
+        })
+      : parsed.c.flatMap((value, candidateIndex) => {
+          try {
+            const candidate = expandCandidate(value, item.id, undefined, selectors.length ? selectorMap : undefined);
+            if (boundedSelectors && (arm === "host-defaults" || !("state" in parsed)))
+              candidate.evidenceRequests = [...candidate.evidenceRequests, ...deterministicEvidenceDefaults(selectors)];
+            if (arm === "deterministic-evidence") candidate.evidenceRequests = deterministicEvidenceDefaults(selectors);
+            if (arm === "host-derived-metadata") {
+              candidate.primarySymbol = item.primarySymbols[0]?.qualifiedName;
+              candidate.ruleId = item.rules[0]?.id;
+              candidate.title = `${candidate.category} defect: ${candidate.description.split(".")[0]}`.slice(0, 80);
+            }
+            candidate.evidenceRequests = [
+              ...new Map(candidate.evidenceRequests.map((request) => [JSON.stringify(request), request])).values(),
+            ].slice(0, 2);
+            candidate.primarySymbol ??= item.primarySymbols[0]?.qualifiedName;
+            return [{ ...candidate, id: candidateId(candidate) }];
+          } catch {
+            // A bounded model response that names an unknown or incompatible locator
+            // is an invalid candidate, not a reason to fail the whole review task.
+            // The strict contract rejects it by omission and the eval attributes the
+            // resulting miss to candidate quality.
+            const request = value.e.find((entry) => "selector" in entry || "s" in entry);
+            contractDrops.push({
+              candidateIndex,
+              reason: request ? "unknown-selector" : "invalid-selector",
+              ...(request && "selector" in request ? { selector: request.selector } : {}),
+            });
+            return [];
+          }
+        });
   const candidateState =
     "state" in parsed
       ? parsed.state === "finding" && !candidates.length
@@ -1164,7 +1417,7 @@ export async function generateWorkItemCandidate(opts: {
       candidateArm: requestedArm,
       requestedCandidateArm: requestedArm,
       effectiveCandidateArm: arm,
-      inferenceMode: opts.inferenceMode,
+      inferenceMode,
       promptVariant: opts.promptVariant,
       systemPromptSha256: sha256(systemPrompt ?? ""),
       outputSchemaSha256: sha256(JSON.stringify(outputSchema)),
@@ -1227,6 +1480,8 @@ export async function verifyCandidateWithModel(opts: {
   provenance?: VerificationProvenance;
   inferenceMode?: CandidateInferenceMode;
   thinkingTokens?: number;
+  stream?: boolean;
+  streamTracePath?: string;
   signal?: AbortSignal;
 }): Promise<{ result: VerificationResult; inputTokens: number; outputTokens: number }> {
   const prompt = opts.provenance
@@ -1247,6 +1502,8 @@ export async function verifyCandidateWithModel(opts: {
     inferenceMode: opts.inferenceMode,
     ...(opts.thinkingTokens !== undefined ? { inferenceOverrides: { thinkingTokens: opts.thinkingTokens } } : {}),
     repairInvalid: opts.inferenceMode !== "thinking-structured",
+    stream: opts.stream,
+    ...(opts.streamTracePath ? { streamTracePath: opts.streamTracePath } : {}),
     validate: (value) => verificationSchema.parse(value),
   });
   const normalizeId = (id: string) => id.trim().replace(/^\[|\]$/g, "");

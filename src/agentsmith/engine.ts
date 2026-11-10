@@ -1465,6 +1465,12 @@ export async function executeReviewEngine(opts: {
               provenance,
               inferenceMode: verifierInferenceMode,
               thinkingTokens: verifierThinkingTokens,
+              stream: opts.variant?.stream,
+              ...(opts.variant?.streamTraceDir
+                ? {
+                    streamTracePath: `${opts.variant.streamTraceDir}/${candidate.id.replace(/[^A-Za-z0-9._-]/g, "_")}-verifier.ndjson`,
+                  }
+                : {}),
               signal,
             }),
           ),

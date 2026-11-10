@@ -13,6 +13,7 @@ import type {
 } from "../core/types.js";
 import type { GraphContextEdge, GraphSnapshot, GraphSymbol } from "../core/graph/types.js";
 import type { ControlFlowDelta, ControlFlowWitness } from "../core/review-contracts.js";
+import type { CommitIncompleteReason } from "./commit-score.js";
 import type { ProviderCompletionMetadata, ProviderUsage, ReviewOutputKind } from "./provider.js";
 
 /** Candidate-generation behaviors that can be compared by the eval harness. */
@@ -28,7 +29,8 @@ export type CandidateInferenceMode =
   | "structured"
   | "thinking-no-format"
   | "thinking-structured"
-  | "thinking-conclusion-then-structured";
+  | "thinking-conclusion-then-structured"
+  | "thinking-commit-line";
 
 export type CandidateConclusionDecision = "finding" | "no_finding" | "insufficient_context";
 
@@ -239,14 +241,16 @@ export interface CandidateBatch {
   cacheStatus?: "hit" | "miss";
   descriptorFingerprint?: string;
   diagnostics?: ProviderFailureDiagnostic[];
+  /** Host record of the commit line. Confidence is a fixed flag, not a model probability. */
+  commitLine?: {
+    decision: "finding" | "no_finding" | "insufficient_context" | "incomplete";
+    confidence: "fixed" | "not-applicable";
+    reason?: CommitIncompleteReason;
+  };
   contractDrops?: Array<{
     candidateIndex: number;
     reason:
-      | "unknown-selector"
-      | "invalid-selector"
-      | "unknown-witness"
-      | "invalid-basis-rule"
-      | "witness-expand-failure";
+      "unknown-selector" | "invalid-selector" | "unknown-witness" | "invalid-basis-rule" | "witness-expand-failure";
     selector?: string;
   }>;
   error?: string;

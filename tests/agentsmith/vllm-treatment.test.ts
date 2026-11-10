@@ -3,6 +3,7 @@ import { agentSmithConfigFromPolicy } from "../../src/core/resolved-policy.js";
 import {
   applyEvalTreatment,
   resolveEvalTreatment,
+  OLLAMA_9B_WITNESS_RULE_PROVENANCE_COMMIT_LINE_TREATMENT,
   OLLAMA_9B_WITNESS_RULE_PROVENANCE_VERIFIER_THINKING_TREATMENT,
   OLLAMA_THINKING_9B_HOST_REFERENCED_WITNESS_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT,
   OLLAMA_THINKING_9B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT,
@@ -22,8 +23,12 @@ describe("provider diagnostic treatments", () => {
   });
 
   it("changes only the prompt variant in the matched delta-first treatment", () => {
-    const control = resolveEvalTreatment(VLLM_METAL_THINKING_4B_RULE_BOUND_STATE_SCAN_OUTPUT_MAX_FIT_THINKING_1K_TREATMENT)!;
-    const treatment = resolveEvalTreatment(VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_MAX_FIT_THINKING_1K_TREATMENT)!;
+    const control = resolveEvalTreatment(
+      VLLM_METAL_THINKING_4B_RULE_BOUND_STATE_SCAN_OUTPUT_MAX_FIT_THINKING_1K_TREATMENT,
+    )!;
+    const treatment = resolveEvalTreatment(
+      VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_MAX_FIT_THINKING_1K_TREATMENT,
+    )!;
     const { candidatePromptVariant: controlPrompt, ...controlSettings } = control;
     const { candidatePromptVariant: treatmentPrompt, ...treatmentSettings } = treatment;
     expect(controlPrompt).toBe("branch-analysis-state-scan-v2");
@@ -50,7 +55,9 @@ describe("provider diagnostic treatments", () => {
   });
 
   it("defines the larger-thinking diagnostic with explicit context, output, and timeout headroom", () => {
-    expect(resolveEvalTreatment(VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT)).toMatchObject({
+    expect(
+      resolveEvalTreatment(VLLM_METAL_THINKING_4B_RULE_BOUND_DELTA_FIRST_OUTPUT_3K_THINKING_2K_LONG_TIMEOUT_TREATMENT),
+    ).toMatchObject({
       candidateContextTokens: 6144,
       candidateOutputTokens: 3072,
       candidateThinkingTokens: 2048,
@@ -140,4 +147,15 @@ describe("provider diagnostic treatments", () => {
     });
   });
 
+  it("changes only the candidate inference mode in the commit-line treatment", () => {
+    const control = resolveEvalTreatment(OLLAMA_9B_WITNESS_RULE_PROVENANCE_VERIFIER_THINKING_TREATMENT)!;
+    const treatment = resolveEvalTreatment(OLLAMA_9B_WITNESS_RULE_PROVENANCE_COMMIT_LINE_TREATMENT)!;
+    const { inferenceMode: controlMode, id: controlId, ...controlSettings } = control;
+    const { inferenceMode: treatmentMode, id: treatmentId, ...treatmentSettings } = treatment;
+    expect(controlMode).toBe("thinking-structured");
+    expect(treatmentMode).toBe("thinking-commit-line");
+    expect(controlId).toBe(OLLAMA_9B_WITNESS_RULE_PROVENANCE_VERIFIER_THINKING_TREATMENT);
+    expect(treatmentId).toBe(OLLAMA_9B_WITNESS_RULE_PROVENANCE_COMMIT_LINE_TREATMENT);
+    expect(treatmentSettings).toEqual(controlSettings);
+  });
 });

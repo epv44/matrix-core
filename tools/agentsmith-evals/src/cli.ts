@@ -187,13 +187,15 @@ async function runTargetEval(opts: {
   if (!Number.isInteger(repeat) || repeat < 1) throw new Error(`Invalid repeat count: ${repeat}`);
   if (opts.stages?.some((stage) => !stages.includes(stage))) throw new Error("Invalid pipeline stage");
   if (opts.arm && !candidateArms.includes(opts.arm)) throw new Error(`Invalid candidate arm: ${opts.arm}`);
-  if (opts.inferenceMode && !["structured", "thinking-no-format", "thinking-structured", "thinking-conclusion-then-structured"].includes(opts.inferenceMode)) throw new Error(`Invalid candidate inference mode: ${opts.inferenceMode}`);
+  if (opts.inferenceMode && !["structured", "thinking-no-format", "thinking-structured", "thinking-conclusion-then-structured", "thinking-commit-line"].includes(opts.inferenceMode)) throw new Error(`Invalid candidate inference mode: ${opts.inferenceMode}`);
   const promptVariants: CandidatePromptVariant[] = ["baseline", "branch-analysis-v1", "branch-analysis-state-scan-v2", "branch-analysis-delta-first-v3", "branch-analysis-type-outcome-v2", "branch-analysis-guard-pass-through-v2"];
   if (opts.candidatePromptVariant && !promptVariants.includes(opts.candidatePromptVariant)) throw new Error(`Invalid candidate prompt variant: ${opts.candidatePromptVariant}`);
   if (opts.candidatePromptVariant !== "baseline" && opts.arm && !["simplified-contract", "rule-bound-classification", "host-referenced-witness"].includes(opts.arm))
     throw new Error("Branch-analysis prompt variants are only supported by the simplified-contract, rule-bound-classification, or host-referenced-witness arms");
   if (opts.inferenceMode === "thinking-conclusion-then-structured" && opts.arm && opts.arm !== "simplified-contract")
     throw new Error("thinking-conclusion-then-structured is only supported by the simplified-contract arm");
+  if (opts.inferenceMode === "thinking-commit-line" && opts.arm && opts.arm !== "host-referenced-witness")
+    throw new Error("thinking-commit-line is only supported by the host-referenced-witness arm");
   if (opts.thinkingStream && !opts.inferenceMode?.startsWith("thinking-"))
     throw new Error("--thinking-stream requires a thinking inference mode");
   const treatment = resolveEvalTreatment(opts.treatment);
@@ -404,7 +406,7 @@ program
   .option("--stage <stage...>", "Run only the selected pipeline stage(s)")
   .option("--repeat <count>", "Runs per case", (value) => Number(value), 1)
   .option("--arm <arm>", `Candidate arm: ${candidateArms.join(", ")}`)
-  .option("--inference-mode <mode>", "Candidate inference mode: structured, thinking-no-format, thinking-structured, or thinking-conclusion-then-structured", "structured")
+  .option("--inference-mode <mode>", "Candidate inference mode: structured, thinking-no-format, thinking-structured, thinking-conclusion-then-structured, or thinking-commit-line", "structured")
   .option("--candidate-prompt-variant <variant>", "Candidate prompt variant: baseline, branch-analysis-v1, branch-analysis-state-scan-v2, branch-analysis-delta-first-v3, branch-analysis-type-outcome-v2, or branch-analysis-guard-pass-through-v2", "baseline")
   .option("--candidate-model <model>", "Override the candidate model for diagnostic evals only")
   .option("--verifier-model <model>", "Override the verifier model for diagnostic evals only")
