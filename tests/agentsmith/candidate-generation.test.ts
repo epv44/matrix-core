@@ -1103,6 +1103,50 @@ describe("candidate structured output", () => {
     expect(prompts[1]).not.toContain("Previous response");
   });
 
+  it("streams a budgeted verifier call when a trace path is supplied", async () => {
+    const calls: Array<Parameters<ReviewProvider["invoke"]>[0]> = [];
+    const provider: ReviewProvider = {
+      health: async () => ({ ok: true, models: ["qwen"] }),
+      invoke: async (input) => {
+        calls.push(input);
+        return {
+          raw: '{"verdict":"rejected","confidence":0.4,"supportingEvidenceIds":["e-1"]}',
+          usage: { inputTokens: 2, outputTokens: 1 },
+        };
+      },
+    };
+    await verifyCandidateWithModel({
+      candidate: {
+        id: "candidate/1",
+        sourceWorkItemIds: ["local:1"],
+        sourceReviewers: [],
+        file: "src/a.ts",
+        line: 1,
+        severity: "medium",
+        category: "correctness",
+        title: "Candidate",
+        description: "Candidate description",
+        evidenceRequests: [],
+        candidateConfidence: 0.8,
+      },
+      originatingCode: "return true;",
+      evidenceText: "[e-1] src/a.ts:1-1\nreturn true;",
+      evidenceIds: ["e-1"],
+      profile,
+      provider,
+      inferenceMode: "thinking-structured",
+      thinkingTokens: 2048,
+      stream: true,
+      streamTracePath: "/tmp/verifier.ndjson",
+    });
+    expect(calls[0]).toMatchObject({
+      stream: true,
+      streamTracePath: "/tmp/verifier.ndjson",
+      inferenceMode: "thinking-structured",
+      inferenceOverrides: { thinkingTokens: 2048 },
+    });
+  });
+
   it("accepts and normalizes bracket-decorated citations without repair", async () => {
     let calls = 0;
     const provider: ReviewProvider = {

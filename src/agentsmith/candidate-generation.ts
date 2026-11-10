@@ -1480,6 +1480,8 @@ export async function verifyCandidateWithModel(opts: {
   provenance?: VerificationProvenance;
   inferenceMode?: CandidateInferenceMode;
   thinkingTokens?: number;
+  stream?: boolean;
+  streamTracePath?: string;
   signal?: AbortSignal;
 }): Promise<{ result: VerificationResult; inputTokens: number; outputTokens: number }> {
   const prompt = opts.provenance
@@ -1500,6 +1502,8 @@ export async function verifyCandidateWithModel(opts: {
     inferenceMode: opts.inferenceMode,
     ...(opts.thinkingTokens !== undefined ? { inferenceOverrides: { thinkingTokens: opts.thinkingTokens } } : {}),
     repairInvalid: opts.inferenceMode !== "thinking-structured",
+    stream: opts.stream,
+    ...(opts.streamTracePath ? { streamTracePath: opts.streamTracePath } : {}),
     validate: (value) => verificationSchema.parse(value),
   });
   const normalizeId = (id: string) => id.trim().replace(/^\[|\]$/g, "");
