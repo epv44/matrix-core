@@ -97,7 +97,7 @@ const branchAnalysisBehaviorByVariant: Partial<Record<CandidatePromptVariant, st
   "branch-analysis-guard-pass-through-v2": BRANCH_ANALYSIS_GUARD_PASS_THROUGH_PROMPT,
 };
 
-function candidateSystemPrompt(
+export function candidateSystemPrompt(
   variant: CandidatePromptVariant | undefined,
   arm: CandidateGenerationArm,
   provider: ModelProfile["provider"],
